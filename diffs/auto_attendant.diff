@@ -1,0 +1,141 @@
+--- uploads/auto_attendant.txt	2026-09-10 15:11:11.595795500 +0000
++++ deploy/api/auto_attendant.php	2026-09-10 15:15:57.191795500 +0000
+@@ -1,118 +1,19 @@
+-<?php
+-declare(strict_types=1);
+-
+-require_once __DIR__ . '/../includes/auth.php';
+-require_once __DIR__ . '/../includes/reporting.php';
+-
+-requireMethod('GET');
+-header('Content-Type: application/json; charset=utf-8');
+-
+-try {
+-    $user = currentUser();
+-
+-    $start  = trim((string)($_GET['start'] ?? ''));
+-    $end    = trim((string)($_GET['end'] ?? ''));
+-    $aaUser = trim((string)($_GET['user'] ?? ''));
+-
+-    if ($start === '' || $end === '') {
+-        throw new InvalidArgumentException('start and end are required');
+-    }
+-
+-    if ($aaUser === '') {
+-        throw new InvalidArgumentException('user is required');
+-    }
+-
+-    // 1. Load all CDRs (using collision-free cdrCacheKey)
+-    $cdrs = loadRawCdrs($user, [
+-        'start' => $start,
+-        'end'   => $end
+-    ]);
+-
+-    /**
+-     * ROOT CAUSE 2 FIX: Comprehensive Auto Attendant Call Matching
+-     *
+-     * In NetSapiens, calls hitting an Auto Attendant don't just appear in 'call-through-user'.
+-     * They can appear in:
+-     *  - call-through-user (e.g. 807)
+-     *  - call-term-user (when dialed directly or DID translated)
+-     *  - call-orig-to-user or call-orig-request-user
+-     *  - call-orig-user (when the AA places the transfer leg to an agent)
+-     *  - SIP URIs (call-orig-request-uri or call-term-pre-routing-uri)
+-     */
+-    $matchedCdrs = [];
+-    $matchedOrigCallIds = [];
+-
+-    foreach ($cdrs as $cdr) {
+-        $through = trim((string)($cdr['call-through-user'] ?? ''));
+-        $term    = trim((string)($cdr['call-term-user'] ?? ''));
+-        $origTo  = trim((string)($cdr['call-orig-to-user'] ?? ''));
+-        $origReq = trim((string)($cdr['call-orig-request-user'] ?? ''));
+-        $origUser= trim((string)($cdr['call-orig-user'] ?? ''));
+-        $reqUri  = (string)($cdr['call-orig-request-uri'] ?? '');
+-        $preUri  = (string)($cdr['call-term-pre-routing-uri'] ?? '');
+-
+-        $touchesAA = (
+-            $through === $aaUser ||
+-            $term === $aaUser ||
+-            $origTo === $aaUser ||
+-            $origReq === $aaUser ||
+-            $origUser === $aaUser ||
+-            str_contains($reqUri, "sip:{$aaUser}@") ||
+-            str_contains($preUri, "sip:{$aaUser}@")
+-        );
+-
+-        if ($touchesAA) {
+-            $matchedCdrs[] = $cdr;
+-            $origId = (string)($cdr['call-orig-call-id'] ?? '');
+-            if ($origId !== '') {
+-                $matchedOrigCallIds[$origId] = true;
+-            }
+-        }
+-    }
+-
+-    /**
+-     * ROOT CAUSE 4 FIX: Correlate Transferred Destination Legs!
+-     * Find child transfer legs that belong to the same caller session
+-     * so you can see WHICH agent or queue answered after the AA!
+-     */
+-    $allSessionCdrs = [];
+-    foreach ($cdrs as $cdr) {
+-        $origId = (string)($cdr['call-orig-call-id'] ?? '');
+-        if (isset($matchedOrigCallIds[$origId])) {
+-            $allSessionCdrs[] = $cdr;
+-        }
+-    }
+-
+-    // Deduplicate array values
+-    $finalMatchedCdrs = array_values($matchedCdrs);
+-
+-    jsonResponse([
+-        'success' => true,
+-        'data' => [
+-            'debug' => false,
+-            'requested' => [
+-                'start' => $start,
+-                'end'   => $end,
+-                'user'  => $aaUser
+-            ],
+-            'cdrCount' => count($cdrs),
+-            'matchedCount' => count($finalMatchedCdrs),
+-            'sessionLegsCount' => count($allSessionCdrs),
+-            'cdrs' => $finalMatchedCdrs,
+-            'sessionCdrs' => $allSessionCdrs
+-        ]
+-    ]);
+-
+-} catch (InvalidArgumentException $e) {
+-    jsonResponse([
+-        'success' => false,
+-        'error'   => $e->getMessage()
+-    ], 400);
+-} catch (Throwable $e) {
+-    error_log('Auto Attendant report error: ' . $e->getMessage());
+-    http_response_code(500);
+-    echo json_encode([
+-        'success' => false,
+-        'error'   => $e->getMessage()
+-    ], JSON_UNESCAPED_SLASHES);
+-}
+\ No newline at end of file
++<?php
++declare(strict_types=1);
++
++/*
++ * SEC-6 FIX — RETIRED 2026-09-10.
++ *
++ * This endpoint (GET) served CDR data for ANY caller-supplied extension
++ * without going through authorizedFilters(), i.e. it bypassed department /
++ * agent scoping entirely, and it overlaps aa.php (which IS
++ * office_manager-only). The current client (app.js) does not call it at all.
++ *
++ * It now answers 410 Gone so any stale consumer fails loudly instead of
++ * reading unscoped data. The previous implementation is preserved in VCS
++ * history; if a scoped version is ever needed, re-implement it with
++ * authorizedFilters() + requirePageRoles() (see aa.php as the reference).
++ */
++require_once __DIR__ . '/../includes/auth.php';
++
++jsonResponse(['error' => 'Endpoint retired (2026-09-10). Use aa.php.'], 410);

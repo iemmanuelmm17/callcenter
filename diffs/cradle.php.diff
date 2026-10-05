@@ -1,0 +1,31 @@
+--- /tmp/cradle_reconstructed_prepatch.php	2026-09-10 15:32:20.603795500 +0000
++++ deploy/api/cradle.php	2026-09-10 15:15:32.987795500 +0000
+@@ -7,6 +7,12 @@
+ 
+ try {
+     $user = currentUser();
++    /*
++     * SEC-6 FIX: enforce the same roles the UI exposes (office managers and
++     * supervisors). Agent / basic_user sessions are dashboard-only and must
++     * not be able to pull domain-wide cradle/queue data via the API.
++     */
++    requirePageRoles($user, ['office_manager', 'supervisor']);
+     $requested = json_decode((string)file_get_contents('php://input'), true) ?: [];
+     $filters = authorizedFilters($requested, $user);
+     if ($filters['end'] < $filters['start']) {
+@@ -106,6 +112,15 @@
+     }
+ 
+     $raw = loadRawCdrs($user, $filters);
++    /*
++     * SEC-6 FIX: the raw CDR cache is domain-wide by design, so it must be
++     * scoped before any stats are computed — exactly the way
++     * reportingCdrRows() does it in calls.php / call_history.php / agents.php:
++     * scopedCdrs(normalizeCdrs(loadRawCdrs(...))). For supervisors this
++     * forces their own department (authorizedFilters already sets it); for
++     * office managers it honors the requested department/site/agent filters.
++     */
++    $raw = scopedCdrs(normalizeCdrs($raw, $directory), $filters, $directory);
+ 
+     $allQueueRows = [];
+     $matched = [];

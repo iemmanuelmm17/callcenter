@@ -1,0 +1,26 @@
+--- uploads/telephone_numbers.txt	2026-09-10 15:11:11.595795500 +0000
++++ deploy/api/telephone_numbers.php	2026-09-10 15:15:54.863795500 +0000
+@@ -10,11 +10,18 @@
+     );
+ }
+ 
+-try {
+-
+-    $user = currentUser();
+-
+-    $domain = trim(
++try {
++
++    $user = currentUser();
++
++    /*
++     * SEC-6 FIX: the Telephone Numbers page is office-manager-only in the UI
++     * (ROLE_ROUTES), and the DID inventory it serves is domain-wide. Enforce
++     * the role here too — UI hiding is not access control.
++     */
++    requirePageRoles($user, ['office_manager']);
++
++    $domain = trim(
+         (string)(
+             $user['domain']
+             ?? $user['Domain']

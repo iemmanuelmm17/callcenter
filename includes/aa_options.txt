@@ -1,0 +1,1399 @@
+<?php
+declare(strict_types=1);
+
+require_once 'aa_list.php';
+
+
+/*
+ * =============================================================
+ * SETTINGS
+ * =============================================================
+ */
+
+const AA_OPTIONS_CACHE_TTL = 3600;
+
+/*
+ * =============================================================
+ * CACHE FILE
+ * =============================================================
+ */
+
+function aaOptionsCacheFile(
+    string $domain
+): string {
+
+    $directory =
+        __DIR__ .
+        '/../cache/aa';
+
+
+    if (
+        !is_dir($directory)
+    ) {
+
+        if (
+            !mkdir(
+                $directory,
+                0775,
+                true
+            ) &&
+            !is_dir($directory)
+        ) {
+
+            throw new RuntimeException(
+                'Unable to create AA cache directory'
+            );
+        }
+    }
+
+
+    $safeDomain =
+        preg_replace(
+            '/[^a-zA-Z0-9._-]/',
+            '_',
+            $domain
+        );
+
+
+    if (
+        $safeDomain === null ||
+        $safeDomain === ''
+    ) {
+
+        $safeDomain = 'default';
+    }
+
+
+    return $directory .
+        DIRECTORY_SEPARATOR .
+        $safeDomain .
+        '.json';
+}
+
+
+/*
+ * =============================================================
+ * LOAD CACHE
+ * =============================================================
+ */
+
+function loadAaOptionsCache(
+    string $domain
+): ?array {
+
+    $file =
+        aaOptionsCacheFile(
+            $domain
+        );
+
+
+    if (
+        !is_file($file)
+    ) {
+
+        return null;
+    }
+
+
+    if (
+        (time() - filemtime($file))
+        >= AA_OPTIONS_CACHE_TTL
+    ) {
+
+        return null;
+    }
+
+
+    $json =
+        file_get_contents(
+            $file
+        );
+
+
+    if (
+        $json === false ||
+        trim($json) === ''
+    ) {
+
+        return null;
+    }
+
+
+    $data =
+        json_decode(
+            $json,
+            true
+        );
+
+
+    if (
+        !is_array($data)
+    ) {
+
+        return null;
+    }
+
+
+    return $data;
+}
+
+
+/*
+ * =============================================================
+ * SAVE CACHE
+ * =============================================================
+ */
+
+function saveAaOptionsCache(
+    string $domain,
+    array $data
+): void {
+
+    $file = aaOptionsCacheFile($domain);
+
+    appLog('AA CACHE SAVE FILE=' . $file);
+
+    $dir = dirname($file);
+
+    if (!is_dir($dir)) {
+
+        appLog('AA CACHE DIRECTORY DOES NOT EXIST=' . $dir);
+
+        if (!mkdir($dir, 0775, true)) {
+            appLog(
+                'AA CACHE mkdir FAILED: ' .
+                $dir
+            );
+
+            return;
+        }
+
+        appLog(
+            'AA CACHE DIRECTORY CREATED=' .
+            $dir
+        );
+    }
+
+    $json = json_encode(
+        $data,
+        JSON_PRETTY_PRINT |
+        JSON_UNESCAPED_SLASHES
+    );
+
+    if ($json === false) {
+
+        appLog(
+            'AA CACHE JSON ENCODE FAILED: ' .
+            json_last_error_msg()
+        );
+
+        return;
+    }
+
+    $tmp = $file . '.tmp';
+
+    $result = file_put_contents(
+        $tmp,
+        $json,
+        LOCK_EX
+    );
+
+    appLog(
+        'AA CACHE file_put_contents result=' .
+        var_export($result, true)
+    );
+
+    if ($result === false) {
+
+        appLog(
+            'AA CACHE WRITE FAILED: ' .
+            $tmp
+        );
+
+        return;
+    }
+
+    if (!rename($tmp, $file)) {
+
+        appLog(
+            'AA CACHE RENAME FAILED: ' .
+            $tmp .
+            ' -> ' .
+            $file
+        );
+
+        return;
+    }
+
+    appLog(
+        'AA CACHE SAVED SUCCESSFULLY=' .
+        $file
+    );
+}
+
+/*
+ * =============================================================
+ * NORMALIZE OPTIONS
+ * =============================================================
+ *
+ * Converts:
+ *
+ *     option-1
+ *     option-2
+ *     option-7
+ *
+ * into:
+ *
+ *     1
+ *     2
+ *     7
+ *
+ * while preserving the complete option data.
+ *
+ */
+
+function normalizeAaOptions(
+    array $configuration
+): array {
+
+    $options = [];
+
+
+    $aa =
+        $configuration['auto-attendant']
+        ?? null;
+
+
+    if (
+        !is_array($aa)
+    ) {
+
+        return $options;
+    }
+
+
+    foreach (
+        $aa as $key => $option
+    ) {
+
+        if (
+            !preg_match(
+                '/^option-(\d+)$/i',
+                (string)$key,
+                $matches
+            )
+        ) {
+
+            continue;
+        }
+
+
+        if (
+            !is_array($option)
+        ) {
+
+            continue;
+        }
+
+
+        $digit =
+            (string)$matches[1];
+
+
+        $options[$digit] =
+            $option;
+    }
+
+
+    return $options;
+}
+
+
+/*
+ * =============================================================
+ * ADD NESTED AA LINKS
+ * =============================================================
+ *
+ * If an option contains another Auto Attendant,
+ * add the prompt that the option opens.
+ *
+ * Example:
+ *
+ * option-7
+ *     auto-attendant
+ *     audio.ordinal-order = 800431
+ *
+ * becomes:
+ *
+ * option 7
+ *     nextPrompt = Prompt_800431
+ *
+ */
+
+function addNestedAaLinks(
+    array &$configuration
+): void {
+
+    if (
+        !isset(
+            $configuration['options']
+        ) ||
+        !is_array(
+            $configuration['options']
+        )
+    ) {
+
+        return;
+    }
+
+
+    foreach (
+        $configuration['options']
+        as $digit => &$option
+    ) {
+
+        if (
+            !is_array($option)
+        ) {
+
+            continue;
+        }
+
+
+        $nestedAa =
+            $option['auto-attendant']
+            ?? null;
+
+
+        if (
+            !is_array($nestedAa)
+        ) {
+
+            continue;
+        }
+
+
+        $audio =
+            $option['audio']
+            ?? null;
+
+
+        if (
+            !is_array($audio)
+        ) {
+
+            continue;
+        }
+
+
+        $ordinal =
+            trim(
+                (string)(
+                    $audio['ordinal-order']
+                    ?? ''
+                )
+            );
+
+
+        if (
+            $ordinal === ''
+        ) {
+
+            continue;
+        }
+
+
+        $option['nextPrompt'] =
+            'Prompt_' .
+            $ordinal;
+    }
+
+
+    unset($option);
+}
+
+
+/*
+ * =============================================================
+ * FIND NESTED PROMPTS
+ * =============================================================
+ *
+ * Recursively discovers nested Auto Attendants.
+ *
+ * Example:
+ *
+ * Prompt_800201
+ *     option-7
+ *         auto-attendant
+ *         audio.ordinal-order = 800431
+ *
+ * becomes:
+ *
+ * Prompt_800431
+ *     parent-prompt = Prompt_800201
+ *     parent-option = 7
+ *
+ */
+
+function collectNestedAaPrompts(
+    array $configuration,
+    string $rootExtension,
+    string $parentPrompt = '',
+    string $parentOption = ''
+): array {
+
+    $result = [];
+
+
+    $aa =
+        $configuration['auto-attendant']
+        ?? null;
+
+
+    if (
+        !is_array($aa)
+    ) {
+
+        return $result;
+    }
+
+
+    foreach (
+        $aa as $key => $option
+    ) {
+
+        if (
+            !preg_match(
+                '/^option-(\d+)$/i',
+                (string)$key,
+                $matches
+            )
+        ) {
+
+            continue;
+        }
+
+
+        if (
+            !is_array($option)
+        ) {
+
+            continue;
+        }
+
+
+        $digit =
+            (string)$matches[1];
+
+
+        /*
+         * =====================================================
+         * CHECK FOR NESTED AUTO ATTENDANT
+         * =====================================================
+         */
+
+        $nestedAa =
+            $option['auto-attendant']
+            ?? null;
+
+
+        if (
+            !is_array($nestedAa)
+        ) {
+
+            continue;
+        }
+
+
+        /*
+         * =====================================================
+         * GET AUDIO
+         * =====================================================
+         */
+
+        $audio =
+            $option['audio']
+            ?? null;
+
+
+        if (
+            !is_array($audio)
+        ) {
+
+            continue;
+        }
+
+
+        /*
+         * =====================================================
+         * GET ORDINAL
+         * =====================================================
+         *
+         * This comes directly from the PBX configuration.
+         *
+         */
+
+        $ordinal =
+            trim(
+                (string)(
+                    $audio['ordinal-order']
+                    ?? ''
+                )
+            );
+
+
+        if (
+            $ordinal === ''
+        ) {
+
+            continue;
+        }
+
+
+        $prompt =
+            'Prompt_' .
+            $ordinal;
+
+
+        /*
+         * =====================================================
+         * BUILD NESTED CONFIGURATION
+         * =====================================================
+         *
+         * IMPORTANT:
+         *
+         * The current option is the parent option.
+         *
+         * Example:
+         *
+         * Prompt_800201
+         *     option 7
+         *         -> Prompt_800431
+         *
+         * Therefore Prompt_800431 gets:
+         *
+         * parent-prompt = Prompt_800201
+         * parent-option = 7
+         *
+         */
+
+        $nestedConfiguration = [
+
+            'user' =>
+                $rootExtension,
+
+            'starting-prompt' =>
+                $prompt,
+
+            'parent-prompt' =>
+                $parentPrompt,
+
+            'parent-option' =>
+                $digit,
+
+            'audio' =>
+                $audio,
+
+            'auto-attendant' =>
+                $nestedAa
+        ];
+
+
+        /*
+         * =====================================================
+         * NORMALIZE NESTED OPTIONS
+         * =====================================================
+         */
+
+        $nestedConfiguration['options'] =
+            normalizeAaOptions(
+                $nestedConfiguration
+            );
+
+
+        /*
+         * Add nextPrompt to nested options.
+         */
+
+        addNestedAaLinks(
+            $nestedConfiguration
+        );
+
+
+        /*
+         * =====================================================
+         * INTERNAL METADATA
+         * =====================================================
+         */
+
+        $nestedConfiguration['_extension'] =
+            $rootExtension;
+
+        $nestedConfiguration['_prompt'] =
+            $prompt;
+
+
+        /*
+         * =====================================================
+         * ADD NESTED PROMPT
+         * =====================================================
+         */
+
+        $result[$prompt] =
+            $nestedConfiguration;
+
+
+        /*
+         * =====================================================
+         * RECURSE
+         * =====================================================
+         *
+         * If this nested AA contains another AA,
+         * THIS prompt becomes the parent.
+         *
+         * Example:
+         *
+         * Prompt_800431
+         *     option 3
+         *         -> Prompt_800999
+         *
+         * Then:
+         *
+         * Prompt_800999
+         *     parent-prompt = Prompt_800431
+         *     parent-option = 3
+         *
+         */
+
+        $children =
+            collectNestedAaPrompts(
+                $nestedConfiguration,
+                $rootExtension,
+                $prompt,
+                $digit
+            );
+
+
+        foreach (
+            $children as $childPrompt => $child
+        ) {
+
+            if (
+                isset(
+                    $result[$childPrompt]
+                )
+            ) {
+
+                continue;
+            }
+
+
+            $result[$childPrompt] =
+                $child;
+        }
+    }
+
+
+    return $result;
+}
+
+
+/*
+ * =============================================================
+ * BUILD AA CACHE
+ * =============================================================
+ */
+
+function getAaOptions(
+    string $domain,
+    array $aaUsers,
+    PbxClient $client
+): array {
+
+    /*
+     * =========================================================
+     * 1. CHECK CACHE
+     * =========================================================
+     */
+
+    $cached =
+        loadAaOptionsCache(
+            $domain
+        );
+
+    if (
+        $cached !== null
+    ) {
+        return $cached;
+    }
+
+
+    /*
+     * =========================================================
+     * 2. GET DOMAIN AA LIST
+     *
+     * This is now the authoritative source for:
+     *
+     *   extension -> starting prompt
+     *
+     * Example:
+     *
+     *   8002 -> Prompt_800201
+     * =========================================================
+     */
+
+    $aaList =
+        getAaList(
+            $domain,
+            $client
+        );
+
+
+appLog(
+    'AA DEBUG: AA LIST RESULT=' .
+    json_encode(
+        $aaList,
+        JSON_UNESCAPED_SLASHES
+    )
+);
+
+appLog(
+    'AA DEBUG: AA USERS COUNT=' .
+    count($aaUsers)
+);
+
+    /*
+     * =========================================================
+     * 3. CACHE EXPIRED / MISSING
+     * =========================================================
+     */
+
+    $byExtension = [];
+
+    $byPrompt = [];
+
+
+    /*
+     * =========================================================
+     * 4. PROCESS EVERY AUTO ATTENDANT
+     * =========================================================
+     */
+
+    foreach (
+        $aaUsers as $extension => $aaUser
+    ) {
+
+        $extension =
+            trim(
+                (string)$extension
+            );
+
+
+        if (
+            $extension === ''
+        ) {
+            continue;
+        }
+
+
+        /*
+         * -----------------------------------------------------
+         * GET STARTING PROMPT FROM DOMAIN AA LIST
+         * -----------------------------------------------------
+         */
+
+        $aaDefinition =
+            $aaList[$extension]
+            ?? null;
+
+
+        if (
+            !is_array($aaDefinition)
+        ) {
+
+            appLog(
+                "AA {$domain}/{$extension}: not found in domain AA list"
+            );
+
+            continue;
+        }
+
+
+        $startingPrompt =
+            trim(
+                (string)(
+                    $aaDefinition[
+                        'startingPrompt'
+                    ]
+                    ?? ''
+                )
+            );
+
+
+        /*
+         * -----------------------------------------------------
+         * DO NOT GUESS PROMPT
+         * -----------------------------------------------------
+         */
+
+        if (
+            $startingPrompt === ''
+        ) {
+
+            appLog(
+                "AA {$domain}/{$extension}: starting prompt missing from domain AA list"
+            );
+
+            continue;
+        }
+
+
+        appLog(
+            'AA ROOT ' .
+            $domain .
+            '/' .
+            $extension .
+            ' = ' .
+            $startingPrompt
+        );
+
+
+        /*
+         * =====================================================
+         * 5. GET EXACT ROOT CONFIGURATION
+         * =====================================================
+         */
+
+        try {
+
+            $configuration =
+                $client->autoAttendants(
+                    $domain,
+                    $extension,
+                    $startingPrompt
+                );
+
+        } catch (Throwable $e) {
+
+            appLog(
+                "AA configuration {$domain}/{$extension}/{$startingPrompt}: " .
+                $e->getMessage()
+            );
+
+            continue;
+        }
+
+
+        if (
+            !is_array($configuration) ||
+            !$configuration
+        ) {
+
+            appLog(
+                "AA configuration {$domain}/{$extension}/{$startingPrompt}: empty"
+            );
+
+            continue;
+        }
+
+
+        /*
+         * =====================================================
+         * 6. ROOT METADATA
+         * ===================================================== */
+
+        $configuration['_extension'] =
+            $extension;
+
+        $configuration['_prompt'] =
+            $startingPrompt;
+
+
+        /*
+         * =====================================================
+         * 7. ROOT OPTIONS
+         * ===================================================== */
+
+        $configuration['options'] =
+            normalizeAaOptions(
+                $configuration
+            );
+
+
+        addNestedAaLinks(
+            $configuration
+        );
+
+
+        /*
+         * =====================================================
+         * 8. EXTENSION INDEX
+         * ===================================================== */
+
+        if (
+            !isset(
+                $byExtension[$extension]
+            )
+        ) {
+
+            $byExtension[$extension] =
+                [];
+        }
+
+
+        $byExtension[$extension][] =
+            $startingPrompt;
+
+
+        /*
+         * =====================================================
+         * 9. ROOT PROMPT INDEX
+         * ===================================================== */
+
+        $byPrompt[$startingPrompt] =
+            $configuration;
+
+
+        /*
+         * =====================================================
+         * 10. NESTED AA PROMPTS
+         * ===================================================== */
+
+        $nestedPrompts =
+            collectNestedAaPrompts(
+                $configuration,
+                $extension,
+                $startingPrompt,
+                ''
+            );
+
+
+        foreach (
+            $nestedPrompts as $prompt => $nested
+        ) {
+
+            /*
+             * Do not overwrite an already indexed prompt.
+             */
+
+            if (
+                isset(
+                    $byPrompt[$prompt]
+                )
+            ) {
+
+                continue;
+            }
+
+
+            $byPrompt[$prompt] =
+                $nested;
+
+
+            /*
+             * Same extension can have multiple prompts.
+             */
+
+            if (
+                !isset(
+                    $byExtension[$extension]
+                )
+            ) {
+
+                $byExtension[$extension] =
+                    [];
+            }
+
+
+            if (
+                !in_array(
+                    $prompt,
+                    $byExtension[$extension],
+                    true
+                )
+            ) {
+
+                $byExtension[$extension][] =
+                    $prompt;
+            }
+        }
+    }
+
+
+    /*
+     * =========================================================
+     * 11. SORT EXTENSION PROMPTS
+     * =========================================================
+     */
+
+    foreach (
+        $byExtension as &$prompts
+    ) {
+
+        sort(
+            $prompts,
+            SORT_NATURAL
+        );
+    }
+
+    unset($prompts);
+
+
+    /*
+     * =========================================================
+     * 12. BUILD RESULT
+     * =========================================================
+     */
+
+    $result = [
+
+        'updatedAt' =>
+            date('c'),
+
+        'byExtension' =>
+            $byExtension,
+
+        'byPrompt' =>
+            $byPrompt
+    ];
+
+
+    /*
+     * =========================================================
+     * 13. SAVE CACHE
+     * =========================================================
+     */
+
+    appLog(
+        'AA CACHE: ABOUT TO SAVE=' .
+        json_encode(
+            $result,
+            JSON_UNESCAPED_SLASHES
+        )
+    );
+
+appLog(
+    'AA DEBUG: AFTER SAVE OPTIONS CACHE'
+);
+
+    saveAaOptionsCache(
+        $domain,
+        $result
+    );
+
+
+    /*
+     * =========================================================
+     * 14. RETURN
+     * =========================================================
+     */
+
+    return $result;
+}
+
+/*
+ * =============================================================
+ * RESOLVE AA CALL PATH
+ * =============================================================
+ */
+
+function resolveAaCallPath(
+    array $aaCache,
+    string $prompt,
+    string $case
+): array {
+
+    $result = [
+
+        'prompt' =>
+            $prompt,
+
+        'case' =>
+            $case,
+
+        'optionDescription' =>
+            '',
+
+        'destinationApplication' =>
+            '',
+
+        'destinationUser' =>
+            '',
+
+        'nextPrompt' =>
+            '',
+
+        'parentPrompt' =>
+            '',
+
+        'parentCase' =>
+            '',
+
+        'path' =>
+            []
+    ];
+
+
+    /*
+     * =========================================================
+     * INVALID PROMPT
+     * =========================================================
+     */
+
+    if (
+        $prompt === '' ||
+        !isset(
+            $aaCache['byPrompt'][$prompt]
+        )
+    ) {
+
+        return $result;
+    }
+
+
+    /*
+     * =========================================================
+     * CURRENT PROMPT
+     * =========================================================
+     */
+
+    $config =
+        $aaCache['byPrompt'][$prompt];
+
+
+    /*
+     * =========================================================
+     * PARENT INFORMATION
+     * =========================================================
+     */
+
+    $result['parentPrompt'] =
+        trim(
+            (string)(
+                $config['parent-prompt']
+                ?? ''
+            )
+        );
+
+    $result['parentCase'] =
+        trim(
+            (string)(
+                $config['parent-option']
+                ?? ''
+            )
+        );
+
+
+    /*
+     * =========================================================
+     * BUILD PARENT PATH
+     * =========================================================
+     *
+     * Walk backwards through:
+     *
+     * Prompt_800431
+     *     parent = Prompt_800201
+     *     parentCase = 7
+     *
+     * Then:
+     *
+     * Prompt_800201
+     *     parent = ...
+     */
+
+    $parents = [];
+
+    $currentPrompt =
+        $prompt;
+
+    $visited = [];
+
+
+    while (
+        $currentPrompt !== '' &&
+        isset(
+            $aaCache['byPrompt'][$currentPrompt]
+        )
+    ) {
+
+        /*
+         * Prevent accidental circular references.
+         */
+
+        if (
+            isset(
+                $visited[$currentPrompt]
+            )
+        ) {
+            break;
+        }
+
+        $visited[$currentPrompt] = true;
+
+
+        $currentConfig =
+            $aaCache['byPrompt'][$currentPrompt];
+
+
+        $parentPrompt =
+            trim(
+                (string)(
+                    $currentConfig[
+                        'parent-prompt'
+                    ]
+                    ?? ''
+                )
+            );
+
+        $parentCase =
+            trim(
+                (string)(
+                    $currentConfig[
+                        'parent-option'
+                    ]
+                    ?? ''
+                )
+            );
+
+
+        if (
+            $parentPrompt === ''
+        ) {
+            break;
+        }
+
+
+        $parents[] = [
+
+            'prompt' =>
+                $parentPrompt,
+
+            'case' =>
+                $parentCase
+        ];
+
+
+        $currentPrompt =
+            $parentPrompt;
+    }
+
+
+    /*
+     * Reverse so the path starts at the root.
+     */
+
+    $parents =
+        array_reverse(
+            $parents
+        );
+
+
+    /*
+     * Add current prompt.
+     */
+
+    $result['path'] =
+        $parents;
+
+    $result['path'][] = [
+
+        'prompt' =>
+            $prompt,
+
+        'case' =>
+            $case
+    ];
+
+
+    /*
+     * =========================================================
+     * FIND CURRENT CASE
+     * =========================================================
+     */
+
+    $options =
+        $config['options']
+        ?? [];
+
+
+    if (
+        $case === '' ||
+        !isset(
+            $options[$case]
+        )
+    ) {
+
+        return $result;
+    }
+
+
+    $option =
+        $options[$case];
+
+
+    /*
+     * =========================================================
+     * DESCRIPTION
+     * =========================================================
+     */
+
+    $result['optionDescription'] =
+        trim(
+            (string)(
+                $option['description']
+                ?? ''
+            )
+        );
+
+
+    /*
+     * =========================================================
+     * DESTINATION APPLICATION
+     * =========================================================
+     */
+
+    $result['destinationApplication'] =
+        trim(
+            (string)(
+                $option[
+                    'destination-application'
+                ]
+                ?? ''
+            )
+        );
+
+
+    /*
+     * =========================================================
+     * DESTINATION USER
+     * =========================================================
+     */
+
+    $result['destinationUser'] =
+        trim(
+            (string)(
+                $option[
+                    'destination-user'
+                ]
+                ?? ''
+            )
+        );
+
+
+    /*
+     * =========================================================
+     * NEXT PROMPT
+     * =========================================================
+     */
+
+    $result['nextPrompt'] =
+        trim(
+            (string)(
+                $option['nextPrompt']
+                ?? ''
+            )
+        );
+
+
+    return $result;
+}

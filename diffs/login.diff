@@ -1,0 +1,37 @@
+--- uploads/login.txt	2026-09-10 15:11:11.595795500 +0000
++++ deploy/api/login.php	2026-09-10 15:14:58.627795500 +0000
+@@ -3,8 +3,16 @@
+ require_once __DIR__ . '/../includes/auth.php';
+ requireMethod('POST');
+ $input = json_decode(file_get_contents('php://input'), true) ?: [];
+-$clientId = trim((string)($input['clientId'] ?? getenv('PBX_CLIENT_ID') ?: PBX_CLIENT_ID));
+-$clientSecret = (string)($input['clientSecret'] ?? getenv('PBX_CLIENT_SECRET') ?: PBX_CLIENT_SECRET);
++/*
++ * SEC-5 FIX: client credentials come ONLY from server configuration
++ * (environment variables preferred, constants as a guarded fallback).
++ * They are never accepted from the request body — a credential supplied
++ * by the browser is a public credential. The defined() guards prevent a
++ * PHP 8 fatal ("Undefined constant") when the env var is empty and the
++ * constant is not defined (mirrors the pattern in auth.php).
++ */
++$clientId = trim((string)(getenv('PBX_CLIENT_ID') ?: (defined('PBX_CLIENT_ID') ? PBX_CLIENT_ID : '')));
++$clientSecret = (string)(getenv('PBX_CLIENT_SECRET') ?: (defined('PBX_CLIENT_SECRET') ? PBX_CLIENT_SECRET : ''));
+ $username = trim((string)($input['username'] ?? '')); $password = (string)($input['password'] ?? '');
+ if (!$clientId || !$clientSecret || !$username || !$password) jsonResponse(['error' => 'All credentials are required.'], 422);
+ $ch = curl_init(PBX_SERVERS['nms1'] . '/ns-api/v2/tokens');
+@@ -14,6 +22,15 @@
+ $token = json_decode($raw, true);
+ if (empty($token['access_token']) || empty($token['domain'])) jsonResponse(['error' => 'PBX returned an invalid token response.'], 502);
+ $extension = explode('@', (string)($token['login'] ?? $username))[0];
++/*
++ * SEC-4 FIX: rotate the session ID after successful authentication.
++ * Without this, an attacker-planted call_reporting cookie (same-origin)
++ * lets them adopt the victim's pre-login session ID and take over the
++ * account once the victim signs in.
++ */
++if (session_status() === PHP_SESSION_ACTIVE) {
++    session_regenerate_id(true);
++}
+ $_SESSION['last_activity'] = time();
+ storePbxToken(is_array($token) ? $token : [], $clientId);
+ $_SESSION['user'] = ['username' => $token['username'] ?? $username, 'displayName' => $token['displayName'] ?? $username, 'domain' => $token['domain'], 'department' => $token['department'] ?? '', 'site' => $token['site'] ?? '', 'extension' => $extension, 'role' => normalizedRole((string)($token['scope'] ?? 'Basic User'))];

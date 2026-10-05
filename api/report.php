@@ -1,0 +1,377 @@
+<?php
+declare(strict_types=1);
+
+require_once __DIR__ . '/../includes/reporting.php';
+
+requireMethod('POST');
+
+try {
+
+    $user = currentUser();
+
+    /* FUNC-17: malformed JSON bodies are a 422, never a silent "no filters". */
+    $requested = readJsonBody();
+
+	/*
+ * Call type filters.
+ *
+ * Default is everything enabled.
+ */
+$callTypes = [
+    'inbound'  => true,
+    'outbound' => true,
+    'missed'   => true,
+    'onnet'    => true,
+];
+
+if (
+    isset($requested['callTypes']) &&
+    is_array($requested['callTypes'])
+) {
+    foreach ($callTypes as $key => $default) {
+
+        if (
+            array_key_exists(
+                $key,
+                $requested['callTypes']
+            )
+        ) {
+            $callTypes[$key] =
+                (bool)$requested['callTypes'][$key];
+        }
+    }
+}
+
+    /*
+     * Apply authorized filters.
+     *
+     * This includes:
+     * - start
+     * - end
+     * - department
+     * - site
+     * - agents where applicable
+     */
+    $filters = authorizedFilters(
+        $requested,
+        $user
+    );
+
+    if ($filters['end'] < $filters['start']) {
+        jsonResponse(
+            ['error' => 'Invalid date range'],
+            422
+        );
+    }
+
+    /*
+     * Load directory / CDR data.
+     */
+    $directory = userDirectory($user);
+    $queueIds = [];
+    foreach (cachedCallQueues($user) as $qrow) {
+        if (!is_array($qrow)) {
+            continue;
+        }
+        $qid = trim((string)($qrow['callqueue'] ?? ''));
+        if ($qid !== '') {
+            $queueIds[$qid] = true;
+        }
+    }
+
+    /*
+     * =========================================================
+     * COMPARISON-ONLY REQUEST
+     * =========================================================
+     *
+     * Serves the lazy second pass. Fetches ONLY the previous period and
+     * returns early, so it never pays for the current period a second
+     * time. Deliberately mirrors the same slaSeconds / directory /
+     * queueIds as the main request (FUNC-23) so the two halves stay
+     * comparable.
+     */
+    if (!empty($requested['previousOnly'])) {
+        $slaSeconds = resolveSlaSeconds($requested, $user);
+        $previousFilters = previousFilters($filters);
+
+        $previousCalls = filterCallsByLocalDate(
+            reportingCdrRows($user, $previousFilters, $directory, $callTypes),
+            (string)$previousFilters['start'],
+            (string)$previousFilters['end']
+        );
+
+        $previous = summary($previousCalls, $slaSeconds, $directory, $queueIds);
+
+        jsonResponse([
+            'comparison' => [
+                'previous' => [
+                    'start'  => $previousFilters['start'],
+                    'end'    => $previousFilters['end'],
+                    'counts' => $previous['counts'],
+                    'hours'  => $previous['hours'] ?? [],
+                ],
+            ],
+            'timezone' => DEFAULT_TIMEZONE,
+        ]);
+    }
+
+    $calls = reportingCdrRows(
+        $user,
+        $filters,
+        $directory,
+        $callTypes
+    );
+
+    /*
+     * FUNC-24 FIX: drop rows whose start datetime cannot be parsed — on BOTH
+     * periods. Previously only the previous period was filtered, so a
+     * malformed timestamp would silently flatter "vs last period" numbers.
+     */
+    $calls = filterCallsByLocalDate(
+        $calls,
+        (string)$filters['start'],
+        (string)$filters['end']
+    );
+
+	$agentPerformance = agentPerformance(
+		$calls,
+		$directory,
+		$queueIds
+	);
+
+
+    /*
+     * Current report summary.
+     *
+     * FUNC-16/FUNC-27: SLA window resolved by the shared helper (domain
+     * settings default, clamped 1..120) — same as calls/queue/cradle.
+     */
+    $slaSeconds = resolveSlaSeconds($requested, $user);
+
+    $current = summary($calls, $slaSeconds, $directory, $queueIds);
+
+    /*
+     * Previous period.
+     *
+     * PERF: this is a SECOND full CDR fetch. On a wide date range it can
+     * easily cost as much as the current period, and because it ran
+     * unconditionally the caller waited for both before seeing anything
+     * — the progress bar completed while the request was still fetching
+     * history nobody had asked to see yet.
+     *
+     * The client now requests the current period with skipPrevious=1 and
+     * fetches comparison separately (previousOnly=1) once the dashboard
+     * is on screen. Both flags are optional, so any caller that does not
+     * send them keeps the original single-request behaviour.
+     */
+    $previousFilters = previousFilters($filters);
+    $skipPrevious = !empty($requested['skipPrevious']);
+
+    if ($skipPrevious) {
+        $previous = ['counts' => []];
+    } else {
+        $previousCalls = reportingCdrRows(
+            $user,
+            $previousFilters,
+            $directory,
+            $callTypes
+        );
+
+        $previousCalls = filterCallsByLocalDate(
+            $previousCalls,
+            (string)$previousFilters['start'],
+            (string)$previousFilters['end']
+        );
+
+        /*
+         * FUNC-23 FIX: previous period computed with the SAME slaSeconds,
+         * directory and queueIds as the current one (was: default 20 s and
+         * empty directory/queueIds — silently different semantics).
+         */
+        $previous = summary(
+            $previousCalls,
+            $slaSeconds,
+            $directory,
+            $queueIds
+        );
+    }
+
+    /*
+     * Calculate trends.
+     */
+    $trends = [];
+
+    foreach ($current['counts'] as $key => $value) {
+
+        $old = $previous['counts'][$key] ?? 0;
+
+        /*
+         * FUNC-26 FIX: a previous period of zero has no meaningful delta —
+         * report null (UI renders "n/a") instead of a fake +100%.
+         */
+        $pct = $old
+            ? (($value - $old) / $old) * 100
+            : ($value > 0 ? null : 0);
+
+        $trends[$key] = [
+            'percent' => $pct === null ? null : round($pct, 1),
+
+            'state' =>
+                $pct === null
+                    ? 'up'
+                    : (
+                        abs($pct) < TREND_NOISE_THRESHOLD
+                            ? 'flat'
+                            : (
+                                $pct > 0
+                                    ? 'up'
+                                    : 'down'
+                            )
+                    )
+        ];
+    }
+
+
+
+/*
+ * ============================================================
+ * Top Agents
+ * ============================================================
+ *
+ * Keep the existing compact Top Agents widget.
+ */
+$topAgents = [];
+
+/*
+ * ============================================================
+ * Comparison information
+ * ============================================================
+ *
+ * Used by the frontend trend tooltip.
+ *
+ * Example:
+ * Current: 150 calls (Aug 24–26)
+ * Previous: 120 calls (Aug 21–23)
+ */
+$comparison = [
+    'current' => [
+        'start' => $filters['start'],
+        'end'   => $filters['end'],
+
+        'counts' => $current['counts'],
+    ],
+
+    'previous' => [
+        'start' => $previousFilters['start'],
+        'end'   => $previousFilters['end'],
+
+        'counts' => $previous['counts'],
+        'hours'  => $previous['hours'] ?? [],
+    ],
+
+    /*
+     * Lets the client tell "comparison not fetched yet" apart from
+     * "comparison fetched and genuinely zero" — without it a skipped
+     * period renders as a real -100% swing.
+     */
+    'pending' => $skipPrevious,
+];
+
+foreach (
+    $agentPerformance as $agent
+) {
+
+    $topAgents[] = [
+        'extension' =>
+            $agent['extension'],
+
+        'name' =>
+            $agent['name'],
+
+        'totalCalls' =>
+            $agent['total'],
+
+        /*
+         * Inbound volume and inbound-only AHT.
+         *
+         * The dashboard Top Agents card ranks by these, and they were
+         * missing here — the card silently rendered 0 inbound for every
+         * agent and an empty "lowest AHT" list, because topAgents only
+         * carried blended totals. Same field names as agentPerformance()
+         * so both consumers read one vocabulary.
+         */
+        'ib' =>
+            (int)$agent['ib'],
+
+        'ibAht' =>
+            (int)$agent['ibAht'],
+
+        'totalTalk' =>
+            $agent['ibTct'] +
+            $agent['obTct'],
+
+        /*
+         * FUNC-25 FIX: AHT = total talk / HANDLED calls (answered inbound
+         * + outbound), not / total calls. The old denominator diluted AHT
+         * with zero-talk missed/abandoned/on-net calls and disagreed with
+         * the Agents screen's per-type average handling time.
+         */
+        'aht' =>
+            ((int)$agent['ib'] + (int)$agent['ob']) > 0
+                ? (int)round(
+                    (
+                        $agent['ibTct'] +
+                        $agent['obTct']
+                    ) /
+                    ((int)$agent['ib'] + (int)$agent['ob'])
+                )
+                : 0
+    ];
+}
+
+$topAgents = array_slice(
+    $topAgents,
+    0,
+    10
+);
+
+
+/*
+ * Add Top Agents to summary.
+ */
+$current['topAgents'] = $topAgents;
+
+
+    /*
+     * Audit and return.
+     */
+    auditView(
+        $user,
+        $filters,
+        'dashboard'
+    );
+
+    jsonResponse([
+		'filters' => $filters,
+		'callTypes' => $callTypes,
+		'summary' => $current,
+		'comparison' => $comparison,
+		'trends' => $trends,
+		'topAgents' => $topAgents,
+		'agentPerformance' => $agentPerformance,
+		'inventory' => reportingInventory($user, $directory, $calls),
+		'timezone' => DEFAULT_TIMEZONE
+	]);
+
+} catch (Throwable $e) {
+
+    appExceptionLog('Report', $e);
+
+    jsonResponse(
+        [
+            'error' =>
+                'Unable to load reporting data.'
+        ],
+        502
+    );
+}
