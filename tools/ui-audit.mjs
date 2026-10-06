@@ -28,21 +28,45 @@
  *     a hand-rolled `animate-pulse bg-slate-800` block does not follow the
  *     light theme and shimmers at a different rate than every other loader.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import * as acorn from 'acorn';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const APP = path.join(ROOT, 'assets/js/src/app.js');
+const SRC = path.join(ROOT, 'assets/js/src');
+const APP = path.join(SRC, 'app.js');
 const CSS = path.join(ROOT, 'assets/css/src/custom.css');
 const SHELL = path.join(ROOT, 'portal.php');
 const strict = process.argv.includes('--strict');
 
-const source = readFileSync(APP, 'utf8');
+/* The dashboard is a tree of modules now, so every check runs per file: a
+ * finding must name the file it is in, and the counts are for the whole tree. */
+const sourceFiles = (() => {
+  const out = [];
+  const walk = dir => {
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith('.js')) out.push(full);
+    }
+  };
+  walk(SRC);
+  return out;
+})();
+const modules = sourceFiles.map(file => {
+  const text = readFileSync(file, 'utf8');
+  return {
+    file: path.relative(ROOT, file),
+    text,
+    lines: text.split('\n'),
+    lineOf: index => text.slice(0, index).split('\n').length
+  };
+});
+const source = modules.map(m => m.text).join('\n');
+const lines = source.split('\n');
 const css = readFileSync(CSS, 'utf8');
 const shell = readFileSync(SHELL, 'utf8');
-const lines = source.split('\n');
-const lineOf = (index) => source.slice(0, index).split('\n').length;
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -51,7 +75,7 @@ const lineOf = (index) => source.slice(0, index).split('\n').length;
  * Balanced-paren scanning that respects strings, template literals and
  * comments, which is all this file needs.
  */
-function findElements(src) {
+function findElements(src, lineOf) {
   const out = [];
   const re = /(?<![\w.$])h\(\s*(?:'([a-zA-Z][\w-]*)'|([A-Za-z_$][\w$]*))/g;
   let match;
@@ -129,7 +153,10 @@ function findPropsEnd(args) {
   return args.length;
 }
 
-const elements = findElements(source);
+const elements = [];
+for (const module of modules) {
+  for (const el of findElements(module.text, module.lineOf)) elements.push({ ...el, file: module.file });
+}
 if (process.env.UI_AUDIT_DEBUG) {
   for (const el of elements.slice(0, 5)) console.log('DEBUG', el.line, el.tag, JSON.stringify(el.props.slice(0, 60)), 'onClick?', /onClick/.test(el.props));
   console.log('DEBUG total', elements.length, 'with props', elements.filter(e => e.props).length);
@@ -170,7 +197,8 @@ const missingTooltip = interactive.filter(el => isIconOnly(el) && !hasTooltip(el
 /* --------------------------------------------------------- 3. colour drift */
 
 const themeTokens = new Set([...css.matchAll(/--color-([a-z0-9-]+):/g)].map(m => m[1]));
-const jsColorLiterals = [...source.matchAll(/#[0-9a-fA-F]{3,8}\b/g)].map(m => ({ value: m[0], line: lineOf(m.index) }));
+const jsColorLiterals = modules.flatMap(module =>
+  [...module.text.matchAll(/#[0-9a-fA-F]{3,8}\b/g)].map(m => ({ value: m[0], file: module.file, line: module.lineOf(m.index) })));
 /* A literal is "drift" when the same colour exists as a theme token: the UI
  * should reference the token so the light/dark remap applies. */
 const tokenByHex = new Map();
@@ -206,7 +234,7 @@ for (const c of drift) {
   if (!driftByColor.has(key)) driftByColor.set(key, { token: tokenByHex.get(key), count: 0, lines: [] });
   const entry = driftByColor.get(key);
   entry.count++;
-  if (entry.lines.length < 4) entry.lines.push(c.line);
+  if (entry.lines.length < 4) entry.lines.push(`${c.file.replace('assets/js/src/', '')}:${c.line}`);
 }
 
 /* ------------------------------------------------------------ 4. cursor css */
@@ -229,25 +257,45 @@ for (const el of clickable) {
 }
 const cursorlessHooks = [...clickableClasses.entries()]
   .filter(([name]) => !cssCursorClasses.has(name) && !cssDefaultClasses.has(name))
-  .map(([name, el]) => ({ name, line: el.line, tag: el.tag }));
+  .map(([name, el]) => ({ name, line: el.line, file: el.file, tag: el.tag }));
 
 /* ------------------------------------------------- 5. lazy + skeleton usage */
 
-const skeletonComponents = new Set([...source.matchAll(/(?:function|const)\s+([A-Za-z_$][\w$]*)\s*[=(]/g)].map(m => m[1]));
-const componentsWithLoading = [...source.matchAll(/\bconst\s+\[(\w*[Ll]oading)\w*,\s*set\w*\]\s*=\s*useState\(true\)/g)].map(m => m[1]);
-/* Which components render `skel`/`skeleton` inside their own body? */
+const componentsWithLoading = modules.flatMap(module =>
+  [...module.text.matchAll(/\bconst\s+\[(\w*[Ll]oading)\w*,\s*set\w*\]\s*=\s*useState\(true\)/g)]
+    .map(m => ({ name: m[1], file: module.file })));
+/* Which components render `skel`/`skeleton` inside their own body?
+ *
+ * Top-level declarations come from the parser, not from a line-based guess:
+ * the modules carry the original file's mixed indentation, so an indentation
+ * rule cannot tell a component from a nested helper of the same name shape and
+ * used to cut bodies short (reporting skeletons as missing on components that
+ * render them further down). */
 const componentBodies = new Map();
-{
-  /* Component boundaries are PascalCase declarations only: a nested helper
-   * such as `const tile = (` is camelCase and must not cut the body short
-   * (it did, which reported skeletons as missing on components that render
-   * them further down). */
-  const re = /^(?:  )?(?:function|const)\s+([A-Z][\w$]*)\s*[=(]/gm;
-  const starts = [...source.matchAll(re)].map(m => ({ name: m[1], index: m.index, line: lineOf(m.index) }));
-  starts.forEach((entry, i) => {
-    const end = i + 1 < starts.length ? starts[i + 1].index : source.length;
-    componentBodies.set(entry.name, { line: entry.line, body: source.slice(entry.index, end) });
-  });
+for (const module of modules) {
+  let program;
+  try {
+    program = acorn.parse(module.text, { ecmaVersion: 'latest', sourceType: 'module', ranges: true });
+  } catch (error) {
+    console.log(`warning: ${module.file} does not parse (${error.message})`);
+    continue;
+  }
+  for (const statement of program.body) {
+    const node = statement.type === 'ExportNamedDeclaration' && statement.declaration ? statement.declaration : statement;
+    const names = [];
+    if (node.type === 'FunctionDeclaration' && node.id) names.push(node.id.name);
+    if (node.type === 'VariableDeclaration') {
+      for (const declarator of node.declarations) if (declarator.id.type === 'Identifier') names.push(declarator.id.name);
+    }
+    for (const name of names) {
+      if (!/^[A-Z]/.test(name)) continue;
+      componentBodies.set(name, {
+        line: module.lineOf(node.start),
+        file: module.file,
+        body: module.text.slice(node.start, node.end)
+      });
+    }
+  }
 }
 const lazyCandidates = [...componentBodies.entries()]
   .filter(([, info]) => /\buseState\(true\)/.test(info.body) && /\bapi\(/.test(info.body))
@@ -256,13 +304,14 @@ const lazyCandidates = [...componentBodies.entries()]
    * an object-literal prop (`\n  loading,` / `loading }`) is not the same as
    * the state declaration (`const [loading, setLoading]`). */
   .filter(([, info]) => !/\n\s*loading\s*[,}]/.test(info.body))
-  .map(([name, info]) => ({ name, line: info.line }));
+  .map(([name, info]) => ({ name, line: info.line, file: info.file }));
 
 /* Hand-rolled skeleton blocks: an `animate-pulse` element that is shaped like a
  * placeholder (h-/w- sizing, bg-slate-*) instead of the shared shimmer helper. */
-const handRolledSkeletons = [...source.matchAll(/className:\s*'([^']*\banimate-pulse[^']*)'/g)]
-  .filter(m => /(?:^|\s)(?:h-|w-|bg-slate-)/.test(m[1]))
-  .map(m => ({ line: lineOf(m.index), classes: m[1] }));
+const handRolledSkeletons = modules.flatMap(module =>
+  [...module.text.matchAll(/className:\s*'([^']*\banimate-pulse[^']*)'/g)]
+    .filter(m => /(?:^|\s)(?:h-|w-|bg-slate-)/.test(m[1]))
+    .map(m => ({ line: module.lineOf(m.index), file: module.file, classes: m[1] })));
 
 const shellScripts = [...shell.matchAll(/<script[^>]*src="([^"]+)"/g)].map(m => m[1]);
 const shellStyles = [...shell.matchAll(/<link[^>]*href="([^"]+)"/g)].map(m => m[1]);
@@ -291,23 +340,24 @@ const section = (title, rows, format) => {
   if (rows.length > 25) console.log(`  … ${rows.length - 25} more`);
 };
 
-console.log(`scanned ${elements.length} elements, ${clickable.length} clickable, ${lines.length} lines of app.js`);
+const short = file => file.replace('assets/js/src/', '');
+console.log(`scanned ${elements.length} elements, ${clickable.length} clickable, ${lines.length} lines in ${modules.length} modules under assets/js/src`);
 console.log(`stylesheet: ${cssCursorClasses.size} classes with cursor: pointer, ${themeTokens.size} colour tokens`);
 
 section('interactive element without cursor styling', missingCursor,
-  el => `h('${el.tag}') line ${el.line} — ${(el.props.match(/className\s*:\s*'([^']{0,70})'/) || [, ''])[1]}`);
+  el => `${short(el.file)}:${el.line} h('${el.tag}') — ${(el.props.match(/className\s*:\s*'([^']{0,70})'/) || [, ''])[1]}`);
 section('interactive element without role/tabIndex', missingRole,
-  el => `h('${el.tag}') line ${el.line}`);
+  el => `${short(el.file)}:${el.line} h('${el.tag}')`);
 section('interactive element without a tooltip', missingTooltip,
-  el => `h('${el.tag}') line ${el.line} — ${(el.props.match(/className\s*:\s*'([^']{0,60})'/) || [, ''])[1]}`);
+  el => `${short(el.file)}:${el.line} h('${el.tag}') — ${(el.props.match(/className\s*:\s*'([^']{0,60})'/) || [, ''])[1]}`);
 section('JS colour literals duplicating a theme token', [...driftByColor.entries()],
-  ([hex, info]) => `${hex} == --color-${info.token} — ${info.count}× (lines ${info.lines.join(', ')})`);
+  ([hex, info]) => `${hex} == --color-${info.token} — ${info.count}× (${info.lines.join(', ')})`);
 section('clickable classes with no cursor rule', cursorlessHooks,
-  row => `h('${row.tag}') line ${row.line} — .${row.name}`);
+  row => `${short(row.file)}:${row.line} h('${row.tag}') — .${row.name}`);
 section('components with a loading state but no skeleton', lazyCandidates,
-  c => `${c.name}() line ${c.line}`);
+  c => `${short(c.file)}:${c.line} ${c.name}()`);
 section('placeholder not using the shared skel() helper', handRolledSkeletons,
-  row => `line ${row.line} — ${row.classes}`);
+  row => `${short(row.file)}:${row.line} — ${row.classes}`);
 section('heavy dependency not lazy-loaded', lazyDependencyFindings, row => row.detail);
 section('remote assets in the shell', remoteAssets, url => url);
 console.log(`\n## lazy-loading attributes\n  loading='lazy' occurrences: ${lazyAttrs}`);

@@ -1,0 +1,276 @@
+{
+  "note": "Map for tools/split-js-file.mjs: which top-level unit of the original assets/js/src/app.js lives in which module. A unit is named by any declaration it makes, or by #<line> when it declares nothing. Anything not listed stays in the entry. `dropped` lists declarations that were deleted instead of moved (dead code).",
+  "dropped": [
+    "inSelectedRange"
+  ],
+  "manual": {
+    "why": "An ES module cannot assign to an imported binding. The only cross-module write is App replacing the auth-expiry callback, which is routed through setAuthExpiredHandler() next to the variable in lib/api.js; `App` is the one declaration this tool did not move verbatim.",
+    "writes": [
+      "authExpiredHandler"
+    ],
+    "added": [
+      "setAuthExpiredHandler"
+    ],
+    "edited": [
+      "App"
+    ]
+  },
+  "modules": [
+    {
+      "file": "lib/react.js",
+      "description": "React bindings used by every module: the hook shortcuts, the createElement alias, the two interaction helpers and the lazy Tabulator loader.",
+      "units": [
+        "useEffect",
+        "h",
+        "keyActivate",
+        "TABULATOR_BASE",
+        "tabulatorPromise",
+        "ensureTabulator",
+        "useEscape"
+      ]
+    },
+    {
+      "file": "lib/theme.js",
+      "description": "Theme selection: the persisted preference and the stylesheet injection that must run before the first render.",
+      "units": [
+        "#16",
+        "THEME_KEY",
+        "readTheme",
+        "applyTheme",
+        "#18",
+        "#25"
+      ]
+    },
+    {
+      "file": "lib/api.js",
+      "description": "Endpoint calls, auth-expiry handling and the role \u2192 route policy.",
+      "units": [
+        "authExpiredHandler",
+        "authExpiredBusy",
+        "handleAuthExpired",
+        "ROLE_ROUTES",
+        "routesForRole",
+        "api",
+        "apiBody",
+        "apiDownload"
+      ]
+    },
+    {
+      "file": "lib/time.js",
+      "description": "Time zone and timestamp formatting for every table, chart and export label.",
+      "units": [
+        "APP_TZ",
+        "tzParts",
+        "calendarDateInTz",
+        "date",
+        "today",
+        "easternOffsetMinutes",
+        "parseCallInstant",
+        "nsTimestampParts",
+        "formatCallDate",
+        "formatCallTime",
+        "callCalendarDate",
+        "rangeDateTimes",
+        "formatHistDate",
+        "formatMmss",
+        "histDayKey",
+        "histDayLabel",
+        "histTimeOnly"
+      ]
+    },
+    {
+      "file": "lib/format.js",
+      "description": "Number, percentage and telephone formatting plus the call-history label helpers.",
+      "units": [
+        "fmt",
+        "fmtNum",
+        "fmtPct",
+        "formatPhoneNumber",
+        "histPartyLabel",
+        "histInitials",
+        "histTypeTone",
+        "histOutcomeMeta"
+      ]
+    },
+    {
+      "file": "lib/sla.js",
+      "description": "SLA threshold persistence and the ring class/HTML helpers.",
+      "units": [
+        "SLA_KEY",
+        "readSlaSeconds",
+        "writeSlaSeconds",
+        "slaRingClass",
+        "slaRingHtml"
+      ]
+    },
+    {
+      "file": "lib/recording.js",
+      "description": "Recording URL variants and the audio element used by the player.",
+      "units": [
+        "RECORDING_VARIANTS",
+        "recordingUrlWithConvert",
+        "recordingSources",
+        "buildRecordingAudio",
+        "recordingFileName"
+      ]
+    },
+    {
+      "file": "components/ui.js",
+      "description": "Shared UI atoms: icons, skeletons, tooltips, toasts, pills and the theme toggle.",
+      "units": [
+        "NavIcon",
+        "ThemeToggle",
+        "navItems",
+        "skel",
+        "skelKpis",
+        "skelPanel",
+        "Tooltip",
+        "ToastHost",
+        "useToasts",
+        "SlaControl",
+        "SearchableSelect",
+        "CallTypeIcon",
+        "FlowKindIcon",
+        "flowFaIcon"
+      ]
+    },
+    {
+      "file": "components/charts.js",
+      "description": "Chart primitives: the gradient helper, the sparkline builder, KPI cards and the donut.",
+      "units": [
+        "hexToRgba",
+        "splineArea",
+        "KpiCard",
+        "DonutChart"
+      ]
+    },
+    {
+      "file": "components/date-range-picker.js",
+      "description": "The filter date-range control (calendar, presets, keyboard).",
+      "units": [
+        "DateRangePicker"
+      ]
+    },
+    {
+      "file": "components/filters.js",
+      "description": "The global filter bar and the call-type toggles.",
+      "units": [
+        "CallTypeFilters",
+        "Filters"
+      ]
+    },
+    {
+      "file": "components/call-history.js",
+      "description": "Call history table, the cradle flow dialog and the recording player.",
+      "units": [
+        "RecordingPlayer",
+        "CallHistoryDashboard"
+      ]
+    },
+    {
+      "file": "components/call-modal.js",
+      "description": "The drill-down calls dialog (Tabulator table + export).",
+      "units": [
+        "CallModal"
+      ]
+    },
+    {
+      "file": "components/agents.js",
+      "description": "Agent statistics table, the agent sidebar, compare and per-agent overview.",
+      "units": [
+        "AgentPerformanceTable",
+        "Agents",
+        "pickAgentRow",
+        "AgentCompare",
+        "AgentOverview"
+      ]
+    },
+    {
+      "file": "components/overview.js",
+      "description": "Operations dashboard: KPIs, volume chart, agent podium, SLA control.",
+      "units": [
+        "OverviewDashboard"
+      ]
+    },
+    {
+      "file": "components/queue.js",
+      "description": "Queue dashboard: KPIs, donut, recent calls, sentiment and cradle paths.",
+      "units": [
+        "QueueDashboard"
+      ]
+    },
+    {
+      "file": "components/telephone-numbers.js",
+      "description": "Telephone number inventory, graphs and the simultaneous-calls tab.",
+      "units": [
+        "telephoneDestinationType",
+        "displayTnExtension",
+        "tnIsEnabled",
+        "tnCallVolume",
+        "tnTypeKind",
+        "tnTypeLabel",
+        "tnRouteMeta",
+        "tnFaint",
+        "TelephoneNumbersTable",
+        "toHourList",
+        "toHeatmap",
+        "chartsFromTelephoneNumbers",
+        "TelephoneNumbersGraphs",
+        "TelephoneNumbers"
+      ]
+    },
+    {
+      "file": "components/simultaneous.js",
+      "description": "Simultaneous-call counting over a date range.",
+      "units": [
+        "simClock",
+        "SIM_INTERVAL_CHOICES",
+        "SimultaneousCallsPanel"
+      ]
+    },
+    {
+      "file": "components/auto-attendants.js",
+      "description": "Auto-attendant list plus the calls sheet.",
+      "units": [
+        "AutoAttendants",
+        "AaCallsSheet"
+      ]
+    },
+    {
+      "file": "components/auto-attendant-structure.js",
+      "description": "Auto-attendant option tree.",
+      "units": [
+        "AutoAttendantStructure"
+      ]
+    },
+    {
+      "file": "components/auto-attendant-report.js",
+      "description": "Auto-attendant performance report.",
+      "units": [
+        "AutoAttendantReport"
+      ]
+    },
+    {
+      "file": "components/settings.js",
+      "description": "The domain settings dialog (thresholds, call types, saved per domain).",
+      "units": [
+        "SettingsModal"
+      ]
+    },
+    {
+      "file": "components/login.js",
+      "description": "Login screen and the alerts bell.",
+      "units": [
+        "Login",
+        "AlertsBell"
+      ]
+    },
+    {
+      "file": "components/app-shell.js",
+      "description": "The signed-in shell: navigation, routing, global filters and modals.",
+      "units": [
+        "Dashboard"
+      ]
+    }
+  ]
+}
