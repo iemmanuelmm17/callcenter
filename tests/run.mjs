@@ -21,6 +21,7 @@ const SUITES = {
   static: [
     { name: 'php lint', cmd: ['node', 'tools/php-lint.mjs'] },
     { name: 'css coverage', cmd: ['node', 'tools/css-coverage.mjs'] },
+    { name: 'ui audit', cmd: ['node', 'tools/ui-audit.mjs', '--strict'] },
     { name: 'dead code', cmd: ['node', 'tools/dead-code.mjs', '--strict'] }
   ],
   js: [

@@ -34,6 +34,60 @@
     }
     const { useEffect, useMemo, useRef, useState, useCallback } = React;
     const h = React.createElement;
+    const keyActivate = (handler) => (event) => {
+      if (!handler) return;
+      if (event.key === "Enter" || event.key === " " || event.key === "Spacebar") {
+        event.preventDefault();
+        handler(event);
+      }
+    };
+    const TABULATOR_BASE = "https://unpkg.com/tabulator-tables@6.3.1/dist/";
+    let tabulatorPromise = null;
+    const ensureTabulator = () => {
+      if (typeof window !== "undefined" && window.Tabulator) return Promise.resolve(window.Tabulator);
+      if (tabulatorPromise) return tabulatorPromise;
+      tabulatorPromise = new Promise((resolve, reject) => {
+        let cssReady = false;
+        let jsReady = false;
+        const settle = () => {
+          if (!cssReady || !jsReady) return;
+          if (window.Tabulator) resolve(window.Tabulator);
+          else reject(new Error("Tabulator did not initialise"));
+        };
+        const css = document.createElement("link");
+        css.rel = "stylesheet";
+        css.href = TABULATOR_BASE + "css/tabulator_midnight.min.css";
+        css.onload = css.onerror = () => {
+          cssReady = true;
+          settle();
+        };
+        document.head.appendChild(css);
+        const script = document.createElement("script");
+        script.src = TABULATOR_BASE + "js/tabulator.min.js";
+        script.onload = () => {
+          jsReady = true;
+          settle();
+        };
+        script.onerror = () => reject(new Error("Tabulator failed to load"));
+        document.head.appendChild(script);
+      });
+      return tabulatorPromise;
+    };
+    const useEscape = (open, onClose) => {
+      const closeRef = useRef(onClose);
+      closeRef.current = onClose;
+      useEffect(() => {
+        if (!open) return void 0;
+        const onKey = (event) => {
+          if (event.key === "Escape") {
+            event.stopPropagation();
+            closeRef.current();
+          }
+        };
+        document.addEventListener("keydown", onKey);
+        return () => document.removeEventListener("keydown", onKey);
+      }, [open]);
+    };
     let authExpiredHandler = null;
     let authExpiredBusy = false;
     const handleAuthExpired = () => {
@@ -979,6 +1033,7 @@
           setExporting(false);
         }
       };
+      useEscape(!!flow, () => setFlow(null));
       const skel2 = loading && rows.length === 0;
       const st = stats || {};
       const grouped = [];
@@ -1122,6 +1177,8 @@
                     "tr",
                     {
                       key: id,
+                      tabIndex: 0,
+                      onKeyDown: keyActivate(() => openFlow(row)),
                       className: "cursor-pointer" + (flag ? " hist-row-flag" : "") + (expanded ? " hist-row-open" : ""),
                       title: "View call flow",
                       onClick: () => openFlow(row)
@@ -1268,13 +1325,20 @@
         flow ? h(
           "div",
           {
-            className: "hist-modal-bg",
+            className: "hist-modal-bg cursor-default",
             style: { zIndex: 2147483646 },
+            role: "presentation",
             onClick: () => setFlow(null)
           },
           h(
             "div",
-            { className: "hist-modal", onClick: (e) => e.stopPropagation() },
+            {
+              className: "hist-modal cursor-default",
+              role: "dialog",
+              "aria-modal": "true",
+              "aria-label": "Cradle to grave",
+              onClick: (e) => e.stopPropagation()
+            },
             h(
               "div",
               { className: "hist-modal-head" },
@@ -1377,6 +1441,7 @@
       return { toasts, push, dismiss };
     }
     function SettingsModal({ user, slaSeconds, filters, callTypes, onSlaChange, onClose, onSaved, onNotify }) {
+      useEscape(true, onClose);
       const DEFAULTS = { slaSeconds: 20, slaPct: 80, missedPct: 20, abandonPct: 10, ahtMinutes: 5, ahtOutboundMinutes: 5, topAgentAhtMinutes: 5, topAgentMinCalls: 20 };
       const canSave = user.role === "office_manager" || user.role === "supervisor";
       const [form, setForm] = useState({
@@ -1528,10 +1593,16 @@
       const ahtOutOver = live && live.ahtOutboundMinutes > Number(form.ahtOutboundMinutes);
       return h(
         "div",
-        { className: "hist-modal-bg set-overlay", onClick: onClose },
+        { className: "hist-modal-bg set-overlay cursor-default", role: "presentation", onClick: onClose },
         h(
           "div",
-          { className: "set-modal", onClick: (e) => e.stopPropagation() },
+          {
+            className: "set-modal cursor-default",
+            role: "dialog",
+            "aria-modal": "true",
+            "aria-label": "Settings",
+            onClick: (e) => e.stopPropagation()
+          },
           h(
             "div",
             { className: "set-head" },
@@ -1788,6 +1859,7 @@
       );
     }
     function CallModal({ metric, hour, agent, phoneNumber, callerNumber, queue, queuesOnly, filters, callTypes, slaSeconds, onClose }) {
+      useEscape(true, onClose);
       const ref = useRef(null);
       const table = useRef(null);
       const [records, setRecords] = useState([]);
@@ -1798,6 +1870,19 @@
       const [totalRecords, setTotalRecords] = useState(0);
       const [totalPages, setTotalPages] = useState(1);
       const [exporting, setExporting] = useState(false);
+      const [tableReady, setTableReady] = useState(() => typeof window !== "undefined" && !!window.Tabulator);
+      useEffect(() => {
+        if (tableReady) return void 0;
+        let alive = true;
+        ensureTabulator().then(() => {
+          if (alive) setTableReady(true);
+        }).catch(() => {
+          if (alive) setError("Unable to load the call table.");
+        });
+        return () => {
+          alive = false;
+        };
+      }, [tableReady]);
       useEffect(() => {
         setPage(1);
       }, [metric, hour, agent, phoneNumber, callerNumber, queue, queuesOnly, filters, callTypes, pageSize]);
@@ -1857,7 +1942,7 @@
       const endIndex = Math.min(startIndex + records.length, totalRecords);
       const currentRows = records;
       useEffect(() => {
-        if (loading || error || !ref.current) {
+        if (loading || error || !tableReady || !ref.current) {
           return;
         }
         if (table.current) {
@@ -2034,6 +2119,7 @@
         currentRows,
         loading,
         error,
+        tableReady,
         slaSeconds
       ]);
       const changePageSize = (value) => {
@@ -2542,6 +2628,7 @@
       const [query, setQuery] = useState("");
       const [siteFilter, setSiteFilter] = useState("");
       const [colsOpen, setColsOpen] = useState(false);
+      useEscape(colsOpen, () => setColsOpen(false));
       const [colOn, setColOn] = useState(() => {
         try {
           const raw = JSON.parse(localStorage.getItem(COLS_KEY) || "null");
@@ -2773,10 +2860,16 @@
         ),
         colsOpen ? h(
           "div",
-          { className: "hist-modal-bg set-overlay ap-cols-overlay", onClick: () => setColsOpen(false) },
+          { className: "hist-modal-bg set-overlay ap-cols-overlay cursor-default", role: "presentation", onClick: () => setColsOpen(false) },
           h(
             "div",
-            { className: "set-modal ap-cols-modal", onClick: (e) => e.stopPropagation() },
+            {
+              className: "set-modal ap-cols-modal cursor-default",
+              role: "dialog",
+              "aria-modal": "true",
+              "aria-label": "Choose columns",
+              onClick: (e) => e.stopPropagation()
+            },
             h(
               "div",
               { className: "set-head" },
@@ -3049,7 +3142,7 @@
         loading ? h(
           "div",
           { className: "space-y-1 px-3 pt-1" },
-          ...Array.from({ length: 8 }, (_, i) => h("div", { key: i, className: "mb-1 h-12 animate-pulse rounded bg-slate-800" }))
+          ...Array.from({ length: 8 }, (_, i) => h("div", { key: i, className: "mb-1" }, skel("h-12")))
         ) : h(
           "div",
           { className: "agent-side-list" },
@@ -4152,7 +4245,7 @@
           ...Array.from({ length: 8 }, (_, i) => h(
             "div",
             { key: i, className: "border-b border-slate-800 px-3 py-3" },
-            h("div", { className: "h-3 animate-pulse rounded bg-slate-800" })
+            skel("h-3")
           ))
         );
       }
@@ -5175,6 +5268,8 @@
                     "tr",
                     {
                       key: [row.date, row.time, startIndex + index].join("-"),
+                      tabIndex: 0,
+                      onKeyDown: keyActivate(() => drill({ date: row.date, hour: row.hour, metric: "incoming" })),
                       className: "cursor-pointer " + peakRowClass(row),
                       title: "Open the calls behind this interval",
                       onClick: () => drill({ date: row.date, hour: row.hour, metric: "incoming" })
@@ -5575,45 +5670,21 @@
               className: "space-y-1 pt-2"
             },
             ...Array.from(
-              {
-                length: 8
-              },
+              { length: 8 },
               (_, i) => h(
                 "div",
                 {
                   key: i,
-                  className: "grid grid-cols-[20px_1fr_auto] items-center gap-2 border-b border-slate-800 py-3 animate-pulse"
+                  className: "grid grid-cols-[20px_1fr_auto] items-center gap-2 border-b border-slate-800 py-3"
                 },
+                skel("h-3 w-3"),
                 h(
                   "div",
-                  {
-                    className: "h-3 w-3 rounded-sm bg-slate-700"
-                  }
+                  { className: "space-y-1" },
+                  skel("h-2.5 w-28"),
+                  skel("h-2 w-16")
                 ),
-                h(
-                  "div",
-                  {
-                    className: "space-y-1"
-                  },
-                  h(
-                    "div",
-                    {
-                      className: "h-2.5 w-28 bg-slate-700"
-                    }
-                  ),
-                  h(
-                    "div",
-                    {
-                      className: "h-2 w-16 bg-slate-800"
-                    }
-                  )
-                ),
-                h(
-                  "div",
-                  {
-                    className: "h-2.5 w-8 bg-slate-700"
-                  }
-                )
+                skel("h-2.5 w-8")
               )
             )
           )
@@ -5660,7 +5731,10 @@
                       "div",
                       {
                         key: extension,
+                        role: "button",
+                        tabIndex: 0,
                         onClick: () => selectAutoAttendant(extension),
+                        onKeyDown: keyActivate(() => selectAutoAttendant(extension)),
                         className: "aa-side-item " + (isSelected ? "is-active" : "")
                       },
                       collapsed ? h(
@@ -5702,6 +5776,7 @@
       );
     }
     function AaCallsSheet({ title, rows, onClose }) {
+      useEscape(true, onClose);
       const list = Array.isArray(rows) ? rows : [];
       const [page, setPage] = useState(1);
       const [pageSize, setPageSize] = useState(10);
@@ -5723,7 +5798,8 @@
       const sheet = h(
         "div",
         {
-          className: "aa-call-sheet fixed inset-0 p-5",
+          className: "aa-call-sheet fixed inset-0 p-5 cursor-default",
+          role: "presentation",
           style: {
             display: "flex",
             alignItems: "center",
@@ -5736,7 +5812,10 @@
         h(
           "div",
           {
-            className: "call-modal flex w-full max-w-[1100px] flex-col overflow-hidden border border-slate-700 bg-slate-950 shadow-2xl",
+            role: "dialog",
+            "aria-modal": "true",
+            "aria-label": "Call details",
+            className: "call-modal cursor-default flex w-full max-w-[1100px] flex-col overflow-hidden border border-slate-700 bg-slate-950 shadow-2xl",
             style: { maxHeight: "88vh", display: "flex", flexDirection: "column" },
             onClick: (e) => e.stopPropagation()
           },
@@ -8622,8 +8701,8 @@
         loading ? h(
           "div",
           { className: "border border-slate-700 bg-slate-900 p-3" },
-          h("div", { className: "h-3 w-40 animate-pulse rounded bg-slate-800" }),
-          ...Array.from({ length: 8 }, (_, i) => h("div", { key: i, className: "mt-2 h-8 animate-pulse rounded bg-slate-800" }))
+          skel("h-3 w-40"),
+          ...Array.from({ length: 8 }, (_, i) => h("div", { key: i, className: "mt-2" }, skel("h-8")))
         ) : !leftRow && !rightRow ? h("div", { className: "border border-slate-700 bg-slate-900 p-8 text-center text-xs text-slate-500" }, "Select two agents to compare.") : h(
           "div",
           { className: "space-y-3" },
@@ -9115,26 +9194,29 @@
                   const key = String(c.cradle && c.cradle.orig || c.parentId || i) + ":" + i;
                   const open = expanded === key;
                   const hops = cradleHops[key] || c.hops || [];
+                  const toggleRow = () => {
+                    if (open) {
+                      setExpanded("");
+                      return;
+                    }
+                    setExpanded(key);
+                    if (cradleHops[key] || !c.cradle || !c.cradle.orig) return;
+                    setCradleBusy(key);
+                    api("cradle", c.cradle).then((r) => {
+                      const payload = r?.data && typeof r.data === "object" ? r.data : r;
+                      const next = Array.isArray(payload?.hops) ? payload.hops : [];
+                      setCradleHops((prev) => ({ ...prev, [key]: next.length ? next : c.hops || [] }));
+                    }).catch(() => setCradleHops((prev) => ({ ...prev, [key]: c.hops || [] }))).finally(() => setCradleBusy((k) => k === key ? "" : k));
+                  };
                   const rows = [h(
                     "tr",
                     {
                       key,
+                      tabIndex: 0,
                       className: "cursor-pointer hover:bg-slate-800/60 " + (open ? "bg-slate-800/40" : ""),
                       title: "Click to show call path",
-                      onClick: () => {
-                        if (open) {
-                          setExpanded("");
-                          return;
-                        }
-                        setExpanded(key);
-                        if (cradleHops[key] || !c.cradle || !c.cradle.orig) return;
-                        setCradleBusy(key);
-                        api("cradle", c.cradle).then((r) => {
-                          const payload = r?.data && typeof r.data === "object" ? r.data : r;
-                          const next = Array.isArray(payload?.hops) ? payload.hops : [];
-                          setCradleHops((prev) => ({ ...prev, [key]: next.length ? next : c.hops || [] }));
-                        }).catch(() => setCradleHops((prev) => ({ ...prev, [key]: c.hops || [] }))).finally(() => setCradleBusy((k) => k === key ? "" : k));
-                      }
+                      onClick: toggleRow,
+                      onKeyDown: keyActivate(toggleRow)
                     },
                     h("td", { className: "text-slate-500" }, open ? "\u25BE" : "\u25B8"),
                     h("td", { className: "text-slate-200" }, c.caller || "\u2014"),
@@ -9908,8 +9990,10 @@
                       "tr",
                       {
                         key: i,
+                        tabIndex: 0,
                         className: "cursor-pointer hover:bg-slate-800/60",
-                        onClick: () => open(c.type || "total")
+                        onClick: () => open(c.type || "total"),
+                        onKeyDown: keyActivate(() => open(c.type || "total"))
                       },
                       h(
                         "td",

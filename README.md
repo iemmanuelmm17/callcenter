@@ -50,6 +50,12 @@ npm run lint:php     # syntax + banned-construct scan over every .php file
 * `tools/css-coverage.mjs` fails the build if any Tailwind utility or custom
   class used in the sources is missing from the built stylesheet — the check
   that keeps a Tailwind class from silently disappearing.
+* `tools/ui-audit.mjs` (`npm test` runs it with `--strict`) checks the UI
+  consistency rules that a compiler cannot: every clickable element must say
+  how it behaves (`cursor-pointer` / `cursor-default`), keyboard-reachable,
+  and explained by a `title`; colours in JS must use the theme tokens; loading
+  states must render the shared `skel()` placeholder; heavy third-party code
+  must be loaded on demand. Run it on its own for the full report.
 * `tests/js/` runs the real bundle in jsdom with React and Chart stubs;
   `tests/php/` executes every `api/*.php` under real PHP 8.4 (php-wasm) and
   asserts the session/method/role gates and the response contract.

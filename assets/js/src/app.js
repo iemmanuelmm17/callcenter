@@ -33,6 +33,76 @@
 
   const {useEffect,useMemo,useRef,useState,useCallback} = React;
   const h = React.createElement;
+  /*
+   * Keyboard parity for row/list elements that are clickable but are not
+   * buttons: they must be reachable with Tab and activate with Enter or Space.
+   * Who uses it: call history rows, simultaneous-call interval rows, queue
+   * recent-call rows, agent activity rows, auto-attendant side list.
+   */
+  const keyActivate = handler => event => {
+    if (!handler) return;
+    if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+      event.preventDefault();
+      handler(event);
+    }
+  };
+  /*
+   * Tabulator (≈500 kB minified) is the heaviest dependency and only the call
+   * modal uses it, so the shell does not load it any more. The first modal
+   * injects the stylesheet and the script once and resolves when the global is
+   * really there; later calls reuse the same promise. Everything is loaded
+   * from one pinned version so the CSS and the JS can never drift apart.
+   */
+  const TABULATOR_BASE = 'https://unpkg.com/tabulator-tables@6.3.1/dist/';
+  let tabulatorPromise = null;
+  const ensureTabulator = () => {
+    if (typeof window !== 'undefined' && window.Tabulator) return Promise.resolve(window.Tabulator);
+    if (tabulatorPromise) return tabulatorPromise;
+    tabulatorPromise = new Promise((resolve, reject) => {
+      let cssReady = false;
+      let jsReady = false;
+      const settle = () => {
+        if (!cssReady || !jsReady) return;
+        if (window.Tabulator) resolve(window.Tabulator);
+        else reject(new Error('Tabulator did not initialise'));
+      };
+      const css = document.createElement('link');
+      css.rel = 'stylesheet';
+      css.href = TABULATOR_BASE + 'css/tabulator_midnight.min.css';
+      /* A missing stylesheet must not block the table itself. */
+      css.onload = css.onerror = () => { cssReady = true; settle(); };
+      document.head.appendChild(css);
+      const script = document.createElement('script');
+      script.src = TABULATOR_BASE + 'js/tabulator.min.js';
+      script.onload = () => { jsReady = true; settle(); };
+      script.onerror = () => reject(new Error('Tabulator failed to load'));
+      document.head.appendChild(script);
+    });
+    return tabulatorPromise;
+  };
+
+  /*
+   * Escape closes whichever dialog is open. The modals render inline instead
+   * of through a portal, so one document-level listener is the only place
+   * that works for all of them without threading refs through every caller.
+   * `onClose` lives in a ref so the listener is bound once per open, not once
+   * per render.
+   */
+  const useEscape = (open, onClose) => {
+    const closeRef = useRef(onClose);
+    closeRef.current = onClose;
+    useEffect(() => {
+      if (!open) return undefined;
+      const onKey = event => {
+        if (event.key === 'Escape') {
+          event.stopPropagation();
+          closeRef.current();
+        }
+      };
+      document.addEventListener('keydown', onKey);
+      return () => document.removeEventListener('keydown', onKey);
+    }, [open]);
+  };
   let authExpiredHandler = null;
   let authExpiredBusy = false;
   const handleAuthExpired = () => {
@@ -1173,6 +1243,8 @@ function CallHistoryDashboard({ filters, callTypes }) {
     }
   };
 
+  useEscape(!!flow, () => setFlow(null));
+
   const skel = loading && rows.length === 0;
   const st = stats || {};
   const grouped = [];
@@ -1291,6 +1363,8 @@ function CallHistoryDashboard({ filters, callTypes }) {
                     const queue = row.throughUser && row.throughUser !== row.agent ? row.throughUser : '';
                     const main = h('tr', {
                       key: id,
+                      tabIndex: 0,
+                      onKeyDown: keyActivate(() => openFlow(row)),
                       className: 'cursor-pointer' + (flag ? ' hist-row-flag' : '') + (expanded ? ' hist-row-open' : ''),
                       title: 'View call flow',
                       onClick: () => openFlow(row)
@@ -1397,11 +1471,18 @@ function CallHistoryDashboard({ filters, callTypes }) {
       )
     ),
     flow ? h('div', {
-      className: 'hist-modal-bg',
+      className: 'hist-modal-bg cursor-default',
       style: { zIndex: 2147483646 },
+      role: 'presentation',
       onClick: () => setFlow(null)
     },
-      h('div', { className: 'hist-modal', onClick: e => e.stopPropagation() },
+      h('div', {
+        className: 'hist-modal cursor-default',
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-label': 'Cradle to grave',
+        onClick: e => e.stopPropagation()
+      },
         h('div', { className: 'hist-modal-head' },
           h('div', null,
             h('div', { className: 'hist-modal-title' }, 'Cradle to grave'),
@@ -1505,6 +1586,7 @@ function useToasts() {
 }
 
 function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClose, onSaved, onNotify}) {
+  useEscape(true, onClose);
   const DEFAULTS = { slaSeconds: 20, slaPct: 80, missedPct: 20, abandonPct: 10, ahtMinutes: 5, ahtOutboundMinutes: 5, topAgentAhtMinutes: 5, topAgentMinCalls: 20 };
   const canSave = user.role === 'office_manager' || user.role === 'supervisor';
   const [form, setForm] = useState({
@@ -1649,8 +1731,14 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
   const abOver = live && live.abandonPct > Number(form.abandonPct);
   const ahtOver = live && live.ahtMinutes > Number(form.ahtMinutes);
   const ahtOutOver = live && live.ahtOutboundMinutes > Number(form.ahtOutboundMinutes);
-  return h('div', { className: 'hist-modal-bg set-overlay', onClick: onClose },
-    h('div', { className: 'set-modal', onClick: e => e.stopPropagation() },
+  return h('div', { className: 'hist-modal-bg set-overlay cursor-default', role: 'presentation', onClick: onClose },
+    h('div', {
+      className: 'set-modal cursor-default',
+      role: 'dialog',
+      'aria-modal': 'true',
+      'aria-label': 'Settings',
+      onClick: e => e.stopPropagation()
+    },
       h('div', { className: 'set-head' },
         h('div', null,
           h('div', { className: 'set-title' }, 'Settings'),
@@ -1845,6 +1933,7 @@ function skelPanel(heightCls, extra) {
 }
 
 function CallModal({metric,hour,agent,phoneNumber,callerNumber,queue,queuesOnly,filters,callTypes,slaSeconds,onClose}) {
+  useEscape(true, onClose);
 
     const ref = useRef(null);
     const table = useRef(null);
@@ -1858,6 +1947,17 @@ function CallModal({metric,hour,agent,phoneNumber,callerNumber,queue,queuesOnly,
     const [totalRecords, setTotalRecords] = useState(0);
     const [totalPages, setTotalPages] = useState(1);
     const [exporting, setExporting] = useState(false);
+    const [tableReady, setTableReady] = useState(() => typeof window !== 'undefined' && !!window.Tabulator);
+
+    /* Lazy dependency: pull Tabulator in on the first modal, not on boot. */
+    useEffect(() => {
+        if (tableReady) return undefined;
+        let alive = true;
+        ensureTabulator()
+            .then(() => { if (alive) setTableReady(true); })
+            .catch(() => { if (alive) setError('Unable to load the call table.'); });
+        return () => { alive = false; };
+    }, [tableReady]);
 
     useEffect(() => {
         setPage(1);
@@ -1943,6 +2043,7 @@ function CallModal({metric,hour,agent,phoneNumber,callerNumber,queue,queuesOnly,
         if (
             loading ||
             error ||
+            !tableReady ||
             !ref.current
         ) {
             return;
@@ -2247,6 +2348,7 @@ function CallModal({metric,hour,agent,phoneNumber,callerNumber,queue,queuesOnly,
         currentRows,
         loading,
         error,
+        tableReady,
         slaSeconds
     ]);
 
@@ -3098,6 +3200,8 @@ return h(
     const [query, setQuery] = useState('');
     const [siteFilter, setSiteFilter] = useState('');
     const [colsOpen, setColsOpen] = useState(false);
+
+    useEscape(colsOpen, () => setColsOpen(false));
     const [colOn, setColOn] = useState(() => {
         try {
             const raw = JSON.parse(localStorage.getItem(COLS_KEY) || 'null');
@@ -3301,8 +3405,14 @@ return h(
                 ' Columns'
             )
         ),
-        colsOpen ? h('div', {className: 'hist-modal-bg set-overlay ap-cols-overlay', onClick: () => setColsOpen(false)},
-            h('div', {className: 'set-modal ap-cols-modal', onClick: e => e.stopPropagation()},
+        colsOpen ? h('div', {className: 'hist-modal-bg set-overlay ap-cols-overlay cursor-default', role: 'presentation', onClick: () => setColsOpen(false)},
+            h('div', {
+                className: 'set-modal ap-cols-modal cursor-default',
+                role: 'dialog',
+                'aria-modal': 'true',
+                'aria-label': 'Choose columns',
+                onClick: e => e.stopPropagation()
+            },
                 h('div', {className: 'set-head'},
                     h('div', {className: 'set-title'}, 'Columns'),
                     h('button', {type: 'button', className: 'hist-modal-x', onClick: () => setColsOpen(false)}, '×')
@@ -3527,7 +3637,7 @@ function Agents({filters,role,selectedAgents,onAgentsChange,onData,singleSelect}
         }),
         loading
             ? h('div', {className: 'space-y-1 px-3 pt-1'},
-                ...Array.from({length: 8}, (_, i) => h('div', {key: i, className: 'mb-1 h-12 animate-pulse rounded bg-slate-800'})))
+                ...Array.from({length: 8}, (_, i) => h('div', {key: i, className: 'mb-1'}, skel('h-12'))))
             : h('div', {className: 'agent-side-list'},
                 ...visible.map(a => {
                     const on = selected.includes(a.extension);
@@ -5241,7 +5351,7 @@ function TelephoneNumbersTable({data,loading, filters, onTelephoneClick}) {
         return h('section', {className: 'border border-slate-700 bg-slate-900'},
             h('div', {className: 'border-b border-slate-700 px-3 py-2'}, skel('h-3 w-40')),
             ...Array.from({length: 8}, (_, i) => h('div', {key: i, className: 'border-b border-slate-800 px-3 py-3'},
-                h('div', {className: 'h-3 animate-pulse rounded bg-slate-800'})))
+                skel('h-3')))
         );
     }
 
@@ -6179,6 +6289,8 @@ function SimultaneousCallsPanel({filters, onCallClick}) {
                   const share = peakValue > 0 ? Math.max(0, Math.min(1, value / peakValue)) : 0;
                   return h('tr', {
                     key: [row.date, row.time, startIndex + index].join('-'),
+                    tabIndex: 0,
+                    onKeyDown: keyActivate(() => drill({ date: row.date, hour: row.hour, metric: 'incoming' })),
                     className: 'cursor-pointer ' + peakRowClass(row),
                     title: 'Open the calls behind this interval',
                     onClick: () => drill({ date: row.date, hour: row.hour, metric: 'incoming' })
@@ -6661,62 +6773,18 @@ function AutoAttendants({
                         'space-y-1 pt-2'
                 },
 
-                ...Array.from(
-                    {
-                        length: 8
+                ...Array.from({length: 8}, (_, i) =>
+                    h('div', {
+                        key: i,
+                        className: 'grid grid-cols-[20px_1fr_auto] items-center gap-2 border-b border-slate-800 py-3'
                     },
-                    (_, i) =>
-
-                        h(
-                            'div',
-                            {
-                                key:
-                                    i,
-
-                                className:
-                                    'grid grid-cols-[20px_1fr_auto] items-center gap-2 border-b border-slate-800 py-3 animate-pulse'
-                            },
-
-                            h(
-                                'div',
-                                {
-                                    className:
-                                        'h-3 w-3 rounded-sm bg-slate-700'
-                                }
-                            ),
-
-                            h(
-                                'div',
-                                {
-                                    className:
-                                        'space-y-1'
-                                },
-
-                                h(
-                                    'div',
-                                    {
-                                        className:
-                                            'h-2.5 w-28 bg-slate-700'
-                                    }
-                                ),
-
-                                h(
-                                    'div',
-                                    {
-                                        className:
-                                            'h-2 w-16 bg-slate-800'
-                                    }
-                                )
-                            ),
-
-                            h(
-                                'div',
-                                {
-                                    className:
-                                        'h-2.5 w-8 bg-slate-700'
-                                }
-                            )
-                        )
+                        skel('h-3 w-3'),
+                        h('div', {className: 'space-y-1'},
+                            skel('h-2.5 w-28'),
+                            skel('h-2 w-16')
+                        ),
+                        skel('h-2.5 w-8')
+                    )
                 )
             )
 
@@ -6793,8 +6861,17 @@ function AutoAttendants({
                                         key:
                                             extension,
 
+                                        role:
+                                            'button',
+
+                                        tabIndex:
+                                            0,
+
                                         onClick: () =>
                                             selectAutoAttendant(extension),
+
+                                        onKeyDown:
+                                            keyActivate(() => selectAutoAttendant(extension)),
 
                                         className:
                                             'aa-side-item ' + (isSelected ? 'is-active' : '')
@@ -6830,6 +6907,7 @@ function AutoAttendants({
     );
 }
 function AaCallsSheet({title, rows, onClose}) {
+  useEscape(true, onClose);
   const list = Array.isArray(rows) ? rows : [];
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -6853,7 +6931,8 @@ function AaCallsSheet({title, rows, onClose}) {
   };
 
   const sheet = h('div', {
-    className: 'aa-call-sheet fixed inset-0 p-5',
+    className: 'aa-call-sheet fixed inset-0 p-5 cursor-default',
+    role: 'presentation',
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -6864,7 +6943,10 @@ function AaCallsSheet({title, rows, onClose}) {
     onClick: onClose
   },
     h('div', {
-      className: 'call-modal flex w-full max-w-[1100px] flex-col overflow-hidden border border-slate-700 bg-slate-950 shadow-2xl',
+      role: 'dialog',
+      'aria-modal': 'true',
+      'aria-label': 'Call details',
+      className: 'call-modal cursor-default flex w-full max-w-[1100px] flex-col overflow-hidden border border-slate-700 bg-slate-950 shadow-2xl',
       style: {maxHeight: '88vh', display: 'flex', flexDirection: 'column'},
       onClick: e => e.stopPropagation()
     },
@@ -10244,8 +10326,8 @@ function AgentCompare({filters, callTypes, onAgentClick}) {
         error ? h('div', {className: 'border border-rose-900 bg-rose-950/30 p-3 text-xs text-rose-300'}, error) : null,
 
         loading ? h('div', {className: 'border border-slate-700 bg-slate-900 p-3'},
-            h('div', {className: 'h-3 w-40 animate-pulse rounded bg-slate-800'}),
-            ...Array.from({length: 8}, (_, i) => h('div', {key: i, className: 'mt-2 h-8 animate-pulse rounded bg-slate-800'}))
+            skel('h-3 w-40'),
+            ...Array.from({length: 8}, (_, i) => h('div', {key: i, className: 'mt-2'}, skel('h-8')))
         ) :
 
         (!leftRow && !rightRow) ? h('div', {className: 'border border-slate-700 bg-slate-900 p-8 text-center text-xs text-slate-500'}, 'Select two agents to compare.') :
@@ -10675,24 +10757,27 @@ function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, o
                   const key = String((c.cradle && c.cradle.orig) || c.parentId || i) + ':' + i;
                   const open = expanded === key;
                   const hops = cradleHops[key] || c.hops || [];
+                  const toggleRow = () => {
+                    if (open) { setExpanded(''); return; }
+                    setExpanded(key);
+                    if (cradleHops[key] || !c.cradle || !c.cradle.orig) return;
+                    setCradleBusy(key);
+                    api('cradle', c.cradle)
+                      .then(r => {
+                        const payload = r?.data && typeof r.data === 'object' ? r.data : r;
+                        const next = Array.isArray(payload?.hops) ? payload.hops : [];
+                        setCradleHops(prev => ({...prev, [key]: next.length ? next : (c.hops || [])}));
+                      })
+                      .catch(() => setCradleHops(prev => ({...prev, [key]: c.hops || []})))
+                      .finally(() => setCradleBusy(k => k === key ? '' : k));
+                  };
                   const rows = [h('tr', {
                     key,
+                    tabIndex: 0,
                     className: 'cursor-pointer hover:bg-slate-800/60 ' + (open ? 'bg-slate-800/40' : ''),
                     title: 'Click to show call path',
-                    onClick: () => {
-                      if (open) { setExpanded(''); return; }
-                      setExpanded(key);
-                      if (cradleHops[key] || !c.cradle || !c.cradle.orig) return;
-                      setCradleBusy(key);
-                      api('cradle', c.cradle)
-                        .then(r => {
-                          const payload = r?.data && typeof r.data === 'object' ? r.data : r;
-                          const next = Array.isArray(payload?.hops) ? payload.hops : [];
-                          setCradleHops(prev => ({...prev, [key]: next.length ? next : (c.hops || [])}));
-                        })
-                        .catch(() => setCradleHops(prev => ({...prev, [key]: c.hops || []})))
-                        .finally(() => setCradleBusy(k => k === key ? '' : k));
-                    }
+                    onClick: toggleRow,
+                    onKeyDown: keyActivate(toggleRow)
                   },
                     h('td', {className: 'text-slate-500'}, open ? '▾' : '▸'),
                     h('td', {className: 'text-slate-200'}, c.caller || '—'),
@@ -11301,8 +11386,10 @@ function AgentOverview({report, loading, filters, callTypes, selectedAgents, onC
                   ? h('tr', null, h('td', {colSpan: 3, className: 'px-2 py-8 text-center text-slate-500'}, actLoading ? 'Loading…' : 'No calls.'))
                   : actSlice.map((c, i) => h('tr', {
                       key: i,
+                      tabIndex: 0,
                       className: 'cursor-pointer hover:bg-slate-800/60',
-                      onClick: () => open(c.type || 'total')
+                      onClick: () => open(c.type || 'total'),
+                      onKeyDown: keyActivate(() => open(c.type || 'total'))
                     },
                       h('td', {className: 'text-slate-200'},
                         h('span', {className: 'inline-flex items-center gap-2 min-w-0'},

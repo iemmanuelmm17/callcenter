@@ -21,7 +21,7 @@ const check = (label, condition, extra) => {
 };
 
 const harness = await createHarness();
-const { window, document, root, flush, click, byText, containing, errors, warnings, requested } = harness;
+const { window, document, root, flush, click, press, byText, containing, errors, warnings, requested } = harness;
 
 console.log('\n== boot ==');
 await flush(10);
@@ -82,6 +82,10 @@ console.log('\n== settings modal ==');
   if (settingsBtn) await click(settingsBtn);
   check('settings modal opened', !!document.querySelector('.set-row-copy') || root().textContent.includes('SLA'));
   check('settings modal threw nothing', errors.length === before, errors.slice(before).join(' | '));
+  if (document.querySelector('.set-overlay')) {
+    await press(document, 'Escape');
+    check('Escape closes the settings modal', !document.querySelector('.set-overlay'));
+  }
   const close = document.querySelector('.ap-cols-btn') || byText('button', 'Cancel') || byText('button', 'Close');
   if (close) await click(close);
 }
@@ -104,6 +108,31 @@ console.log('\n== call modal (dashboard KPI drill-down) ==');
   check('call modal rendered', !!document.querySelector('.call-modal'), root().textContent.slice(-160));
   const closable = document.querySelector('.call-modal .ap-cols-btn') || containing('.call-modal button', 'Close') || containing('.call-modal button', '×');
   if (closable) await click(closable);
+}
+
+console.log('\n== keyboard parity + dialog semantics ==');
+{
+  await goTo('Call History');
+  await flush(12);
+  const before = errors.length;
+  const rows = document.querySelectorAll('tr[tabindex="0"]');
+  check('history rows are keyboard reachable', rows.length > 0, rows.length);
+  if (rows.length) {
+    await press(rows[0], 'Enter');
+    await flush(12);
+    const dialog = document.querySelector('.hist-modal[role="dialog"]');
+    check('Enter on a history row opens the cradle dialog', !!dialog, root().textContent.slice(-120));
+    check('cradle dialog is announced as modal',
+      !!dialog && dialog.getAttribute('aria-modal') === 'true' && !!dialog.getAttribute('aria-label'));
+    const backdrop = document.querySelector('.hist-modal-bg');
+    check('cradle backdrop is not styled as a control',
+      !!backdrop && /cursor-default/.test(backdrop.className), backdrop && backdrop.className);
+    if (dialog) {
+      await press(document, 'Escape');
+      check('Escape closes the cradle dialog', !document.querySelector('.hist-modal[role="dialog"]'));
+    }
+  }
+  check('keyboard path threw nothing', errors.length === before, errors.slice(before).join(' | '));
 }
 
 console.log('\n== agent overview (report-driven) ==');

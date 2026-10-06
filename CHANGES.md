@@ -1,3 +1,51 @@
+# CHANGES — UI quality pass: cursors, keyboard parity, dialogs, skeletons, lazy Tabulator (2026-10-06)
+
+**Scope:** presentation only. No endpoint, no response shape, no query changed;
+the PHP suite is untouched and still passes.
+
+**Files:** `assets/js/src/app.js` (+ `assets/js/app.js` rebuilt),
+`portal.php`, `assets/css/app.css` (rebuilt), `tests/js/harness.mjs`,
+`tests/js/smoke.mjs`, `tests/run.mjs`, `README.md`, new `tools/ui-audit.mjs`.
+
+## New audit tool
+
+`tools/ui-audit.mjs` walks all 1,365 `h(...)` elements in the dashboard source
+and reports what a compiler cannot: clickable elements with no cursor styling,
+clickable elements with no keyboard path, interactive controls with no tooltip,
+JS colour literals that duplicate a theme token, clickable classes with no
+stylesheet cursor rule, loading states with no skeleton, hand-rolled
+placeholders that bypass the shared shimmer helper, eagerly loaded heavy
+dependencies, and the remote assets the shell still pulls.
+`tools/ui-audit.mjs --strict` (also part of `npm test`) fails on the four
+classes of finding that must stay at zero; it was itself validated by injecting
+a violation of each kind and confirming exit 1.
+
+## What it found and what changed
+
+| finding | fix |
+| --- | --- |
+| 8 clickable backdrops/modals (`hist-modal-bg`, `hist-modal`, `set-overlay`, `set-modal`, `aa-call-sheet`, `call-modal`) with no cursor styling — they inherited the text cursor although a click on them dismisses the dialog | `cursor-default` on all eight; a backdrop must never look like a button |
+| 4 clickable table rows (`CallHistory`, simultaneous intervals, queue recent calls, agent activity) and the auto-attendant list item were mouse-only | `tabIndex` + `onKeyDown` through a new `keyActivate()` helper: Tab reaches them, Enter/Space activates (with `preventDefault` so Space does not scroll) |
+| dialogs had no semantics: screen readers saw a plain div, and Escape did nothing anywhere | `role="dialog"`, `aria-modal`, `aria-label` on all four dialogs and `role="presentation"` on their backdrops; new `useEscape()` hook closes each dialog with Escape (bound once per open, via a ref) |
+| 4 hand-rolled `animate-pulse bg-slate-800` placeholders (agents sidebar, telephone table, agent comparison, auto-attendant list) ignored the light theme and shimmered at a different rate than every other loader | replaced with the shared `skel()` helper |
+| Tabulator (≈500 kB JS + its midnight stylesheet) was loaded eagerly from a CDN on every page although only the call modal uses it | `ensureTabulator()` injects the pinned stylesheet and script on first use; the modal waits for the global before creating the table and reports an error instead of hanging if the CDN fails. Shell now loads 3 remote assets instead of 5, all `defer` |
+
+The three remaining components the audit first flagged as "loading without a
+skeleton" were false positives of the audit itself: it cut component bodies at
+the next `const` declaration, including nested helpers like `const tile = (`.
+It now only treats PascalCase declarations as component boundaries, and accepts
+`loading` forwarded to a child that renders the skeleton. `CallHistoryDashboard`
+and `TelephoneNumbers` always had skeletons.
+
+## Verification
+
+`npm test`: php lint, css coverage, **ui audit --strict**, dead code --strict,
+build, js smoke (now also asserts keyboard activation, dialog roles, backdrop
+styling and Escape), api matrix 86 checks, url policy 62, csv exports 17 — all
+pass. The rebuild of `assets/js/app.js` and `assets/css/app.css` is committed.
+
+---
+
 # CHANGES — Reporting layer split behind a facade, plus the splitter tool (2026-10-06)
 
 **Scope:** structure only. Every function keeps its name, signature, guards and
