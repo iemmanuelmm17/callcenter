@@ -3160,3 +3160,182 @@ html[data-theme="light"] .ops-rank-tab.is-on {
   color: var(--color-slate-500, #64748b);
 }
 .cm-tray .rec-panel { padding: 8px 12px 12px; }
+
+/* ==========================================================================
+   Settings: the service-desk block (opening hours, per-queue targets, roster)
+   ==========================================================================
+   Sprint A. The class names follow the existing `set-` prefix so the settings
+   dialog reads as one surface; every value that can be wrong is shown next to
+   the control that decides it (a closed day shows its inputs disabled, a
+   calendar that cannot be enabled says why).
+   ========================================================================== */
+.set-service { margin-top: 14px; }
+.set-section {
+  font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--color-slate-500); margin: 6px 0 8px;
+}
+.set-card {
+  border: 1px solid rgba(148,163,184,.14);
+  border-radius: 8px;
+  padding: 10px 12px 12px;
+  margin-bottom: 12px;
+  background: color-mix(in srgb, var(--color-slate-900) 40%, transparent);
+}
+.set-card-head {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 13px; font-weight: 600; color: var(--color-slate-100);
+}
+.set-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.set-hint { font-size: 11px; font-weight: 400; color: var(--color-slate-400); line-height: 1.4; }
+.set-note { font-size: 11px; color: var(--color-slate-500); line-height: 1.45; margin: 8px 0 0; }
+.set-input {
+  height: 28px; min-width: 84px;
+  padding: 0 6px;
+  border: 1px solid var(--color-slate-700); border-radius: 6px;
+  background: var(--color-slate-950); color: var(--color-slate-100);
+  font-size: 12px; font-variant-numeric: tabular-nums;
+}
+.set-input:disabled { opacity: .5; }
+.set-days { display: grid; gap: 4px; }
+.set-day {
+  display: grid;
+  grid-template-columns: 34px 62px auto 74px 10px 74px;
+  align-items: center; gap: 6px;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.set-day.is-open { background: color-mix(in srgb, var(--good, #35D0A0) 7%, transparent); }
+.set-day-name { font-size: 11px; font-weight: 600; color: var(--color-slate-300); }
+.set-day-closed {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; color: var(--color-slate-500);
+}
+.set-dash { color: var(--color-slate-600); text-align: center; }
+.set-holidays {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin-top: 10px;
+}
+.set-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid rgba(148,163,184,.2); border-radius: 999px;
+  font-size: 11px; font-variant-numeric: tabular-nums;
+  color: var(--color-slate-200);
+}
+.set-chip button {
+  border: 0; background: transparent; cursor: pointer;
+  color: var(--color-slate-400); font-size: 13px; line-height: 1; padding: 0 4px;
+}
+.set-chip button:hover { color: var(--bad, #F0555A); }
+.set-warn {
+  margin-top: 10px; padding: 7px 9px;
+  border-left: 3px solid var(--warn, #F5A83C);
+  background: color-mix(in srgb, var(--warn, #F5A83C) 10%, transparent);
+  font-size: 11px; color: var(--color-slate-200); line-height: 1.45;
+}
+.set-target-row {
+  display: grid;
+  grid-template-columns: 1fr 84px auto 20px;
+  align-items: center; gap: 8px;
+  padding: 4px 2px;
+}
+.set-target-row + .set-target-row { border-top: 1px solid rgba(148,163,184,.08); }
+.set-target-name { font-size: 12px; color: var(--color-slate-200); }
+.set-roster { overflow-x: auto; }
+.set-roster-head,
+.set-roster-row {
+  display: grid;
+  grid-template-columns: 190px 150px 76px 76px 96px 110px 26px;
+  align-items: center; gap: 6px;
+  min-width: 760px;
+}
+.set-roster-head {
+  font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--color-slate-500);
+  padding: 0 2px 4px;
+}
+.set-roster-row { padding: 3px 2px; border-top: 1px solid rgba(148,163,184,.08); }
+.set-weekdays { display: inline-flex; gap: 2px; }
+.set-weekdays label {
+  display: inline-grid; place-items: center;
+  width: 18px; height: 20px;
+  border: 1px solid var(--color-slate-700); border-radius: 4px;
+  font-size: 9px; color: var(--color-slate-500); cursor: pointer;
+}
+.set-weekdays label.is-on {
+  border-color: color-mix(in srgb, var(--good, #35D0A0) 55%, transparent);
+  color: var(--good, #35D0A0);
+}
+.set-weekdays input { position: absolute; opacity: 0; pointer-events: none; }
+.set-remove {
+  border: 0; background: transparent; cursor: pointer;
+  color: var(--color-slate-500); font-size: 14px; line-height: 1;
+}
+.set-remove:hover { color: var(--bad, #F0555A); }
+.set-add {
+  margin-top: 8px;
+  padding: 5px 10px;
+  border: 1px solid var(--color-slate-700); border-radius: 6px;
+  background: transparent; color: var(--color-slate-200);
+  font-size: 11px; cursor: pointer;
+}
+.set-add:hover { border-color: var(--color-cyan-400, #22d3ee); color: var(--color-cyan-400, #22d3ee); }
+
+/* ==========================================================================
+   Dashboard: how long callers waited, and the follow-ups (Sprint A)
+   ==========================================================================
+   Two cards in their own row. The bars are clickable because a band nobody can
+   drill into is a number nobody can act on; the follow-up rows are buttons for
+   the two that have a filter behind them and plain rows for the two that do
+   not (a fake affordance is worse than none).
+   ========================================================================== */
+.ops-wait-head {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ops-wait-stat { display: flex; flex-direction: column; gap: 1px; }
+.ops-wait-k { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--color-slate-500); }
+.ops-wait-v { font-size: 18px; font-weight: 650; color: var(--color-slate-100); font-variant-numeric: tabular-nums; }
+.ops-wait-hint { font-size: 10px; color: var(--color-slate-500); }
+.ops-wait-bars { display: grid; gap: 3px; margin-top: 4px; }
+.ops-wait-row {
+  display: grid;
+  grid-template-columns: 78px 1fr 46px 36px;
+  align-items: center; gap: 6px;
+  padding: 2px 0;
+  border: 0; background: transparent; cursor: pointer; text-align: left;
+}
+.ops-wait-row:hover .ops-wait-name { color: var(--color-slate-100); }
+.ops-wait-name { font-size: 11px; color: var(--color-slate-400); }
+.ops-wait-track {
+  height: 8px; border-radius: 4px;
+  background: rgba(148,163,184,.14);
+  overflow: hidden;
+}
+.ops-wait-fill { display: block; height: 100%; border-radius: 4px; }
+.ops-wait-val { font-size: 11px; color: var(--color-slate-200); text-align: right; font-variant-numeric: tabular-nums; }
+.ops-wait-pct { font-size: 10px; color: var(--color-slate-500); text-align: right; font-variant-numeric: tabular-nums; }
+.ops-links { display: flex; flex-direction: column; gap: 2px; }
+.ops-link-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: baseline; gap: 8px;
+  padding: 6px 0;
+  border: 0; border-top: 1px solid rgba(148,163,184,.1);
+  background: transparent; text-align: left;
+  cursor: pointer;
+}
+.ops-link-row.is-static { cursor: default; }
+.ops-link-row:hover:not(.is-static) .ops-link-k { color: var(--color-cyan-400, #22d3ee); }
+.ops-link-k { font-size: 12px; color: var(--color-slate-300); }
+.ops-link-v { font-size: 14px; font-weight: 650; color: var(--color-slate-100); font-variant-numeric: tabular-nums; }
+.ops-link-h { font-size: 10px; color: var(--color-slate-500); }
+.ops-link-pairs { margin-top: 6px; border-top: 1px solid rgba(148,163,184,.1); padding-top: 6px; }
+.ops-link-pair {
+  display: flex; justify-content: space-between;
+  font-size: 11px; color: var(--color-slate-400);
+  font-variant-numeric: tabular-nums;
+}

@@ -14,7 +14,7 @@ import { formatPhoneNumber } from '../lib/format.js';
 import { formatCallDate, formatCallTime } from '../lib/time.js';
 import { ensureTabulator, h, useEffect, useEscape, useRef, useState } from '../lib/react.js';
 
-function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerNumber,queue,queuesOnly,filters,callTypes,slaSeconds,onClose}) {
+function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerNumber,queue,queuesOnly,filters,callTypes,slaSeconds,waitBucket,waitedOver,callbackState,sort,dir,onClose}) {
     /*
      * Metric wording comes from the server catalog (api/filters.php /
      * includes/reporting/metrics.php). Declared before the title uses it —
@@ -115,6 +115,17 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
             queue,
             queuesOnly: !!queuesOnly,
             slaSeconds,
+            /*
+             * Sprint A: the drill-down carries the scope it was opened from —
+             * a wait band, a callback state, or a sort order. Without these the
+             * modal would show a different population than the card that was
+             * clicked, which is the drift this sprint is about.
+             */
+            waitBucket: waitBucket || '',
+            waitedOver: waitedOver === undefined ? null : waitedOver,
+            callbackState: callbackState || '',
+            sort: sort || 'newest',
+            dir: dir || 'desc',
             page,
             size: pageSize
         })
@@ -146,7 +157,7 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
             }
         };
 
-    }, [metric, hour, timeFrom, timeTo, agent, callId, phoneNumber, callerNumber, queue, queuesOnly, slaSeconds, filters, callTypes, page, pageSize]);
+    }, [metric, hour, timeFrom, timeTo, agent, callId, phoneNumber, callerNumber, queue, queuesOnly, slaSeconds, waitBucket, waitedOver, callbackState, sort, dir, filters, callTypes, page, pageSize]);
 
     const startIndex = totalRecords === 0 ? 0 : (page - 1) * pageSize;
     const endIndex = Math.min(startIndex + records.length, totalRecords);
@@ -406,6 +417,24 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
     /* The exact interval, when one was clicked (Simultaneous rows). */
     if (timeFrom && timeTo) {
         filterChips.push({ k: 'Window', v: timeFrom + '–' + timeTo });
+    }
+    /*
+     * The scope chips, so a list that is a subset always says which subset.
+     */
+    if (waitBucket) {
+        filterChips.push({ k: 'Waited', v: waitBucket === '120+' ? 'over 120s' : waitBucket.replace('-', '–') + 's' });
+    }
+    if (waitedOver) {
+        filterChips.push({ k: 'Waited', v: '≥ ' + waitedOver + 's' });
+    }
+    if (callbackState === 'returned') {
+        filterChips.push({ k: 'Callbacks', v: 'returned' });
+    }
+    if (callbackState === 'unreturned') {
+        filterChips.push({ k: 'Callbacks', v: 'not returned' });
+    }
+    if (sort && sort !== 'newest') {
+        filterChips.push({ k: 'Sorted by', v: sort + ' ' + (dir === 'asc' ? 'ascending' : 'descending') });
     }
     if (slaSeconds && (metric === 'sla' || metric === 'sla_missed')) {
         filterChips.push({ k: 'SLA ring', v: slaSeconds + 's' });

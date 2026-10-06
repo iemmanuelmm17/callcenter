@@ -143,6 +143,49 @@ if (
         (string)$filters['end']
     );
 
+    /*
+     * The Sprint A narrowing filters, applied to the SAME row set every figure
+     * below is computed from. A filter bar that changes the colour of a card but
+     * not its number is worse than no filter, so these run before any aggregate
+     * - and through the shared helpers in rows.php, so the drill-down list and
+     * these KPIs cannot disagree about which calls are in scope.
+     */
+    $requestedOutcome = strtolower(trim((string)($requested['outcome'] ?? '')));
+    $calls = filterCallsByOutcome($calls, $requestedOutcome, $directory, $queueIds);
+
+    $requestedWaitBucket = strtolower(trim((string)($requested['waitBucket'] ?? '')));
+    if (!in_array($requestedWaitBucket, callWaitBuckets(), true)) {
+        $requestedWaitBucket = '';
+    }
+    $requestedWaitedOver = $requested['waitedOver'] ?? null;
+    $requestedWaitedOver = ($requestedWaitedOver === null || $requestedWaitedOver === '')
+        ? null
+        : max(0, min(86400, (int)$requestedWaitedOver));
+    $calls = filterCallsByWait($calls, $requestedWaitBucket, $requestedWaitedOver);
+
+    $requestedCallbackState = strtolower(trim((string)($requested['callbackState'] ?? '')));
+    if (!in_array($requestedCallbackState, callCallbackStates(), true)) {
+        $requestedCallbackState = '';
+    }
+    if ($requestedCallbackState !== '' || !empty($requested['callbackOnly'])) {
+        $links = cdrCallbacks($calls, 86400);
+        $legIndexForCallback = cdrLegIndex($calls);
+        $calls = filterCallsByCallback(
+            $calls,
+            $requestedCallbackState,
+            $links['returned'],
+            $links['unreturned'],
+            $legIndexForCallback
+        );
+        if ($requestedCallbackState === '' && !empty($requested['callbackOnly'])) {
+            $callbackRoots = array_merge($links['returned'], $links['unreturned']);
+            $calls = array_values(array_filter(
+                $calls,
+                static fn(array $call): bool => isset($callbackRoots[cdrRootKey($call, $legIndexForCallback)])
+            ));
+        }
+    }
+
 	$agentPerformance = agentPerformance(
 		$calls,
 		$directory,

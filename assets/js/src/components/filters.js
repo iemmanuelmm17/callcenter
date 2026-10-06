@@ -137,6 +137,8 @@ function CallTypeFilters({callTypes,setCallTypes}) {
 
 function Filters({filters,setFilters,role,rangeLocked}) {
   const [departments,setDepartments] = useState([]);
+  const [sites,setSites] = useState([]);
+  const [hoursConfigured,setHoursConfigured] = useState(false);
   const [loadingDepartments,setLoadingDepartments] = useState(false);
 
   useEffect(() => {
@@ -156,6 +158,21 @@ function Filters({filters,setFilters,role,rangeLocked}) {
           Array.isArray(r.departments)
             ? r.departments
             : []
+        );
+
+        setSites(
+          Array.isArray(r.sites)
+            ? r.sites
+            : []
+        );
+
+        /*
+         * The hours scope is only offered when a calendar exists: an "Opening
+         * hours" option that silently returns everything would be worse than no
+         * option at all. `configured` is the server's own answer.
+         */
+        setHoursConfigured(
+          !!(r.businessHours && r.businessHours.configured)
         );
       })
       .catch(() => {
@@ -350,7 +367,89 @@ const lastMonthEnd = new Date(
               department
             )
           )
-      )
+      ),
+
+    /*
+     * SITE (the review's F4). The server has scoped reports by site all along
+     * (authorizedFilters + callSite), and app-shell already carries the value —
+     * there was simply no control to set it, so a multi-site tenant could not
+     * ask "how did the Albany office do?".
+     *
+     * Manager-only, because it is the only role that is offered more than one
+     * site to choose from: api/filters.php returns the whole directory's sites
+     * to a manager and just the viewer's own site to anyone else, and a
+     * one-option dropdown whose two entries mean the same thing is worse than
+     * no dropdown.
+     */
+    role === 'office_manager' && sites.length > 0 &&
+      h(
+        'select',
+        {
+          value: filters.site || '',
+          disabled: loadingDepartments,
+          onChange: e =>
+            setFilters({
+              ...filters,
+              site: e.target.value
+            }),
+          className:
+            'border border-slate-700 bg-slate-950 px-2 py-1 text-xs outline-none focus:border-cyan-400 disabled:opacity-60',
+          title: 'Restrict every report to one site'
+        },
+        h('option', { value: '' }, 'All Sites'),
+        ...sites
+          .sort((a,b) => a.localeCompare(b))
+          .map(site => h('option', { key: site, value: site }, site))
+      ),
+
+    /*
+     * OPENING HOURS (Sprint A). Only shown once a calendar is configured, and
+     * it defaults to the server's own default (`business`), so a manager who
+     * turns opening hours on sees published numbers by default while the
+     * after-hours view stays one click away.
+     */
+    hoursConfigured &&
+      h(
+        'select',
+        {
+          value: filters.hours || 'business',
+          onChange: e =>
+            setFilters({
+              ...filters,
+              hours: e.target.value
+            }),
+          className:
+            'border border-slate-700 bg-slate-950 px-2 py-1 text-xs outline-none focus:border-cyan-400',
+          title: 'Opening hours were set in Settings: choose which calls to count'
+        },
+        h('option', { value: 'business' }, 'Opening hours'),
+        h('option', { value: 'after' }, 'After hours'),
+        h('option', { value: 'all' }, 'All hours')
+      ),
+
+    /*
+     * OUTCOME (Sprint A): the canonical vocabulary, so "show me only the
+     * abandons" does not require reading a type column and guessing.
+     */
+    h(
+      'select',
+      {
+        value: filters.outcome || '',
+        onChange: e =>
+          setFilters({
+            ...filters,
+            outcome: e.target.value
+          }),
+        className:
+          'border border-slate-700 bg-slate-950 px-2 py-1 text-xs outline-none focus:border-cyan-400',
+        title: 'Filter by how the call ended'
+      },
+      h('option', { value: '' }, 'Any outcome'),
+      h('option', { value: 'answered' }, 'Answered'),
+      h('option', { value: 'abandoned' }, 'Abandoned'),
+      h('option', { value: 'voicemail' }, 'Voicemail'),
+      h('option', { value: 'noanswer' }, 'No answer')
+    )
   );
 }
 

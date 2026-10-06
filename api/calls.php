@@ -640,71 +640,32 @@ try {
      * narrow what the table shows without changing what any other control means.
      */
     if ($waitBucket !== '' || $waitedOver !== null) {
-        $calls = array_values(array_filter($calls, static function (array $call) use ($waitBucket, $waitedOver): bool {
-            $waited = waitSeconds($call);
-            if ($waitedOver !== null && $waited < $waitedOver) {
-                return false;
-            }
-            if ($waitBucket === '') {
-                return true;
-            }
-            /* Only answered inbound calls appear in the card's buckets, so only
-             * they are drilled here. */
-            if (callType($call) !== 'inbound') {
-                return false;
-            }
-            if ($waitBucket === '0-30') {
-                return $waited <= 30;
-            }
-            if ($waitBucket === '31-60') {
-                return $waited > 30 && $waited <= 60;
-            }
-            if ($waitBucket === '61-120') {
-                return $waited > 60 && $waited <= 120;
-            }
-            return $waited > 120;
-        }));
+        $calls = filterCallsByWait($calls, $waitBucket, $waitedOver);
     }
 
     if ($outcomeFilter !== '') {
-        $calls = array_values(array_filter(
-            $calls,
-            static function (array $call) use ($outcomeFilter, $directory, $queueIdsAll): bool {
-                return callOutcome($call, $directory, $queueIdsAll) === $outcomeFilter;
-            }
-        ));
+        $calls = filterCallsByOutcome($calls, $outcomeFilter, $directory, $queueIdsAll);
     }
 
     if ($callbackOnly || $callbackState !== '') {
-        /*
-         * The returned-call worklist, drilled. Matching is the links layer's
-         * (one definition), computed over the rows still in scope so the list
-         * and the dashboard's callback count agree.
-         */
-        /* Over the full scoped set, so combining this with a queue or agent
-         * filter still finds the calls that were (or were not) returned. */
-        $returnedRoots = $rowContext['returnedMisses'];
+        /* The links index is over the loaded, scoped set (built above), so this
+         * still finds the returned/unreturned calls when combined with another
+         * filter. */
         $allCallbacks = cdrCallbacks($calls, 86400);
-        $unreturnedRoots = $allCallbacks['unreturned'];
-        $legIndexForCallback = $rowContext['legIndex'];
-        $calls = array_values(array_filter(
+        $calls = filterCallsByCallback(
             $calls,
-            static function (array $call) use ($callbackState, $returnedRoots, $unreturnedRoots, $legIndexForCallback): bool {
-                $root = cdrRootKey($call, $legIndexForCallback);
-                $returned = isset($returnedRoots[$root]);
-                $unreturned = isset($unreturnedRoots[$root]);
-                if (!$returned && !$unreturned) {
-                    return false;
-                }
-                if ($callbackState === 'returned') {
-                    return $returned;
-                }
-                if ($callbackState === 'unreturned') {
-                    return $unreturned;
-                }
-                return true;
-            }
-        ));
+            $callbackState,
+            $rowContext['returnedMisses'],
+            $allCallbacks['unreturned'],
+            $rowContext['legIndex']
+        );
+        if ($callbackOnly && $callbackState === '') {
+            $callbackRoots = array_merge($rowContext['returnedMisses'], $allCallbacks['unreturned']);
+            $calls = array_values(array_filter(
+                $calls,
+                static fn(array $call): bool => isset($callbackRoots[cdrRootKey($call, $rowContext['legIndex'])])
+            ));
+        }
     }
 
     /*

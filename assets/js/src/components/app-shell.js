@@ -755,7 +755,12 @@ if (route === 'agents') {
             ahtMinutes: domainSettings.topAgentAhtMinutes,
             minCalls: domainSettings.topAgentMinCalls
         },
-        onMetric: metric => setModal({ metric }),
+        /*
+         * The drill-down carries an optional scope: a KPI card can now say
+         * "these calls, in this band" (Sprint A's wait buckets and callback
+         * worklist) instead of only naming a metric.
+         */
+        onMetric: (metric, extra) => setModal(extra && typeof extra === 'object' ? { metric, ...extra } : { metric }),
         onHourClick: hour => setModal({ metric: 'total', hour, agent: null }),
         onDayClick: day => setModal({ metric: 'total', filters: { ...filters, start: day, end: day } }),
         /*
@@ -920,6 +925,11 @@ return h('div', { className: 'min-h-screen' },
             queuesOnly: !!modal.queuesOnly,
             timeFrom: modal.timeFrom || null,
             timeTo: modal.timeTo || null,
+            waitBucket: modal.waitBucket || null,
+            waitedOver: modal.waitedOver === undefined ? null : modal.waitedOver,
+            callbackState: modal.callbackState || null,
+            sort: modal.sort || null,
+            dir: modal.dir || null,
             filters: modal.filters || filters,
             callTypes: modal.callTypes || callTypes,
             /*

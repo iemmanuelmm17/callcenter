@@ -33,7 +33,27 @@ export const FIXTURES = {
     user: { username: 'om@7826.DynaCloud', displayName: 'Test OM', role: 'office_manager', domain: '7826.DynaCloud', extension: '1000', department: '', site: '' },
     remaining: 1800, warningAt: 900, tokenRemaining: 3600
   },
-  settings: { slaSeconds: 20, slaPct: 80, abandonPct: 10, missedPct: 20, ahtMinutes: 5, ahtOutboundMinutes: 5, topAgentAhtMinutes: 5, topAgentMinCalls: 20 },
+  settings: {
+    slaSeconds: 20, slaPct: 80, abandonPct: 10, missedPct: 20,
+    ahtMinutes: 5, ahtOutboundMinutes: 5, topAgentAhtMinutes: 5, topAgentMinCalls: 20,
+    /* Sprint A: the service-desk block. The calendar ships OFF, exactly as a
+     * fresh install does, with the Mon-Fri grid pre-filled. */
+    businessHours: {
+      enabled: false,
+      days: {
+        1: { closed: false, open: '08:00', close: '18:00' },
+        2: { closed: false, open: '08:00', close: '18:00' },
+        3: { closed: false, open: '08:00', close: '18:00' },
+        4: { closed: false, open: '08:00', close: '18:00' },
+        5: { closed: false, open: '08:00', close: '18:00' },
+        6: { closed: true, open: '', close: '' },
+        7: { closed: true, open: '', close: '' }
+      },
+      holidays: []
+    },
+    queueSla: { 700: 15 },
+    roster: [{ extension: '6080', name: 'Ada Lovelace', team: 'Sales', supervisor: 'Sup', days: [1, 2, 3, 4, 5], start: '09:00', end: '17:00' }]
+  },
   /*
    * Mirrors api/filters.php: departments/sites plus the metric catalog from
    * includes/reporting/metrics.php. The `total` title is a sentinel on
@@ -44,6 +64,28 @@ export const FIXTURES = {
   filters: {
     departments: ['Sales', 'Support', 'Billing'],
     sites: ['HQ', 'Branch'],
+    agents: [
+      { extension: '6080', name: 'Ada Lovelace', department: 'Sales', site: 'HQ' },
+      { extension: '6081', name: 'Alan Turing', department: 'Support', site: 'HQ' }
+    ],
+    queues: [
+      { id: '700', description: 'Sales queue' },
+      { id: '701', description: 'Support queue' }
+    ],
+    businessHours: {
+      enabled: false,
+      configured: false,
+      days: {
+        1: { closed: false, open: '08:00', close: '18:00' },
+        2: { closed: false, open: '08:00', close: '18:00' },
+        3: { closed: false, open: '08:00', close: '18:00' },
+        4: { closed: false, open: '08:00', close: '18:00' },
+        5: { closed: false, open: '08:00', close: '18:00' },
+        6: { closed: true, open: '', close: '' },
+        7: { closed: true, open: '', close: '' }
+      },
+      holidays: []
+    },
     metrics: {
       total: {label: 'All calls', title: 'All calls (served by api/filters.php)'},
       missed: {label: 'Missed', title: 'Missed'}
@@ -51,6 +93,18 @@ export const FIXTURES = {
   },
   cache_job: { complete: true, ready: 5, total: 5, percent: 100, next: null, start: '2026-08-02', end: '2026-08-06', warming: false },
   report: {
+    links: {
+      offered: 12,
+      transfers: {
+        count: 3, transferredInteractions: 2, handled: 10, ratePct: 20, perTransferred: 1.5,
+        agentPairs: [{ from: '6080', to: '6081', count: 2 }], queuePairs: []
+      },
+      callbacks: {
+        windowSeconds: 86400, missed: 5, returned: 3, unreturned: 2, ratePct: 60,
+        avgReturnSeconds: 1500, fastest: null, slowest: null, worklist: [], unreturnedList: []
+      },
+      repeat: { callers: 10, repeat24: 3, repeat72: 4, rate24Pct: 30, rate72Pct: 40, top: [] }
+    },
     filters: { start: '2026-08-02', end: '2026-08-06', department: '', site: '', agents: [] },
     callTypes: { inbound: true, outbound: true, missed: true, onnet: true },
     summary: {
@@ -64,7 +118,13 @@ export const FIXTURES = {
       days: DAYS,
       outcomes: { answered: 1400, missed: 130, busy: 12, failed: 6 },
       duration: [{ label: '0–30s', count: 120 }, { label: '30–60s', count: 90 }],
-      heatmap: Array.from({ length: 7 }, () => HOURS.map(n => Math.round(n / 3)))
+      heatmap: Array.from({ length: 7 }, () => HOURS.map(n => Math.round(n / 3))),
+      /* Sprint A: the wait bands, the hold nobody used to see, and the links
+       * block (transfers / returned calls / repeat callers). */
+      waitBuckets: { '0-30': 6, '31-60': 3, '61-120': 2, '120+': 1 },
+      missedWaitBuckets: { lt5: 1, '5-30': 2, gt30: 2 },
+      abandonWaitBuckets: { lt5: 1, '5-30': 1, gt30: 2 },
+      hold: { totalSeconds: 480, calls: 3, avgSeconds: 160 }
     },
     comparison: {
       previous: {
@@ -409,9 +469,30 @@ export async function createHarness(options = {}) {
     [...window.document.querySelectorAll(selector)].find(el => el.textContent.includes(text));
   const root = () => window.document.getElementById('root');
 
+  /*
+   * Type into a controlled input the way React can see it.
+   *
+   * Setting element.value directly updates React's own value tracker, so the
+   * change is swallowed as a no-op: the DOM shows the new text and the component
+   * never hears about it. Going through the native setter is what a real
+   * keystroke does.
+   */
+  const typeInto = async (element, value) => {
+    const proto = element.tagName === 'SELECT' ? window.HTMLSelectElement.prototype
+      : element.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+    await act(async () => {
+      if (descriptor && descriptor.set) descriptor.set.call(element, value);
+      else element.value = value;
+      element.dispatchEvent(new window.Event('input', { bubbles: true }));
+      element.dispatchEvent(new window.Event('change', { bubbles: true }));
+    });
+  };
+
   return {
     dom, window, document: window.document, React, ReactDOM, flush, click, press,
-    byText, containing, root, errors, warnings, requested,
+    byText, containing, root, errors, warnings, requested, typeInto,
     /* Every Tabulator the app constructed, oldest first. */
     tables: window.__tabulatorTables,
     /* Every Chart the app constructed, oldest first. */

@@ -21,7 +21,7 @@ const check = (label, condition, extra) => {
 };
 
 const harness = await createHarness();
-const { window, document, root, flush, click, press, byText, containing, errors, warnings, requested, tables, charts, act } = harness;
+const { window, document, root, flush, click, press, byText, containing, errors, warnings, requested, tables, charts, act, typeInto } = harness;
 
 console.log('\n== boot ==');
 await flush(10);
@@ -88,6 +88,126 @@ console.log('\n== settings modal ==');
   }
   const close = document.querySelector('.ap-cols-btn') || byText('button', 'Cancel') || byText('button', 'Close');
   if (close) await click(close);
+}
+
+/*
+ * Sprint A service settings: the opening-hours grid, the per-queue targets and
+ * the roster all render inside the dialog, and saving writes them in the same
+ * payload as the thresholds (one Save, one payload — a manager who edits both
+ * must not be able to save half of it).
+ */
+console.log('\n== service settings: opening hours, targets, roster ==');
+{
+  const before = errors.length;
+  const settingsBtn = containing('.nav-item', 'Settings');
+  if (settingsBtn) await click(settingsBtn);
+  await flush(6);
+
+  const days = document.querySelectorAll('.set-day');
+  check('the opening-hours grid shows all seven days', days.length === 7, days.length);
+  check('the Mon-Fri grid is pre-filled from the server',
+    document.querySelector('.set-day.is-open') !== null,
+    document.querySelector('.set-day.is-open')?.textContent);
+  check('the closed weekend shows as closed',
+    root().textContent.includes('closed'), root().textContent.slice(0, 120));
+
+  check('the per-queue target rows come from the queue list',
+    document.querySelectorAll('.set-target-row').length >= 1,
+    document.querySelectorAll('.set-target-row').length);
+  check('the roster renders the stored row',
+    document.querySelectorAll('.set-roster-row').length === 1
+      && document.querySelector('.set-roster-row').textContent.includes('Ada'),
+    document.querySelector('.set-roster-row')?.textContent);
+  check('the roster row shows its weekdays',
+    document.querySelectorAll('.set-weekdays label.is-on').length === 5,
+    document.querySelectorAll('.set-weekdays label.is-on').length);
+
+  /*
+   * Nudge queue 700's target up with the stepper (15 -> 16) and switch the
+   * roster row to the other agent, then save: both controls send real React
+   * events, and the payload below proves the dialog owns one state and posts it.
+   */
+  const step = document.querySelector('.set-target-row button[data-step=up]');
+  check('a queue target stepper exists', !!step);
+  if (step) await click(step);
+  const save = byText('button', 'Save') || byText('button', 'Save settings');
+  check('the save button exists', !!save);
+  if (save) {
+    await click(save);
+    await flush(6);
+  }
+  const posted = [...requested].reverse().find(r => r.endpoint === 'settings' && r.method !== 'GET');
+  let body = {};
+  try { body = posted ? JSON.parse(posted.body) : {}; } catch { body = {}; }
+  check('saving posts the service-desk block with the thresholds',
+    posted !== undefined && body.businessHours !== undefined && body.queueSla !== undefined
+      && body.roster !== undefined, posted ? posted.body : 'no POST');
+  check("the stepped queue target is in the payload (15 -> 16)",
+    Number(body.queueSla && body.queueSla['700']) === 16, JSON.stringify(body.queueSla));
+  check('the roster row is in the payload',
+    Array.isArray(body.roster) && body.roster.length === 1
+      && body.roster[0].extension === '6080', body.roster);
+  check('opening hours are still off (the fixture) and carry the full grid',
+    body.businessHours && body.businessHours.enabled === false
+      && Object.keys(body.businessHours.days || {}).length === 7, body.businessHours);
+  check('the service settings block threw nothing', errors.length === before, errors.slice(before).join(' | '));
+}
+
+/*
+ * Sprint A dashboard cards: the wait bands and the follow-ups, and the drill
+ * that has to carry the band it was opened from (a band nobody can drill into
+ * is a number nobody can act on).
+ */
+console.log('\n== dashboard: wait bands and follow-ups ==');
+{
+  const before = errors.length;
+  await goTo('Dashboard');
+  await flush(8);
+
+  const bands = [...document.querySelectorAll('.ops-wait-row')];
+  check('the wait card shows four bands', bands.length === 4, bands.length);
+  check('the wait card reports p50/p90 wait',
+    /p50 wait/.test(root().textContent) && /p90 wait/.test(root().textContent),
+    root().textContent.match(/p50 wait[^A-Z]{0,20}/)?.[0]);
+  check('the abandon split by wait time is stated',
+    /staffing failure/.test(root().textContent),
+    root().textContent.match(/Abandons by[^\n]{0,80}/)?.[0]);
+  check('the follow-ups card renders its rows',
+    document.querySelectorAll('.ops-link-row').length === 4,
+    document.querySelectorAll('.ops-link-row').length);
+
+  const over = bands.find(b => b.textContent.includes('over 120s'));
+  check('the over-120s band exists', !!over);
+  if (over) {
+    await click(over);
+    await flush(8);
+  }
+  const posted = [...requested].reverse().find(r => r.endpoint === 'calls');
+  let body = {};
+  try { body = posted ? JSON.parse(posted.body) : {}; } catch { body = {}; }
+  check('clicking a band opens the calls behind that band',
+    body.waitBucket === '120+', body.waitBucket);
+  check('the modal states the band it is showing',
+    /Waited/.test(document.body.textContent), document.body.textContent.slice(0, 120));
+  const closeOne = byText('button', 'Close');
+  if (closeOne) await click(closeOne);
+  await press(document, 'Escape');
+  await flush(4);
+
+  const unreturned = [...document.querySelectorAll('.ops-link-row')]
+    .find(r => r.textContent.includes('not returned'));
+  if (unreturned) {
+    await click(unreturned);
+    await flush(8);
+  }
+  const posted2 = [...requested].reverse().find(r => r.endpoint === 'calls');
+  let body2 = {};
+  try { body2 = posted2 ? JSON.parse(posted2.body) : {}; } catch { body2 = {}; }
+  check('the returned-call worklist drills with its own filter',
+    body2.callbackState === 'unreturned', body2.callbackState);
+  await press(document, 'Escape');
+  await flush(4);
+  check('the dashboard cards threw nothing', errors.length === before, errors.slice(before).join(' | '));
 }
 
 console.log('\n== call modal (dashboard KPI drill-down) ==');

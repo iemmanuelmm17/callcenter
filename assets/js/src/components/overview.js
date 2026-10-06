@@ -102,6 +102,14 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
   const inbound = report?.summary?.inbound || {};
   const sl = report?.summary?.serviceLevel || {};
   const mb = report?.summary?.missedBreakdown || {};
+  /* Sprint A: the wait bands, the hold nobody used to see, and the links layer
+   * (transfers, returned calls, repeat callers). */
+  const waitBuckets = report?.summary?.waitBuckets || {};
+  const missedWaitBuckets = report?.summary?.missedWaitBuckets || {};
+  const abandonWaitBuckets = report?.summary?.abandonWaitBuckets || {};
+  const hold = report?.summary?.hold || {};
+  const links = report?.links || null;
+  const waitTotal = Object.values(waitBuckets).reduce((a, b) => a + Number(b || 0), 0);
   const prevCounts = report?.comparison?.previous?.counts || {};
   /* True between phase 1 painting and phase 2 landing. */
   const comparisonPending = report?.comparison?.pending === true;
@@ -444,6 +452,107 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
                 h('div', {className:'ops-rate-h'}, 'answered ≤' + (slaSeconds || sl.slaSeconds || 20) + 's')
               )
             )
+          )
+        : pulse
+    ),
+
+    h('div', {className:'ops-split'},
+      reportReady
+        ? h('section', {className:'ops-card ops-wait'},
+            h('div', {className:'ops-label'}, 'How long callers waited', qHelp('Every answered inbound call, banded by how long it rang before somebody picked up. p50 is the middle caller and p90 the slow tenth — the numbers a manager quotes, computed with the same percentile method as a spreadsheet (PERCENTILE.INC). Click a band to open exactly those calls.')),
+            h('div', {className:'ops-wait-head'},
+              h('div', {className:'ops-wait-stat'},
+                h('span', {className:'ops-wait-k'}, 'p50 wait'),
+                h('span', {className:'ops-wait-v'}, (sl.p50Wait || 0) + 's')
+              ),
+              h('div', {className:'ops-wait-stat'},
+                h('span', {className:'ops-wait-k'}, 'p90 wait'),
+                h('span', {className:'ops-wait-v'}, (sl.p90Wait || 0) + 's')
+              ),
+              h('div', {className:'ops-wait-stat'},
+                h('span', {className:'ops-wait-k'}, 'Hold'),
+                h('span', {className:'ops-wait-v'}, (hold.totalSeconds ? Math.round(hold.totalSeconds / 60) + 'm' : '0m')),
+                h('span', {className:'ops-wait-hint'}, fmtNum(hold.calls || 0) + ' calls held')
+              ),
+              h('div', {className:'ops-wait-stat'},
+                h('span', {className:'ops-wait-k'}, 'In SLA'),
+                h('span', {className:'ops-wait-v'}, (sl.sla || 0) + '%'),
+                h('span', {className:'ops-wait-hint'},
+                  sl.perQueue
+                    ? 'per queue, avg target ' + (sl.avgTargetSeconds || sl.slaSeconds || 20) + 's'
+                    : 'within ' + (sl.slaSeconds || slaSeconds || 20) + 's')
+              )
+            ),
+            h('div', {className:'ops-wait-bars'},
+              ...[['0-30', 'under 30s', C.good], ['31-60', '31–60s', C.warn], ['61-120', '61–120s', C.warn], ['120+', 'over 120s', C.bad]].map(([band, label, color]) => {
+                const value = Number(waitBuckets[band] || 0);
+                const pct = waitTotal ? (value / waitTotal) * 100 : 0;
+                return h('button', {
+                  key: band,
+                  type: 'button',
+                  className: 'ops-wait-row',
+                  title: value + ' call(s) waited ' + label,
+                  onClick: () => onMetric && onMetric('inbound', { waitBucket: band })
+                },
+                  h('span', {className:'ops-wait-name'}, label),
+                  h('span', {className:'ops-wait-track'},
+                    h('span', {className:'ops-wait-fill', style:{width: pct.toFixed(1) + '%', background: color}})
+                  ),
+                  h('span', {className:'ops-wait-val'}, fmtNum(value)),
+                  h('span', {className:'ops-wait-pct'}, pct.toFixed(0) + '%')
+                );
+              })
+            ),
+            h('div', {className:'ops-hint'},
+              'Abandons by how long the caller waited: ' +
+              fmtNum(abandonWaitBuckets.lt5 || 0) + ' under 5s (usually misdials) · ' +
+              fmtNum(abandonWaitBuckets['5-30'] || 0) + ' 5–30s · ' +
+              fmtNum(abandonWaitBuckets.gt30 || 0) + ' over 30s (a staffing failure)'
+            )
+          )
+        : pulse,
+      reportReady && links
+        ? h('section', {className:'ops-card ops-links'},
+            h('div', {className:'ops-label'}, 'Follow-ups', qHelp('Transfers: how often a call was handed to a different agent (a call routed through three agents counts as two hand-offs but one transferred call). Callbacks: missed calls an outbound call to the same number came after, within 24 hours — matched on the customer number, so a return call from a softphone counts. Repeat callers: the same number calling in twice or more.')),
+            h('button', {type:'button', className:'ops-link-row', title: 'Open the calls that were not returned',
+              onClick: () => onMetric && onMetric('inbound', { callbackState: 'unreturned' })
+            },
+              h('span', {className:'ops-link-k'}, 'Missed calls not returned'),
+              h('span', {className:'ops-link-v'}, fmtNum(links.callbacks?.unreturned || 0)),
+              h('span', {className:'ops-link-h'}, (links.callbacks?.ratePct || 0) + '% of ' + fmtNum(links.callbacks?.missed || 0) + ' were')
+            ),
+            h('button', {type:'button', className:'ops-link-row', title: 'Open the returned calls',
+              onClick: () => onMetric && onMetric('inbound', { callbackState: 'returned' })
+            },
+              h('span', {className:'ops-link-k'}, 'Returned within 24h'),
+              h('span', {className:'ops-link-v'}, fmtNum(links.callbacks?.returned || 0)),
+              h('span', {className:'ops-link-h'},
+                links.callbacks?.avgReturnSeconds
+                  ? 'avg back in ' + Math.round(links.callbacks.avgReturnSeconds / 60) + ' min'
+                  : 'none yet')
+            ),
+            h('div', {className:'ops-link-row is-static'},
+              h('span', {className:'ops-link-k'}, 'Transfer rate'),
+              h('span', {className:'ops-link-v'}, (links.transfers?.ratePct || 0) + '%'),
+              h('span', {className:'ops-link-h'},
+                fmtNum(links.transfers?.count || 0) + ' hand-offs in ' + fmtNum(links.transfers?.handled || 0) + ' handled')
+            ),
+            h('div', {className:'ops-link-row is-static'},
+              h('span', {className:'ops-link-k'}, 'Repeat callers (24h)'),
+              h('span', {className:'ops-link-v'}, (links.repeat?.rate24Pct || 0) + '%'),
+              h('span', {className:'ops-link-h'},
+                fmtNum(links.repeat?.repeat24 || 0) + ' of ' + fmtNum(links.repeat?.callers || 0) + ' callers')
+            ),
+            (links.transfers?.agentPairs || []).length
+              ? h('div', {className:'ops-link-pairs'},
+                  h('div', {className:'ops-hint'}, 'Most common hand-offs'),
+                  ...links.transfers.agentPairs.slice(0, 3).map((pair, i) =>
+                    h('div', {key: i, className:'ops-link-pair'},
+                      h('span', null, pair.from + ' → ' + pair.to),
+                      h('span', {className:'ops-link-v'}, fmtNum(pair.count))
+                    ))
+                )
+              : h('div', {className:'ops-hint'}, 'No transfers in this period.')
           )
         : pulse
     ),

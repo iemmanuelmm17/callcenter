@@ -1,3 +1,106 @@
+# CHANGES — Sprint A, phase 6: opening hours, per-queue targets and the roster, editable
+
+**What this phase is about.** Phases 1–5 built the machinery — a business
+calendar, per-queue targets, transfer/callback/repeat links, wait buckets — and
+left it reachable only by editing JSON on the server. This phase is the screen
+that operates it, plus the two dashboard cards the review asked for and the
+drill-down that makes them actionable.
+
+## Settings → Service desk
+
+One Save button now posts `businessHours`, `queueSla` and `roster` in a single
+payload (`assets/js/src/components/settings.js`), with the three editors living
+in the new `settings-service.js` (383 lines). It is a module of its own rather
+than 400 more lines inside `settings.js` for the same reason the review asked
+for `auto-attendant-report.js` to be split: the two screens answer different
+questions — the tenant's thresholds versus the service desk's calendar, targets
+and staffing — and a file that keeps both is a file nobody can hold in their
+head. `tools/module-budget.mjs` counts them separately.
+
+* **Opening hours.** Seven weekday rows (open/closed, from, to) plus the holiday
+  list. The grid arrives pre-filled Monday–Friday 08:00–18:00 but
+  `businessHours.enabled` is **false on a fresh install**, because switching it
+  on re-scopes every published number; it is a manager's explicit decision, not
+  something that arrives with a deploy. The client refuses to save an enabled
+  calendar with every day closed ("Opening hours need at least one open day
+  before they can be switched on"), and `includes/reporting/settings.php`
+  refuses it again server-side, keeping the stored times so the mismatch shows
+  up in the UI instead of as a zero-call dashboard.
+* **Per-queue targets.** One row per queue from the PBX directory, a seconds
+  box and ▴▾ steppers (1–120 s) per row; a blank row means "use the desk
+  default". The steppers are not decoration: they are the one control that can
+  be driven in a keyboard-free test harness, and a manager setting thirty
+  queues to 15 s does not want to type thirty times.
+* **Roster.** Agent (picked from the directory, extension-first because that is
+  what a CDR and a roster row join on), team, supervisor, the weekdays worked,
+  and the shift. This is the input Sprint C's occupancy and calls-per-hour need;
+  without it the CDR cannot tell a short shift from an underworked agent.
+
+All three are manager-write, supervisor-read, in the server
+(`api/settings.php`: GET for `office_manager`+`supervisor`, POST for
+`office_manager` only) and in the UI — the same QA-5 rule as the thresholds.
+
+## Filter bar: site, opening hours, outcome
+
+`api/filters.php` now also returns `sites`, `agents`, `queues` and the
+calendar, and the filter bar grew three selects (the review's F4):
+
+* **Site** — manager-only, because that is the only role offered more than one
+  site to choose from (the endpoint returns the whole directory's sites to a
+  manager and the viewer's own site to everyone else).
+* **Opening hours / After hours / All hours** — only offered once a calendar
+  exists, because a scope selector that silently returns everything is worse
+  than none. Once it exists the default is opening hours.
+* **Any outcome / Answered / Abandoned / Voicemail / No answer** — the same
+  vocabulary the call list and the drill-downs use.
+
+## Two cards the review said were missing
+
+The dashboard now states what callers experienced while they waited and what
+happened to the calls nobody answered:
+
+* **How long callers waited** — p50 and p90 wait, total hold time and how many
+  calls held, service level, and four clickable wait bands
+  (0–30 s / 31–60 / 61–120 / over 120). Under it, abandons split by how long
+  the caller lasted: a caller who gives up in five seconds and one who holds for
+  a minute are different failures, and the review was right that a single
+  abandon count hides that.
+* **Follow-ups** — calls that were never returned versus returned, the transfer
+  rate and its best hand-off pairs, and repeat callers.
+
+Both cards drill: a band opens the call list filtered to exactly that band, a
+follow-up row opens the callback worklist, and the call list shows the scope as
+a chip ("Waited over 120 s", "Callbacks not returned") so the reader can see
+which population the number came from. `api/report.php`, `api/calls.php` and
+`api/filters.php` share the new `rows.php` helpers
+(`filterCallsByOutcome`, `filterCallsByWait`, `filterCallsByCallback`,
+`callWaitBuckets`, `callCallbackStates`), so a card and its drill-down cannot
+disagree about who is in the set.
+
+## Evidence
+
+`tests/js/smoke.mjs` gained two blocks that drive the real screens: the Settings
+editors (seven weekday rows with five open, the target rows, the roster row and
+its weekday chips, a stepper click taking a queue from 15 s to 16 s, and the
+payload that Save actually posts — calendar, target and roster together) and the
+dashboard cards (four bands, four follow-up rows, and the two clicks asserting
+`waitBucket: '120+'` and `callbackState: 'unreturned'` reach `api/calls.php`
+with the chip on screen). `tests/js/harness.mjs` grew the matching fixtures.
+The PHP side of all three blocks was already pinned by
+`tests/php/report-metrics.mjs` in phase 1 (the calendar round-trip and its
+refusals, "a save that omits the calendar entirely must not wipe it", the
+queue-map clamps, the roster rows dropped for having no shift / no day / no
+extension), and `tests/php/endpoints.mjs` pins who may read and write Settings
+at all. `npm test` = 24
+suites green; `tools/css-coverage.mjs` reports no unstyled new class.
+
+**Known limitation, stated rather than hidden:** the JS harness cannot type into
+a React-controlled input — jsdom plus the fetch stub never fires React's change
+plugin on a synthetic keystroke — so the smoke suite drives buttons and asserts
+saved payloads, and typed text is covered by the PHP suites instead.
+
+---
+
 # CHANGES — Sprint A, phases 4-5: per-queue targets, ASA by interval, data quality
 
 ## Per-queue service targets, now actually applied

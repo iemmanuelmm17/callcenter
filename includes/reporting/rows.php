@@ -345,6 +345,108 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
     ];
 }
 
+/*
+ * ==========================================================================
+ * SPRINT A ROW-SET FILTERS
+ * ==========================================================================
+ *
+ * api/calls.php and api/report.php both offer these now (the dashboard KPIs
+ * have to move with the filter bar, or a manager filters to "abandoned" and
+ * reads an unchanged page). They live here, once, for the same reason the
+ * outcome classifier does: two copies of a filter drift, and a drift between
+ * the dashboard and its drill-down is the bug this sprint exists to remove.
+ */
+
+/** The canonical outcome filter (answered / abandoned / voicemail / noanswer). */
+function filterCallsByOutcome(array $calls, string $outcome, array $directory = [], array $queueIds = []): array
+{
+    if (!in_array($outcome, callOutcomeKinds(), true)) {
+        return array_values($calls);
+    }
+    return array_values(array_filter(
+        $calls,
+        static fn(array $call): bool => callOutcome($call, $directory, $queueIds) === $outcome
+    ));
+}
+
+/**
+ * The wait bucket filter, with the SAME band edges summary() counts:
+ * 0-30, 31-60, 61-120, 120+. Only answered inbound calls are banded, like the
+ * card; `waitedOver` is direction-agnostic (a caller who gave up after 70 s
+ * waited too).
+ */
+function filterCallsByWait(array $calls, string $bucket = '', ?int $waitedOver = null): array
+{
+    if ($bucket === '' && $waitedOver === null) {
+        return array_values($calls);
+    }
+    return array_values(array_filter(
+        $calls,
+        static function (array $call) use ($bucket, $waitedOver): bool {
+            $waited = waitSeconds($call);
+            if ($waitedOver !== null && $waited < $waitedOver) {
+                return false;
+            }
+            if ($bucket === '') {
+                return true;
+            }
+            if (callType($call) !== 'inbound') {
+                return false;
+            }
+            return match ($bucket) {
+                '0-30' => $waited <= 30,
+                '31-60' => $waited > 30 && $waited <= 60,
+                '61-120' => $waited > 60 && $waited <= 120,
+                '120+' => $waited > 120,
+                default => true,
+            };
+        }
+    ));
+}
+
+/**
+ * The returned-call filter, over the whole set it is given (so combining it
+ * with a queue or agent filter still finds the calls that were returned).
+ * Matching itself is the links layer's - one definition.
+ *
+ * Both sets are needed, and this is subtle: "unreturned" is NOT "everything
+ * that is not returned". Every answered call and every outbound leg is also
+ * "not returned", so filtering on the complement alone turned a two-row
+ * worklist into the whole day. `unreturnedRoots` is the set of MISSED
+ * conversations nobody called back - that, and only that, is the worklist.
+ */
+function filterCallsByCallback(
+    array $calls,
+    string $state,
+    array $returnedRoots,
+    array $unreturnedRoots,
+    array $legIndex
+): array {
+    if ($state === '') {
+        return array_values($calls);
+    }
+    return array_values(array_filter(
+        $calls,
+        static function (array $call) use ($state, $returnedRoots, $unreturnedRoots, $legIndex): bool {
+            $root = cdrRootKey($call, $legIndex);
+            return $state === 'returned'
+                ? isset($returnedRoots[$root])
+                : isset($unreturnedRoots[$root]);
+        }
+    ));
+}
+
+/** The valid values, for endpoints that validate a request parameter. */
+function callWaitBuckets(): array
+{
+    return ['0-30', '31-60', '61-120', '120+'];
+}
+
+function callCallbackStates(): array
+{
+    return ['returned', 'unreturned'];
+}
+
 function previousFilters(array $filters): array {
     $start = new DateTimeImmutable($filters['start']); $end = new DateTimeImmutable($filters['end']); $days = $start->diff($end)->days + 1;
     $previousEnd = $start->modify('-1 day'); $previousStart = $previousEnd->modify('-' . ($days - 1) . ' days');

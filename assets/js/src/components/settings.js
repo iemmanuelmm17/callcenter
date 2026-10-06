@@ -5,6 +5,7 @@
  * original source — the move is verified by declaration hash. */
 
 import { ThemeToggle } from './ui.js';
+import { ServiceSettings, normalizeHours, defaultBusinessHours, hoursHaveOpenDay } from './settings-service.js';
 import { api } from '../lib/api.js';
 import { h, useEffect, useEscape, useState } from '../lib/react.js';
 import { writeSlaSeconds } from '../lib/sla.js';
@@ -27,10 +28,28 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
   const [live, setLive] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  /*
+   * The service-desk settings (opening hours, per-queue targets, roster) are
+   * held here with the thresholds so one Save writes one payload: a manager who
+   * edits both must not be able to save half of it.
+   */
+  const [service, setService] = useState(() => ({
+    businessHours: defaultBusinessHours(),
+    queueSla: {},
+    roster: []
+  }));
+  /* The lists the editors need (agents, queues) come with the filter payload
+   * every role already fetches on load. */
+  const [directory, setDirectory] = useState({ agents: [], queues: [] });
   useEffect(() => {
     api('settings').then(r => {
       const d = r && r.data ? r.data : r;
       if (!d) return;
+      setService({
+        businessHours: normalizeHours(d.businessHours),
+        queueSla: (d.queueSla && typeof d.queueSla === 'object') ? d.queueSla : {},
+        roster: Array.isArray(d.roster) ? d.roster : []
+      });
       setForm({
         slaSeconds: Number(d.slaSeconds || DEFAULTS.slaSeconds),
         slaPct: Number(d.slaPct || DEFAULTS.slaPct),
@@ -42,6 +61,17 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
         topAgentMinCalls: Number(d.topAgentMinCalls ?? DEFAULTS.topAgentMinCalls)
       });
     }).catch(() => {});
+  }, []);
+  useEffect(() => {
+    api('filters')
+      .then(r => {
+        const data = r && r.data ? r.data : r;
+        setDirectory({
+          agents: Array.isArray(data?.agents) ? data.agents : [],
+          queues: Array.isArray(data?.queues) ? data.queues : []
+        });
+      })
+      .catch(() => {});
   }, []);
   useEffect(() => {
     if (!filters || !filters.start) return;
@@ -95,8 +125,20 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
         ahtMinutes: clamp('ahtMinutes', form.ahtMinutes),
         ahtOutboundMinutes: clamp('ahtOutboundMinutes', form.ahtOutboundMinutes),
         topAgentAhtMinutes: clamp('topAgentAhtMinutes', form.topAgentAhtMinutes),
-        topAgentMinCalls: clamp('topAgentMinCalls', form.topAgentMinCalls)
+        topAgentMinCalls: clamp('topAgentMinCalls', form.topAgentMinCalls),
+        /*
+         * The service-desk block. A calendar that is switched on with no open
+         * day is refused by the server on purpose (it would report zero calls),
+         * so the client does not send one and says why instead of appearing to
+         * save.
+         */
+        businessHours: service.businessHours,
+        queueSla: service.queueSla,
+        roster: service.roster
       };
+      if (payload.businessHours && payload.businessHours.enabled && !hoursHaveOpenDay(payload.businessHours)) {
+        throw new Error('Opening hours need at least one open day before they can be switched on.');
+      }
       const saved = await api('settings', payload);
       const d = saved && saved.data ? saved.data : saved;
       onSlaChange(writeSlaSeconds(d.slaSeconds));
@@ -262,6 +304,14 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
       ),
       h('div', { className: 'set-foot' },
         h('div', { className: 'set-foot-left' },
+      h(ServiceSettings, {
+        value: service,
+        onChange: setService,
+        canSave,
+        agents: directory.agents,
+        queues: directory.queues
+      }),
+
           canSave ? h('button', { type: 'button', className: 'set-reset', onClick: () => setForm({ ...DEFAULTS }) }, 'Reset to defaults') : null,
           h('div', { className: 'set-scope' }, 'Applies to this PBX domain only')
         ),
