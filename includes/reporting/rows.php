@@ -184,11 +184,7 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
         }
 
         if ($type === 'missed') {
-            $kind = missedKind($call, $directory, $queueIds);
-            if (!isset($missedBreakdown[$kind])) {
-                $kind = 'noanswer';
-            }
-            $missedBreakdown[$kind]++;
+            $missedBreakdown[callMissedBucket($call, $directory, $queueIds)]++;
         }
 
         if ($type === 'inbound') {
@@ -529,7 +525,15 @@ function agentPerformance(
 
             case 'missed':
 
-                if (missedKind($call, $directory, $queueIds) !== 'abandon') {
+                /*
+                 * mc + ab is every missed call this agent was involved in.
+                 * `ab` used to be declared and never incremented, so abandoned
+                 * calls were dropped from BOTH columns and the Agents table's
+                 * Abandoned column read 0 for every agent.
+                 */
+                if (callIsAbandoned($call, $directory, $queueIds)) {
+                    $agents[$extension]['ab']++;
+                } else {
                     $agents[$extension]['mc']++;
                 }
 
@@ -610,8 +614,14 @@ function agentPerformance(
 
         $offered = (int)$agent['ib'] + (int)$agent['mc'] + (int)$agent['ab'];
         $agent['offered'] = $offered;
+        /*
+         * Missed rate counts every missed call — abandoned ones included —
+         * over offered inbound, the same definition the Dashboard and the
+         * Alerts screen use. (mc alone would be the no-answer share and would
+         * make the Agents table disagree with the Dashboard for one label.)
+         */
         $agent['mcRate'] = $offered > 0
-            ? round(100 * (int)$agent['mc'] / $offered, 1)
+            ? round(100 * ((int)$agent['mc'] + (int)$agent['ab']) / $offered, 1)
             : 0.0;
         $agent['abRate'] = $offered > 0
             ? round(100 * (int)$agent['ab'] / $offered, 1)

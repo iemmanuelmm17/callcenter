@@ -383,7 +383,7 @@ function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, o
     h('div', {className: 'queue-split'},
       h(DonutChart, {
         title: 'Outcomes',
-        hint: 'Answered vs abandoned (never answered) vs other unmatched legs. Center is total queue legs in this mix.',
+        hint: 'Answered vs abandoned (reached the queue, never answered) vs missed (reached the queue extension, never joined the queue). Center is every queue leg in this mix.',
         center: fmtNum(outcomeTotal),
         slices: [
           {label: 'Answered', value: outcomes.answered || 0, color: '#34d399'},

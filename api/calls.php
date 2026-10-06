@@ -245,22 +245,36 @@ try {
 
                     $type = callType($call);
                     $queueScope = $queue !== '' || $queuesOnly;
-                    $answerAt = trim((string)($call['call-answer-datetime'] ?? ''));
-                    $talk = seconds($call, 'call-talking-duration-seconds');
-                    $answeredCall = $answerAt !== '' || $talk > 0;
-                    $batchStart = trim((string)($call['call-batch-start-datetime'] ?? ''));
-                    $queueAbandoned = !$answeredCall && $batchStart !== '';
+                    $answeredCall = callAnswered($call);
+                    /*
+                     * Canonical outcome (includes/reporting/outcomes.php):
+                     * a missed call that reached a queue or the auto attendant
+                     * and was never answered — the queue's batch leg or the
+                     * queue/AA that the CDR went through, whichever the PBX
+                     * recorded.
+                     */
+                    $queueAbandoned = callOutcome($call, $directory, $queueIdsAll, $answeredCall) === 'abandoned';
                     if ($metric === 'incoming' || $metric === 'offered') {
                         return $type === 'inbound' || $type === 'missed';
                     }
                     if ($metric === 'missed_voicemail') {
-                        return $type === 'missed' && missedKind($call, $directory, $queueIdsAll) === 'voicemail';
+                        return $type === 'missed' && callMissedReason($call, $directory, $queueIdsAll) === 'voicemail';
                     }
                     if ($metric === 'missed_abandon') {
-                        return $type === 'missed' && missedKind($call, $directory, $queueIdsAll) === 'abandon';
+                        return $type === 'missed' && callMissedReason($call, $directory, $queueIdsAll) === 'abandon';
                     }
                     if ($metric === 'missed_noanswer') {
-                        return $type === 'missed' && missedKind($call, $directory, $queueIdsAll) === 'noanswer';
+                        return $type === 'missed' && callMissedReason($call, $directory, $queueIdsAll) === 'noanswer';
+                    }
+                    if ($metric === 'missed_no_abandon') {
+                        /*
+                         * The Agents table's Missed column: every missed call
+                         * that was NOT abandoned (no answer + voicemail), i.e.
+                         * exactly the branch includes/reporting/rows.php puts
+                         * in `mc`. Without it the cell opened a list that also
+                         * contained the abandoned calls.
+                         */
+                        return $type === 'missed' && callMissedReason($call, $directory, $queueIdsAll) !== 'abandon';
                     }
                     if ($metric === 'answered') {
                         return $answeredCall;
@@ -269,13 +283,13 @@ try {
                         if ($queueScope) {
                             return $queueAbandoned;
                         }
-                        return $type === 'missed' && missedKind($call, $directory, $queueIdsAll) === 'abandon';
+                        return $type === 'missed' && callMissedReason($call, $directory, $queueIdsAll) === 'abandon';
                     }
                     if ($metric === 'queue_offered') {
                         if ($queueScope) {
                             return $answeredCall || $queueAbandoned;
                         }
-                        return $answeredCall || ($type === 'missed' && missedKind($call, $directory, $queueIdsAll) === 'abandon');
+                        return $answeredCall || ($type === 'missed' && callMissedReason($call, $directory, $queueIdsAll) === 'abandon');
                     }
                     if ($metric === 'sla_missed') {
                         return $answeredCall && ringSeconds($call) > $slaSeconds;

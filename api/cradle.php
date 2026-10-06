@@ -302,12 +302,16 @@ try {
 
     foreach ($allQueueRows as $row) {
         $through = (string)($row['_queue'] ?? '');
-        $batchStart = trim((string)($row['call-batch-start-datetime'] ?? ''));
-        $answerAt = trim((string)($row['call-answer-datetime'] ?? ''));
         $talk = seconds($row, 'call-talking-duration-seconds');
         $wait = $waitSeconds($row);
-        $answeredCall = $answerAt !== '' || $talk > 0;
-        $abandonedCall = !$answeredCall && $batchStart !== '';
+        /*
+         * Canonical outcome (includes/reporting/outcomes.php), with the real
+         * directory and queue list — the same answered/abandoned verdict
+         * api/queue.php gives these rows, so the two queue views agree on a
+         * call that reached the queue but carries no batch leg.
+         */
+        $answeredCall = callAnswered($row);
+        $abandonedCall = callOutcome($row, $directory, $queueIds, $answeredCall) === 'abandoned';
         if (!isset($queueStats[$through])) {
             continue;
         }
@@ -330,12 +334,16 @@ try {
 
     foreach ($matched as $row) {
         $through = (string)($row['_queue'] ?? '');
-        $batchStart = trim((string)($row['call-batch-start-datetime'] ?? ''));
-        $answerAt = trim((string)($row['call-answer-datetime'] ?? ''));
         $talk = seconds($row, 'call-talking-duration-seconds');
         $wait = $waitSeconds($row);
-        $answeredCall = $answerAt !== '' || $talk > 0;
-        $abandonedCall = !$answeredCall && $batchStart !== '';
+        /*
+         * Canonical outcome (includes/reporting/outcomes.php), with the real
+         * directory and queue list — the same answered/abandoned verdict
+         * api/queue.php gives these rows, so the two queue views agree on a
+         * call that reached the queue but carries no batch leg.
+         */
+        $answeredCall = callAnswered($row);
+        $abandonedCall = callOutcome($row, $directory, $queueIds, $answeredCall) === 'abandoned';
 
         if ($answeredCall) {
             $answered++;
@@ -624,13 +632,25 @@ try {
                 $waitN = (int)$st['waitN'];
                 $talkN = (int)$st['talkN'];
                 $abandoned = (int)$st['abandoned'];
+                $answered = (int)$st['answered'];
+                /*
+                 * Offered to the queue = answered + abandoned, like
+                 * api/queue.php and the Queues screen. This was
+                 * abandoned ÷ totalCalls, which counted calls that never
+                 * joined the queue in the denominator and reported a smaller
+                 * abandon rate than the Queues screen for the same queue.
+                 */
+                $offered = $answered + $abandoned;
                 return [
                     'callqueue' => $st['callqueue'],
                     'description' => $st['description'],
                     'site' => $st['site'],
                     'totalCalls' => $n,
+                    'offered' => $offered,
+                    'handled' => $answered,
+                    'abandoned' => $abandoned,
                     'sla' => $waitN ? round(($st['slaHit'] / $waitN) * 100, 1) : 0,
-                    'abandonRate' => $n ? round(($abandoned / $n) * 100, 1) : 0,
+                    'abandonRate' => $offered ? round(($abandoned / $offered) * 100, 1) : 0,
                     'avgRing' => $waitN ? (int)round($st['waitSum'] / $waitN) : 0,
                     'avgTalk' => $talkN ? (int)round($st['talkSum'] / $talkN) : 0,
                     'totalTalk' => (int)$st['talkSum'],

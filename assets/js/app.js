@@ -1575,8 +1575,9 @@
       ["ib", ["Inbound"], "Answered inbound calls. Click to open inbound calls.", "num", "inbound", "Inbound Calls"],
       ["ob", ["Outbound"], "Outbound calls placed by this agent. Click to open outbound calls.", "num", "outbound", "Outbound Calls"],
       ["onnet", ["On-net"], "Internal (on-network) calls. Click to open on-net calls.", "num", "onnet", "On-net Calls"],
-      ["mc", ["Missed", "Calls"], "Inbound calls that were not answered (excluding queue abandon). Click to open missed calls.", "num", "missed", "Missed Calls"],
-      ["mcRate", ["Missed", "Rate"], "Missed \xF7 (inbound + missed). Red when above the domain missed-call rate setting.", "pct", "missed", "Missed Rate"],
+      ["mc", ["Missed", "Calls"], "Inbound calls that were not answered and were not abandoned (rang out or went to voicemail). Click to open exactly these calls \u2014 abandoned ones have their own column.", "num", "missed_no_abandon", "Missed Calls"],
+      ["ab", ["Abandoned", "Calls"], "Inbound calls the caller abandoned in a queue or auto attendant. Click to open abandoned calls.", "num", "missed_abandon", "Abandoned Calls"],
+      ["mcRate", ["Missed", "Rate"], "All missed calls (missed + abandoned) \xF7 offered inbound (inbound + missed + abandoned). Same definition as the Dashboard, so both screens show the same rate. Red when above the domain missed-call rate setting.", "pct", "missed", "Missed Rate"],
       ["ibAht", ["Inbound", "AHT"], "Inbound average handling time (talk). Red when above the domain AHT setting.", "dur", "answered", "Inbound Average Handling Time"],
       ["ibAat", ["Inbound", "AAT"], "Inbound average answer / ring time. Red when above the SLA max-ring setting.", "dur", "answered", "Inbound Average Answer Time"],
       ["ibLtt", ["Inbound", "LTT"], "Inbound longest talking time. Click to open answered inbound calls.", "dur", "answered", "Inbound Longest Talking Time"],
@@ -1622,7 +1623,7 @@
       if (agent[field] != null && agent[field] !== "") return Number(agent[field] || 0);
       const off = offeredOf(agent);
       if (!off) return 0;
-      if (field === "mcRate") return Number(agent.mc || 0) / off * 100;
+      if (field === "mcRate") return (Number(agent.mc || 0) + Number(agent.ab || 0)) / off * 100;
       if (field === "abRate") return Number(agent.ab || 0) / off * 100;
       return 0;
     };
@@ -1705,11 +1706,12 @@
     const totals = rows.reduce((acc, a) => {
       acc.calls += Number(a.total || 0);
       acc.missed += Number(a.mc || 0);
+      acc.abandoned += Number(a.ab || 0);
       acc.handle += Number(a.ibAht || 0);
       acc.handleN += Number(a.ibAht || 0) > 0 || Number(a.total || 0) > 0 ? 1 : 0;
       if (Number(a.total || 0) > 0) acc.active += 1;
       return acc;
-    }, { calls: 0, missed: 0, handle: 0, handleN: 0, active: 0 });
+    }, { calls: 0, missed: 0, abandoned: 0, handle: 0, handleN: 0, active: 0 });
     const avgHandle = rows.length ? rows.reduce((s, a) => s + Number(a.ibAht || 0) * Math.max(1, Number(a.ib || 0)), 0) / Math.max(1, rows.reduce((s, a) => s + Math.max(0, Number(a.ib || 0)), 0)) : 0;
     const ahtFallback = rows.length ? rows.reduce((s, a) => s + Number(a.ibAht || 0), 0) / Math.max(1, rows.filter((a) => Number(a.ibAht || 0) > 0).length) : 0;
     const ahtShow = Number.isFinite(avgHandle) && avgHandle > 0 ? avgHandle : ahtFallback;
@@ -1787,7 +1789,7 @@
         kpi("Total calls", fmtNum(totals.calls), "text-cyan-300", () => onMetricClick && onMetricClick("total"), "All calls for agents in this table for the selected date range. Click to open the call list.", "fa-solid fa-phone"),
         kpi("Active agents", fmtNum(totals.active), null, null, "Agents with at least one call in the selected range.", "fa-solid fa-user-check"),
         kpi("Avg handle time", fmt(ahtShow), "text-cyan-300", null, "Inbound average handling time, weighted by inbound call volume across agents in this table.", "fa-solid fa-hourglass-half"),
-        kpi("Missed calls", fmtNum(totals.missed), "text-rose-300", () => onMetricClick && onMetricClick("missed"), "Inbound calls that were not answered. Click to open those calls.", "fa-solid fa-phone-slash")
+        kpi("Missed calls", fmtNum(totals.missed + totals.abandoned), "text-rose-300", () => onMetricClick && onMetricClick("missed"), "Inbound calls that were not answered, abandoned ones included (missed + abandoned). Click to open those calls.", "fa-solid fa-phone-slash")
       ),
       h(
         "div",
@@ -2506,14 +2508,12 @@
       return (a - b) / b * 100;
     };
     const total = Number(agent && agent.total || counts.total || 0);
-    const missed = Number(agent && agent.mc || counts.missed || 0);
+    const mb = summary.missedBreakdown || {};
+    const abandonedCount = agent ? Number(agent.ab || 0) : Number(mb.abandon || 0);
+    const missed = agent ? Number(agent.mc || 0) + abandonedCount : Number(counts.missed || 0);
     const inbound = Number(agent && agent.ib || counts.inbound || 0);
     const offered = inbound + missed;
-    const mb = summary.missedBreakdown || {};
-    const abandonCount = Number(mb.abandon || 0);
-    const abandon = offered ? abandonCount / offered * 100 : 0;
-    const prevOffered = Number(prev.inbound || 0) + Number(prev.missed || 0);
-    const prevAbandon = prevOffered ? Number(prev.missed || 0) / prevOffered * 100 : 0;
+    const abandon = offered ? abandonedCount / offered * 100 : 0;
     const aht = Number(agent && agent.ibAht || summary.inbound?.avgHandling || 0);
     const initials = String(agent && agent.name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]).join("").toUpperCase();
     const q = actQuery.trim().toLowerCase();
@@ -2663,7 +2663,7 @@
           "section",
           { className: "ag-ov-kpis" },
           h(KpiCard, { label: "Calls", value: total, icon: "fa-solid fa-phone", delta: comparisonPending ? null : pctDelta(total, prev.total), tooltip: "Total calls for this agent. Click to open.", onClick: () => open("total") }),
-          h(KpiCard, { label: "Abandon rate", value: abandon.toFixed(1) + "%", icon: "fa-solid fa-person-walking-dashed-line-arrow-right", tone: "bad", hint: fmtNum(abandonCount) + " calls", tooltip: "Queue/IVR hang-ups before answer \xF7 offered inbound. Click to open abandoned calls.", onClick: () => open("missed_abandon") }),
+          h(KpiCard, { label: "Abandon rate", value: abandon.toFixed(1) + "%", icon: "fa-solid fa-person-walking-dashed-line-arrow-right", tone: "bad", hint: fmtNum(abandonedCount) + " calls", tooltip: "Abandoned calls \xF7 offered inbound (inbound + missed). Same abandoned rule and denominator as the Dashboard and Queues. Click to open abandoned calls.", onClick: () => open("missed_abandon") }),
           h(KpiCard, { label: "Avg. handle time", value: fmt(aht), icon: "fa-solid fa-hourglass-half", tooltip: "Inbound average handling time. Click to open inbound calls.", onClick: () => open("inbound") })
         ),
         h(
@@ -5251,21 +5251,7 @@
       0
     );
     const averageDurationSeconds = totalCalls ? totalDurationSeconds / totalCalls : 0;
-    const isCallerHangup = (call) => {
-      const reason = getDisconnectReason(call);
-      if (!reason) return false;
-      if (/term:\s*bye/i.test(reason)) return false;
-      return /orig:\s*bye|caller\s*hung|hang\s*-?up|abandon/i.test(reason);
-    };
-    const neverEngaged = (call) => {
-      if (getTalkSeconds(call) > 0) return false;
-      if (call && call.abandoned === true) return true;
-      const through = String(call.throughUser || call.queue || "").trim();
-      const dest = String(call.destination || call.termUser || "").trim();
-      if (!dest || dest === "-") return true;
-      return !!through && through === dest;
-    };
-    const isAbandoned = (call) => isCallerHangup(call) && neverEngaged(call);
+    const isAbandoned = (call) => call.abandoned === true;
     const abandonedCalls = calls.filter(isAbandoned);
     const abandonedCount = abandonedCalls.length;
     const abandonmentRate = totalCalls ? abandonedCount / totalCalls * 100 : 0;
@@ -5285,9 +5271,7 @@
       } else if (/orig:\s*bye/i.test(reason)) {
         label = "Caller Hangup";
       }
-      const through = String(call.throughUser || call.queue || "").trim();
-      const dest = String(call.destination || call.termUser || "").trim();
-      if (call.abandoned === true || through && dest && through === dest) {
+      if (call.abandoned === true) {
         label = "Abandoned";
       }
       outcomeMap[label] = (outcomeMap[label] || 0) + 1;
@@ -6061,7 +6045,7 @@
           {
             type: "button",
             className: "aa-kpi-card",
-            title: "Callers who hung up inside the attendant before any agent engagement or resolution. Click to open them.",
+            title: "Calls that reached the attendant and were never answered \u2014 the same abandoned rule the Dashboard, Agents, Queues and Alerts use. Click to open them.",
             onClick: () => openAaCalls("Abandoned AA calls", abandonedCalls)
           },
           h("div", { className: "aa-kpi-label" }, "Abandonment Rate"),
@@ -7565,7 +7549,15 @@
       sla: "Within SLA",
       sla_missed: "SLA missed",
       handled: "Handled",
-      voicemail: "Voicemail"
+      voicemail: "Voicemail",
+      /* The missed breakdown and the queue scopes used to show their raw
+       * metric id ("missed_noanswer") in the title and the View chip. */
+      missed_abandon: "Abandoned",
+      missed_noanswer: "Missed \u2014 no answer",
+      missed_voicemail: "Missed \u2014 voicemail",
+      missed_no_abandon: "Missed (not abandoned)",
+      queue_abandoned: "Abandoned in queue",
+      queue_offered: "Offered to queue"
     };
     const filterChips = [];
     const f = filters || {};
@@ -8654,7 +8646,7 @@
         reportReady ? h(
           "section",
           { className: "ops-card" },
-          h("div", { className: "ops-label" }, "Rates", qHelp("Answer rate is answered inbound \xF7 offered. Abandon rate is hang-ups before answer \xF7 offered. Service level is offered inbound answered within the SLA ring setting. Click a row to open related calls.")),
+          h("div", { className: "ops-label" }, "Rates", qHelp("Offered = inbound answered + missed calls. Answer rate is answered inbound \xF7 offered. Abandon rate is callers who reached a queue or the auto attendant and hung up before an agent answered \xF7 offered \u2014 the same abandoned definition every other report uses. Service level is offered inbound answered within the SLA ring setting. Click a row to open related calls.")),
           h("div", { className: "ops-hint" }, "Answer, abandon & SLA"),
           h(
             "button",
@@ -9305,7 +9297,7 @@
         { className: "queue-split" },
         h(DonutChart, {
           title: "Outcomes",
-          hint: "Answered vs abandoned (never answered) vs other unmatched legs. Center is total queue legs in this mix.",
+          hint: "Answered vs abandoned (reached the queue, never answered) vs missed (reached the queue extension, never joined the queue). Center is every queue leg in this mix.",
           center: fmtNum(outcomeTotal),
           slices: [
             { label: "Answered", value: outcomes.answered || 0, color: "#34d399" },

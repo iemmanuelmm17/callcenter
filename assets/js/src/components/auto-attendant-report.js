@@ -228,44 +228,23 @@ function AutoAttendantReport({
      * ABANDONMENT
      * =========================================================
      *
-     * A call is abandoned when the CALLER walked away from the attendant
-     * before anything picked up on the other end — no agent engagement,
-     * no resolution.
+     * One definition, shared with every other report
+     * (includes/reporting/outcomes.php): the caller reached the attendant and
+     * the call was never answered by a person.
      *
-     * Two independent signals have to agree:
+     * `api/aa.php` decides that and sends it as `call.abandoned`. The screen
+     * used to re-derive it from the disconnect-reason text on top of the
+     * backend flag (`caller hung up` AND never engaged), which is why the Auto
+     * Attendant abandonment rate disagreed with the Dashboard, Agents, Queues
+     * and Alerts screens for the same calls: calls the PBX released with a
+     * different reason string, or that never produced one, were silently left
+     * out here.
      *
-     *   1. The caller ended it. Disconnect reason is an orig-side BYE /
-     *      hangup / caller abandon. A term-side BYE means the system let
-     *      go (transfer completed, queue overflow) and is NOT abandonment.
-     *   2. Nothing ever answered. Zero talk seconds, or the call never
-     *      left the attendant (destination is blank, or loops back to the
-     *      same through-user — the existing `abandoned` flag from the
-     *      backend already encodes that second case).
-     *
-     * Requiring both keeps two big false-positive classes out of the
-     * number: callers who hung up AFTER talking to someone, and calls the
-     * platform tore down on its own.
+     * The disconnect reason is still shown per call (and in the outcome
+     * breakdown) — it explains a call, it no longer decides the number.
      */
 
-    const isCallerHangup = call => {
-        const reason = getDisconnectReason(call);
-        if (!reason) return false;
-        /* Term-side release is the system, not the caller. */
-        if (/term:\s*bye/i.test(reason)) return false;
-        return /orig:\s*bye|caller\s*hung|hang\s*-?up|abandon/i.test(reason);
-    };
-
-    const neverEngaged = call => {
-        if (getTalkSeconds(call) > 0) return false;
-        if (call && call.abandoned === true) return true;
-        const through = String(call.throughUser || call.queue || '').trim();
-        const dest = String(call.destination || call.termUser || '').trim();
-        /* Never routed anywhere, or routed straight back to the AA itself. */
-        if (!dest || dest === '-') return true;
-        return !!through && through === dest;
-    };
-
-    const isAbandoned = call => isCallerHangup(call) && neverEngaged(call);
+    const isAbandoned = call => call.abandoned === true;
 
     const abandonedCalls = calls.filter(isAbandoned);
     const abandonedCount = abandonedCalls.length;
@@ -307,9 +286,7 @@ function AutoAttendantReport({
             label = 'Caller Hangup';
         }
 
-        const through = String(call.throughUser || call.queue || '').trim();
-        const dest = String(call.destination || call.termUser || '').trim();
-        if (call.abandoned === true || (through && dest && through === dest)) {
+        if (call.abandoned === true) {
             label = 'Abandoned';
         }
 
@@ -1470,7 +1447,7 @@ function AutoAttendantReport({
             h('button', {
                 type:'button',
                 className:'aa-kpi-card',
-                title:'Callers who hung up inside the attendant before any agent engagement or resolution. Click to open them.',
+                title:'Calls that reached the attendant and were never answered — the same abandoned rule the Dashboard, Agents, Queues and Alerts use. Click to open them.',
                 onClick:() => openAaCalls('Abandoned AA calls', abandonedCalls)
             },
                 h('div', {className:'aa-kpi-label'}, 'Abandonment Rate'),

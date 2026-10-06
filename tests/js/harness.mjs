@@ -41,6 +41,9 @@ export const FIXTURES = {
     callTypes: { inbound: true, outbound: true, missed: true, onnet: true },
     summary: {
       counts: { total: 2057, inbound: 1400, outbound: 480, missed: 130, onnet: 47 },
+      /* Sums to counts.missed on purpose: the front end must never have to
+       * guess which bucket a missed call is in. */
+      missedBreakdown: { noanswer: 55, voicemail: 15, abandon: 60 },
       inbound: panel('Inbound', HOURS, DAYS),
       outbound: panel('Outbound', HOURS, DAYS),
       hours: HOURS,
@@ -53,21 +56,27 @@ export const FIXTURES = {
       previous: {
         start: '2026-07-27', end: '2026-07-31',
         counts: { total: 1900, inbound: 1300, outbound: 450, missed: 120, onnet: 30 },
+        missedBreakdown: { noanswer: 50, voicemail: 12, abandon: 58 },
         hours: HOURS
       }
     },
     trends: { total: 8.2, inbound: 7.7, missed: 8.3, outbound: 6.6, onnet: 56.6 },
     topAgents: [{ extension: '6080', name: 'Ada Lovelace', calls: 240, answered: 230, missed: 10, talkSeconds: 48200, aht: 210, slaPct: 91.2 }],
+    /*
+     * Real agentPerformance() field names (see includes/reporting/rows.php):
+     * mc is missed-and-not-abandoned, ab is abandoned, offered is
+     * ib + mc + ab, mcRate is every missed call ÷ offered.
+     */
     agentPerformance: [
-      { extension: '6080', name: 'Ada Lovelace', department: 'Sales', site: 'HQ', inbound: 200, outbound: 40, missed: 10, onnet: 5, talkSeconds: 48200, ringSeconds: 2400, aht: 210, slaPct: 91.2, answered: 230, total: 255 },
-      { extension: '6081', name: 'Alan Turing', department: 'Support', site: 'HQ', inbound: 150, outbound: 20, missed: 12, onnet: 3, talkSeconds: 31000, ringSeconds: 2100, aht: 190, slaPct: 84.4, answered: 165, total: 185 }
+      { extension: '6080', name: 'Ada Lovelace', department: 'Sales', site: 'HQ', total: 245, ib: 200, ob: 40, mc: 24, ab: 16, onnet: 5, ibAht: 210, ibAat: 12, ibLtt: 900, ibTct: 42000, obArt: 8, obAat: 10, obLtt: 300, obTct: 1200, offered: 240, mcRate: 16.7, abRate: 6.7 },
+      { extension: '6081', name: 'Alan Turing', department: 'Support', site: 'HQ', total: 185, ib: 150, ob: 20, mc: 20, ab: 15, onnet: 3, ibAht: 190, ibAat: 14, ibLtt: 700, ibTct: 28500, obArt: 9, obAat: 11, obLtt: 240, obTct: 800, offered: 185, mcRate: 18.9, abRate: 8.1 }
     ],
     inventory: { agents: 2, totalNumbers: 4, enabledNumbers: 3, autoAttendants: 2, aaCalls: 300, queues: 3 },
     timezone: 'US/Eastern'
   },
   agents: { data: [
-    { extension: '6080', name: 'Ada Lovelace', department: 'Sales', site: 'HQ', calls: 255, answered: 230, missed: 10, talkSeconds: 48200, aht: 210, slaPct: 91.2 },
-    { extension: '6081', name: 'Alan Turing', department: 'Support', site: 'HQ', calls: 185, answered: 165, missed: 12, talkSeconds: 31000, aht: 190, slaPct: 84.4 }
+    { extension: '6080', name: 'Ada Lovelace', department: 'Sales', site: 'HQ', total: 245, ib: 200, ob: 40, mc: 24, ab: 16, onnet: 5, ibAht: 210, ibAat: 12, ibLtt: 900, ibTct: 42000, obArt: 8, obAat: 10, obLtt: 300, obTct: 1200 },
+    { extension: '6081', name: 'Alan Turing', department: 'Support', site: 'HQ', total: 185, ib: 150, ob: 20, mc: 20, ab: 15, onnet: 3, ibAht: 190, ibAat: 14, ibLtt: 700, ibTct: 28500, obArt: 9, obAat: 11, obLtt: 240, obTct: 800 }
   ], total: 2, page: 1, size: 25, last_page: 1 },
   telephone_numbers: {
     numbers: [

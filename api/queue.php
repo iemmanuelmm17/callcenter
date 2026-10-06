@@ -388,12 +388,17 @@ try {
 
     foreach ($allQueueRows as $row) {
         $through = (string)($row['_queue'] ?? '');
-        $batchStart = trim((string)($row['call-batch-start-datetime'] ?? ''));
-        $answerAt = trim((string)($row['call-answer-datetime'] ?? ''));
         $talk = seconds($row, 'call-talking-duration-seconds');
         $wait = $waitSeconds($row);
-        $answeredCall = $answerAt !== '' || $talk > 0;
-        $abandonedCall = !$answeredCall && $batchStart !== '';
+        $answeredCall = callAnswered($row);
+        /*
+         * Canonical outcome (includes/reporting/outcomes.php), with the real
+         * directory and queue list: a call that reached this queue and was
+         * never answered is abandoned, whether or not the PBX wrote a batch
+         * leg for it. This is the same verdict the Dashboard, Agents, Alerts
+         * and Call history give that call.
+         */
+        $abandonedCall = callOutcome($row, $directory, $queueIds, $answeredCall) === 'abandoned';
         if (!isset($queueStats[$through])) {
             continue;
         }
@@ -424,12 +429,10 @@ try {
 
     foreach ($matched as $row) {
         $through = (string)($row['_queue'] ?? '');
-        $batchStart = trim((string)($row['call-batch-start-datetime'] ?? ''));
-        $answerAt = trim((string)($row['call-answer-datetime'] ?? ''));
         $talk = seconds($row, 'call-talking-duration-seconds');
         $wait = $waitSeconds($row);
-        $answeredCall = $answerAt !== '' || $talk > 0;
-        $abandonedCall = !$answeredCall && $batchStart !== '';
+        $answeredCall = callAnswered($row);
+        $abandonedCall = callOutcome($row, $directory, $queueIds, $answeredCall) === 'abandoned';
 
         if ($answeredCall) {
             $answered++;

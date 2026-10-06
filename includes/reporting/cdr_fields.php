@@ -70,25 +70,6 @@ function callWentQueueOrAa(array $row, array $directory = [], array $queueIds = 
     return false;
 }
 
-function missedKind(array $row, array $directory = [], array $queueIds = []): string
-{
-    $talk = (int)($row['call-talking-duration-seconds'] ?? 0);
-    if ($talk > 0) {
-        return 'noanswer';
-    }
-    if (callWentQueueOrAa($row, $directory, $queueIds)) {
-        return 'abandon';
-    }
-    if (function_exists('cdrLooksLikeVoicemail') && cdrLooksLikeVoicemail($row)) {
-        return 'voicemail';
-    }
-    $direction = (int)($row['call-direction'] ?? $row['direction'] ?? -1);
-    if ($direction === 2) {
-        return 'voicemail';
-    }
-    return 'noanswer';
-}
-
 function cdrLooksLikeVoicemail(array $row): bool
 {
     $hay = strtolower(implode(' ', [
@@ -200,7 +181,15 @@ function cdrQueueMatch(array $row, array $queueIds): string
 function classifyCdrType(array $row, array $directory = []): string
 {
     $direction = (int)($row['call-direction'] ?? $row['direction'] ?? -1);
-    $unanswered = empty($row['call-answer-datetime']);
+    /*
+     * "Unanswered" is the canonical test (includes/reporting/outcomes.php): no
+     * answer timestamp on either leg, no talking seconds, and — because a
+     * mailbox is not a person — a voicemail call is unanswered whatever it
+     * recorded. It used to be just call-answer-datetime, so answered queue
+     * calls whose only timestamp was the batch leg, or that simply had talk
+     * seconds, were classified missed here and answered on the Queues screen.
+     */
+    $unanswered = callUnansweredForType($row);
 
     if ($direction === 0) {
         return 'outbound';

@@ -521,6 +521,18 @@ try {
             $totalSeconds += seconds($additionalCall, 'call-total-duration-seconds');
         }
 
+        /*
+         * Canonical outcome for this row (includes/reporting/outcomes.php).
+         * Every row in this report already reached the attendant, so the only
+         * question left is whether a person answered: not answered means the
+         * caller was abandoned in the attendant. Both legs count — the report
+         * merges the additional tier into one logical call and reports their
+         * durations added together, so it must judge them together too.
+         */
+        $aaCallAnswered =
+            callAnswered($call)
+            || (is_array($additionalCall) && callAnswered($additionalCall));
+
         $calls[] = [
             'id' => $call['id'] ?? '',
             'extension' => $extension,
@@ -541,7 +553,7 @@ try {
             'throughUser' => $throughUser,
             'termUser' => trim((string)($call['call-term-user'] ?? '')),
             'destination' => $destination,
-            'abandoned' => $throughUser !== '' && $destination !== '-' && $throughUser === $destination,
+            'abandoned' => !$aaCallAnswered,
             'totalSeconds' => $totalSeconds,
             'start' => $start,
             'disconnectReason' => (string)($call['call-disconnect-reason-text'] ?? ''),

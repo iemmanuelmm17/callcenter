@@ -10,6 +10,7 @@ portal.php           → the HTML shell that boots assets/js/app.js
 api/*.php            → one endpoint per view (session + role gated, JSON in/out)
 includes/            → shared code: bootstrap, auth, security, export, PBX client, config
 includes/reporting/  → the reporting layer as modules, loaded by includes/reporting.php
+                       outcomes.php holds the one definition of missed / abandoned
 assets/js/app.js     → BUILT bundle (generated — never edit by hand)
 assets/js/src/       → bundle source (this is what you edit)
 assets/css/app.css   → BUILT stylesheet (generated — never edit by hand)
@@ -29,6 +30,26 @@ on the server and no database to migrate — the front end is the committed bund
 Configuration comes from the environment (`PBX_SERVERS`, `PBX_CLIENT_ID`,
 `PBX_CLIENT_SECRET`, `PBX_SIP_TOKEN`, …) or from `includes/config.local.php`,
 which stays on the server (it is git-ignored).
+
+## Missed and abandoned
+
+Every report derives missed and abandoned calls from
+`includes/reporting/outcomes.php` — one place, so the same call cannot be
+abandoned on one screen and missed on another:
+
+| outcome | rule |
+| --- | --- |
+| `answered` | answer timestamp on either leg (`call-answer-datetime` **or** `call-batch-answer-datetime`) or any talking seconds |
+| `abandoned` | not answered, and the call reached a queue or auto attendant (queue / AA / IVR signals in the CDR, or a queue batch leg) |
+| `voicemail` | not answered, and it ended in a mailbox (voicemail fields, or `call-direction` 2) |
+| `noanswer` | not answered, and it never reached a queue, an IVR or a mailbox |
+
+`missed` in the reports means "not answered" (all four except `answered`), and
+`abandoned` is a subset of it. The Dashboard's offered volume is
+`inbound + missed`; the Queues screen's offered is `answered + abandoned` for
+the queued calls only, which is a scope difference and is stated in its column
+tooltips. `tests/php/outcomes.mjs` asserts that all seven report navs agree on
+these numbers for the same CDRs.
 
 ## CDR cache
 
@@ -83,4 +104,7 @@ npm run lint:php     # syntax + banned-construct scan over every .php file
   asserts the session/method/role gates and the response contract. The CDR
   store's SQL is executed against real SQLite through `node:sqlite` (the PHP
   runtime here has no `pdo_sqlite`), and the PHP cache is exercised against both
-  backends with a recording connection double.
+  backends with a recording connection double. `tests/php/outcomes.mjs` pushes
+  one synthetic day of CDRs through every report endpoint and asserts that the
+  missed and abandoned totals reconcile across the Dashboard, Agents, Queues,
+  Telephone Numbers, Auto Attendants, Call history and Alerts.

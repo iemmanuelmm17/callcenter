@@ -291,7 +291,7 @@ function handleGet(
             if (!is_array($call)) {
                 continue;
             }
-            $type = inferCallType($call);
+            $type = callType($call);
             if ($type === 'inbound') {
                 $summary['totalInbound']++;
                 $summary['totalCalls']++;
@@ -403,9 +403,7 @@ function buildTelephoneCharts(
             continue;
         }
 
-        $type = function_exists('callType')
-            ? (string)callType($call)
-            : inferCallType($call);
+        $type = (string)callType($call);
         if ($type !== 'inbound' && $type !== 'missed') {
             continue;
         }
@@ -697,9 +695,7 @@ function buildNumberStats(array $cdrs, array $inventoryKeys = []): array
          * Same buckets as dashboard report.summary.counts:
          * inbound / outbound / missed / onnet are exclusive.
          */
-        $type = function_exists('callType')
-            ? callType($call)
-            : inferCallType($call);
+        $type = callType($call);
 
         if ($type === 'missed') {
             $stats[$key]['missed']++;
@@ -792,9 +788,7 @@ function buildRepeatCallers(array $cdrs, array $inventoryKeys = []): array
             continue;
         }
 
-        $type = function_exists('callType')
-            ? (string)callType($call)
-            : inferCallType($call);
+        $type = (string)callType($call);
 
         if ($type !== 'inbound' && $type !== 'missed') {
             continue;
@@ -890,31 +884,6 @@ function firstDidFromCdr(array $call): string
     }
 
     return '';
-}
-
-
-function inferCallType(array $call): string
-{
-    if (function_exists('callType')) {
-        return callType($call);
-    }
-
-    $direction = (int)($call['call-direction'] ?? -1);
-    $missed = empty($call['call-answer-datetime']);
-
-    if ($direction === 0) {
-        return 'outbound';
-    }
-    if ($direction === 3) {
-        return 'onnet';
-    }
-    if ($direction === 2) {
-        return 'missed';
-    }
-    if ($direction === 1) {
-        return $missed ? 'missed' : 'inbound';
-    }
-    return $missed ? 'missed' : 'other';
 }
 
 

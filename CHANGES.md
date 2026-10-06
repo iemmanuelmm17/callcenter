@@ -1,3 +1,131 @@
+# CHANGES — one definition of missed and abandoned, shared by every report nav (P6)
+
+**Scope:** how the reports decide that a call was missed or abandoned. Each nav
+page used to answer that question its own way, so the same call could be
+abandoned on the Dashboard and missed on the Queues screen, the Auto Attendant
+abandonment rate ignored most real abandons, and the Agents table's Abandoned
+column was never filled in at all (the counter existed and was never
+incremented). There is now one module that defines the outcome and every
+endpoint derives from it, with a parity suite that asserts the seven nav pages
+reconcile with each other.
+
+**Files:** `includes/reporting/outcomes.php` (new — the definition),
+`includes/reporting.php` (facade loads it), `includes/reporting/cdr_fields.php`,
+`includes/reporting/rows.php`, `api/aa.php`, `api/agents.php`, `api/alerts.php`,
+`api/call_history.php`, `api/calls.php`, `api/cradle.php`, `api/queue.php`,
+`api/report.php`, `api/telephone_numbers.php`,
+`assets/js/src/components/agents.js`, `auto-attendant-report.js`,
+`call-modal.js`, `overview.js`, `queue.js`, `tests/php/outcomes.mjs` (new, 137
+checks), `tests/run.mjs`, `tests/js/harness.mjs`, `tests/js/smoke.mjs`.
+
+## The rules, in one place
+
+`includes/reporting/outcomes.php` is now the only place where "answered",
+"abandoned", "voicemail" and "no answer" are decided.
+
+| outcome | rule |
+| --- | --- |
+| `answered` | an answer timestamp on either leg (`call-answer-datetime` **or** `call-batch-answer-datetime`) **or** any talking seconds. A mailbox call with talking seconds is not answered — that is the caller recording a message. |
+| `abandoned` | not answered, and the call reached a queue or the auto attendant: the CDR went through a queue / service user / IVR application (`call-through-user` in the queue list, a directory `system-queue` / `system-aa` service code, `callqueue` / `to-callqueue` / `auto-attend` / `ivr` application strings), **or** it carries a queue batch leg (`call-batch-start-datetime`). |
+| `voicemail` | not answered and the call ended in a mailbox: the voicemail-ish CDR fields (vmbox / voicemail URIs, term user, disconnect text) or `call-direction` 2. |
+| `noanswer` | not answered, and it never reached a queue, an IVR or a mailbox — it rang a phone and stopped. |
+
+`type` (what kind of traffic: `inbound` / `outbound` / `onnet` / `missed` /
+`other`) stays where it was, in `classifyCdrType()`, but its "unanswered" test
+now comes from the same module (`callUnansweredForType()`), so `type =
+'missed'` and `outcome ∈ {abandoned, voicemail, noanswer}` describe the same
+calls.
+
+## What each nav page shows now
+
+| nav page | missed | abandoned |
+| --- | --- | --- |
+| Dashboard | `counts.missed` = every missed call of any kind; breakdown by outcome | `summary.missedBreakdown.abandon` |
+| Agents (table) | `mc` = missed **and not** abandoned (`Missed Calls` opens exactly that list) | `ab` = abandoned, new `Abandoned Calls` column, same drill-down |
+| Agents (overview) | `agent.mc + agent.ab` for the open agent, else the dashboard summary | `agent.ab` (was the dashboard's company-wide count) |
+| Queues | call reached the queue extension but never joined the queue | reached the queue, never answered |
+| Telephone Numbers | every missed call on the number | not broken out separately (as before) |
+| Auto Attendants | not a column | `api/aa.php`'s `abandoned` per call, read verbatim |
+| Call history | `histDisplayOutcome()` → `missed` | `histDisplayOutcome()` → `abandoned` |
+| Alerts | per entity, every missed call | the subset that was abandoned |
+
+Everywhere, `abandoned ⊆ missed` and a call lands in exactly one bucket. The
+queues screen's *offered* is still `answered + abandoned` (the queued calls
+only) while every other screen's offered is `inbound + missed`; that difference
+is scope, not definition, and it is stated in the column tooltips.
+
+## What was wrong, and what changed
+
+| # | where | before | now |
+| --- | --- | --- | --- |
+| 1 | `rows.php agentPerformance()` | `ab` declared, never incremented; abandoned calls were dropped from **both** columns | `ab` counted, `mc + ab` = every missed call handed to the agent |
+| 2 | `api/agents.php` | `mc` = all `missed`, no kind split, so queue abandons showed as missed on the Agents screen | same `mc` / `ab` split as the Dashboard, with the directory and queue list passed in |
+| 3 | `missedKind()` vs the queue loops | three copies of the abandoned rule (`queue.php`, `cradle.php`, `calls.php`) using the batch leg only | one `callIsAbandoned()`; the queue views now count a call that reached the queue without a batch leg as abandoned, like the Dashboard always did |
+| 4 | `classifyCdrType()` | "answered" meant `call-answer-datetime` only — an answered queue call with just the batch timestamp or talk seconds was classified **missed** | the classifier asks `outcomes.php` |
+| 5 | `api/aa.php` + the AA screen | backend flag `throughUser === destination`, and the screen demanded *also* a caller-hangup disconnect reason + zero talk | the backend sends the canonical verdict, the screen reads it; the disconnect reason is still shown per call |
+| 6 | `api/alerts.php` | missed was `talk <= 0` (an answered call with zero talk counted as missed) and the AA abandon path passed no directory | canonical outcome per call; the limits now mean what the screens mean |
+| 7 | `api/telephone_numbers.php` | a private `inferCallType()` duplicate of the classifier | deleted; `callType()` everywhere |
+| 8 | `includes/reporting/rows.php` | `mcRate` = `mc ÷ offered` (a no-answer rate wearing the Dashboard's label) | `mcRate` = `(mc + ab) ÷ offered`, the Dashboard's missed rate |
+| 9 | `api/cradle.php` | per-queue `abandonRate` = `abandoned ÷ totalCalls`, disagreeing with the Queues screen for the same queue | `abandoned ÷ offered`, same as `api/queue.php` |
+| 10 | `api/calls.php` | no metric for the Agents `Missed Calls` cell, so it would have opened a list that also contained the abandons | new `missed_no_abandon` metric used by that cell |
+| 11 | call modal | `missed_noanswer` / `missed_voicemail` / `queue_*` metrics rendered their raw id in the title and View chip | labelled |
+
+## Numbers that move (and why that is the point)
+
+These are real reporting changes, not refactors:
+
+* **Answered queue calls** whose only answered signal is the batch timestamp or
+  talking seconds move from *missed* to *inbound* on the Dashboard, Agents,
+  Telephone Numbers and Call history. They were already answered on the Queues
+  screen — that disagreement is what this phase fixes.
+* **Queue calls with no batch leg** (aggregate-only CDRs) move from *missed* to
+  *abandoned* on the Queues screen, matching the Dashboard/Agents/Call history
+  verdict for the same call.
+* **Abandoned calls** are now counted in the Agents table's Abandoned column
+  (previously always 0) and in that table's Missed-rate denominator.
+* **Auto Attendant abandonment** rises on that screen: calls the PBX released
+  with a reason string the old `/orig: bye|hang up/` test did not match, or that
+  never produced one, are counted now — they were always abandoned on the
+  Dashboard.
+* **Alerts** stop counting an answered call with zero talking seconds as missed.
+* **Voicemail calls with talking seconds** (the caller recording a message) stay
+  in the missed family as `voicemail`; only a mailbox call that also carries an
+  answer timestamp is treated as answered inbound.
+
+## Verification
+
+* `tests/php/outcomes.mjs` (new, 137 checks, wired into `npm test`) has two
+  halves. First a truth table over `includes/reporting/outcomes.php` — one case
+  per rule — run as real PHP. Then one synthetic day of 11 CDRs whose buckets
+  are known by hand (4 inbound answered, 3 abandoned, 2 voicemail, 1 no answer,
+  1 outbound; offered 10) pushed through `report.php`, `agents.php`, `calls.php`,
+  `queue.php`, `aa.php`, `call_history.php`, `alerts.php` and
+  `telephone_numbers.php`, asserting that:
+  * the dashboard breakdown sums to `counts.missed` and `inbound + missed` is
+    the offered volume;
+  * `Σ(mc + ab)` over agent rows equals `counts.missed` and `Σ(ab)` equals
+    `missedBreakdown.abandon` — the Agents table and the Dashboard cannot drift;
+  * `agents.php` rows equal `report.php` rows field for field, and each cell
+    opens exactly as many calls as it shows (`missed_no_abandon`, `missed_abandon`);
+  * the queue outcomes sum to the queue's calls, the queue abandon count equals
+    the queue-scoped `calls.php abandoned` metric, and the rate is
+    `abandoned ÷ offered`;
+  * the AA report marks the answered AA call answered and the abandoned one
+    abandoned;
+  * call history's abandoned + missed rows equal `counts.missed`;
+  * Alerts percentages equal the queue and agent tables they are derived from;
+  * the Telephone Numbers summary and its number card equal the Dashboard's
+    inbound and missed;
+  * no file re-derives the rule: no `missedKind(`, no
+    `!$answered && $batchStart !== ''`, no `inferCallType()`.
+* `tests/js/smoke.mjs` (built bundle in jsdom) asserts the Dashboard's abandon
+  row is the summary breakdown over offered inbound, that the Agents table
+  renders the payload's Abandoned column and missed rate verbatim, and that the
+  Missed cell drills into `missed_no_abandon`.
+* Full suite: `npm test` — all 13 suites green (php lint, css coverage, ui
+  audit, module budget, dead code, build, js smoke, api matrix, url policy, csv
+  exports, cdr store, cdr cache, outcome parity).
+
 # CHANGES — SQLite CDR store behind a config switch (P5)
 
 **Scope:** the CDR day cache now has two backends behind one interface. The

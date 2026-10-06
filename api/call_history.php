@@ -8,15 +8,15 @@ requireMethod('POST');
 
 function histDisplayOutcome(array $c, array $directory = [], array $queueIds = []): string
 {
-    $talk = seconds($c, 'call-talking-duration-seconds');
-    if ($talk > 0) {
-        return 'answered';
-    }
-    $kind = missedKind($c, $directory, $queueIds);
-    if ($kind === 'abandon') {
-        return 'abandoned';
-    }
-    return 'missed';
+    /*
+     * Three-way display label, derived from the canonical outcome so it can
+     * never drift from the Dashboard / Agents / Queues numbers.
+     */
+    return match (callOutcome($c, $directory, $queueIds)) {
+        'answered' => 'answered',
+        'abandoned' => 'abandoned',
+        default => 'missed',
+    };
 }
 
 /**

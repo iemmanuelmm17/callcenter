@@ -691,7 +691,12 @@ function CallModal({metric,hour,agent,phoneNumber,callerNumber,queue,queuesOnly,
         total: 'All calls', incoming: 'Inbound + missed', offered: 'Offered',
         inbound: 'Inbound', outbound: 'Outbound', missed: 'Missed', onnet: 'On-net',
         answered: 'Answered', abandoned: 'Abandoned', sla: 'Within SLA',
-        sla_missed: 'SLA missed', handled: 'Handled', voicemail: 'Voicemail'
+        sla_missed: 'SLA missed', handled: 'Handled', voicemail: 'Voicemail',
+        /* The missed breakdown and the queue scopes used to show their raw
+         * metric id ("missed_noanswer") in the title and the View chip. */
+        missed_abandon: 'Abandoned', missed_noanswer: 'Missed — no answer',
+        missed_voicemail: 'Missed — voicemail', missed_no_abandon: 'Missed (not abandoned)',
+        queue_abandoned: 'Abandoned in queue', queue_offered: 'Offered to queue'
     };
     const filterChips = [];
     const f = filters || {};
