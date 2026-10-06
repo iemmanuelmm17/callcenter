@@ -91,7 +91,7 @@ const [inventory,setInventory] = useState({ agents: 0, totalNumbers: 0, enabledN
 const [inventoryReady,setInventoryReady] = useState({ agents: false, numbers: false, aa: false });
 const [agentSub,setAgentSub] = useState('performance');
 const [slaSeconds, setSlaSeconds] = useState(readSlaSeconds);
-const [domainSettings, setDomainSettings] = useState({ slaPct: 80, abandonPct: 10, missedPct: 20, ahtMinutes: 5, ahtOutboundMinutes: 5, topAgentAhtMinutes: 5, topAgentMinCalls: 20 });
+const [domainSettings, setDomainSettings] = useState({ slaPct: 80, abandonPct: 10, missedPct: 20, ahtMinutes: 5, ahtOutboundMinutes: 5, contactPct: 50, topAgentAhtMinutes: 5, topAgentMinCalls: 20 });
 const [focusQueue, setFocusQueue] = useState('');
 const [focusAa, setFocusAa] = useState('');
 const [settingsOpen, setSettingsOpen] = useState(false);
@@ -115,6 +115,7 @@ const applyThresholds = d => {
         missedPct: Number(d.missedPct || 20),
         ahtMinutes: Number(d.ahtMinutes || 5),
         ahtOutboundMinutes: Number(d.ahtOutboundMinutes || d.ahtMinutes || 5),
+        contactPct: Number(d.contactPct || 50),
         /*
          * Top-agent qualification. Falls back to the general AHT threshold so
          * the podium still behaves sensibly against a backend that does not
@@ -277,6 +278,9 @@ const agentPerformanceTable = h(AgentPerformanceTable, {
     missedPct: domainSettings.missedPct,
     abandonPct: domainSettings.abandonPct,
     ahtMinutes: domainSettings.ahtMinutes,
+    /* Sprint B: the contact-rate floor, beside the other domain thresholds so
+     * the red highlight on the table can be traced to a setting. */
+    contactPct: domainSettings.contactPct,
     onAgentClick: extension => {
         setSelectedAgents([extension]);
         setAgentSub('overview');
@@ -952,6 +956,7 @@ return h('div', { className: 'min-h-screen' },
                     missedPct: Number(d.missedPct || 20),
                     ahtMinutes: Number(d.ahtMinutes || 5),
                     ahtOutboundMinutes: Number(d.ahtOutboundMinutes || d.ahtMinutes || 5),
+                    contactPct: Number(d.contactPct ?? prev.contactPct ?? 50),
                     /*
                      * Keep the values the user just chose even if the
                      * backend does not echo them back yet, otherwise the

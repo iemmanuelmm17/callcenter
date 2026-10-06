@@ -22,6 +22,13 @@ function defaultDomainSettings(): array {
         'ahtMinutes' => 5.0,
         'ahtOutboundMinutes' => 5.0,
         /*
+         * Sprint B: the outbound contact-rate floor, connects ÷ attempts. It is
+         * a floor rather than a ceiling (more connects is better), which is the
+         * opposite of every other threshold here, so the agent table colours a
+         * contact rate below it - and only when the agent actually dialled.
+         */
+        'contactPct' => 50.0,
+        /*
          * Top-agent qualification, used by the "Lowest AHT" ranking on
          * the operations overview. An agent only earns a medal when
          * their inbound AHT is UNDER topAgentAhtMinutes AND they handled
@@ -288,6 +295,7 @@ function saveDomainSettings(string $domain, array $in): array {
     $cur['abandonPct'] = max(1, min(100, (float)$pick('abandonPct', 10)));
     $cur['ahtMinutes'] = max(1, min(120, (float)$pick('ahtMinutes', 5)));
     $cur['ahtOutboundMinutes'] = max(1, min(120, (float)$pick('ahtOutboundMinutes', 5)));
+    $cur['contactPct'] = max(1, min(100, (float)$pick('contactPct', 50)));
 
     /*
      * Qualifying AHT is allowed below one minute (0.5 min = 30 s) —

@@ -1072,6 +1072,105 @@ const partial = parseJson(partialRaw, '{', '}');
 check('a partial fetch is recorded as incomplete with its resume point',
   partial && partial.complete === false && partial.records === 1 && partial.nextOffset === 250, partial);
 
+/* ============ 8. per-agent hold time and outbound contact rate (Sprint B) */
+
+console.log('\n== hold time and contact rate, per agent ==');
+
+/*
+ * A fresh day (2026-08-19) so no earlier fixture can answer. The arithmetic is
+ * small enough to state in full, and every figure below is the one a reader
+ * would get by adding the rows up by hand:
+ *
+ *   6080 (Ada)   inbound answered a1 (hold 30) + a2 (hold 20)
+ *                -> holdTotal 50 over 2 calls that used hold, holdAvg 25
+ *                -> no outbound at all, so the contact rate has no denominator
+ *   6081 (Alan)  inbound answered a3 (no hold)
+ *                outbound o1 answered, o2 never answered, o3 no answer
+ *                timestamp but 15 s of talking (a human answered)
+ *                -> 3 attempts, 2 connected = 66.7 %
+ *   6080 + 6081  the day's hold is 50 s over 2 calls (the dashboard summary's
+ *                own line, so the per-agent rows add up to it)
+ */
+await harness.seedPbx('users', [
+  { user: '6080', 'name-first-name': 'Ada', 'name-last-name': 'Lovelace', 'user-scope': 'User', department: 'Sales', site: 'HQ', 'login-username': '6080@test.example' },
+  { user: '6081', 'name-first-name': 'Alan', 'name-last-name': 'Turing', 'user-scope': 'User', department: 'Sales', site: 'HQ', 'login-username': '6081@test.example' }
+]);
+await harness.seedPbx('fetchCdrs', [
+  { id: 'h1', 'call-direction': 1, 'call-start-datetime': '2026-08-19T10:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-19T10:00:05Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-talking-duration-seconds': 60, 'call-batch-on-hold-duration-seconds': 30 },
+  { id: 'h2', 'call-direction': 1, 'call-start-datetime': '2026-08-19T10:30:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-19T10:30:05Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-talking-duration-seconds': 40, 'call-batch-on-hold-duration-seconds': 20 },
+  { id: 'h3', 'call-direction': 1, 'call-start-datetime': '2026-08-19T11:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-19T11:00:05Z[US/Eastern]', 'call-term-user': '6081',
+    'call-through-user': '701', 'call-talking-duration-seconds': 30 },
+  { id: 'h4', 'call-direction': 0, 'call-start-datetime': '2026-08-19T13:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-19T13:00:20Z[US/Eastern]', 'call-orig-user': '6081',
+    'dialed': '8454259810', 'call-talking-duration-seconds': 40 },
+  { id: 'h5', 'call-direction': 0, 'call-start-datetime': '2026-08-19T13:10:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-19T13:10:25Z[US/Eastern]', 'call-orig-user': '6081',
+    'dialed': '8454259811' },
+  { id: 'h6', 'call-direction': 0, 'call-start-datetime': '2026-08-19T13:20:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-19T13:20:30Z[US/Eastern]', 'call-orig-user': '6081',
+    'dialed': '8454259812', 'call-talking-duration-seconds': 15 }
+]);
+
+const holdDay = { start: '2026-08-19', end: '2026-08-19', hours: 'all' };
+const agentRes = await harness.request('agents.php', { body: holdDay, user: USERS.office_manager });
+const agentRows = (agentRes.body?.data || []).reduce((acc, row) => Object.assign(acc, { [row.extension]: row }), {});
+const ada = agentRows['6080'] || {};
+const alan = agentRows['6081'] || {};
+check('agents.php answers with both agents for the day',
+  agentRes.status === 200 && !!agentRows['6080'] && !!agentRows['6081'],
+  agentRes.status === 200 ? Object.keys(agentRows) : agentRes.log);
+
+check('hold is summed for the agent that used it', ada.holdTotal === 50 && ada.holdCalls === 2, [ada.holdTotal, ada.holdCalls]);
+check('the per-agent hold average is over the calls that used hold', ada.holdAvg === 25, ada.holdAvg);
+check('an agent with no hold reports zeroes, not a missing field',
+  alan.holdTotal === 0 && alan.holdCalls === 0 && alan.holdAvg === 0, [alan.holdTotal, alan.holdCalls, alan.holdAvg]);
+check('the agent hold figures add up to the dashboard summary for the same day',
+  (await harness.request('report.php', { body: Object.assign({ skipPrevious: true }, holdDay), user: USERS.office_manager }))
+    .body?.summary?.hold?.totalSeconds === 50,
+  'summary hold should be 50 s');
+
+check('three outbound attempts are counted', alan.ob === 3, alan.ob);
+check('two of the three outbound attempts connected', alan.obConnected === 2, alan.obConnected);
+check('the contact rate is connects over attempts', alan.obConnectPct === 66.7, alan.obConnectPct);
+check('an attempt that was never answered is not a connect', alan.obConnected < alan.ob);
+check('an outbound call with talking seconds but no answer timestamp still counts as a connect',
+  alan.obConnected === 2, alan.obConnected);
+check('an agent with no outbound calls reports a zero contact rate, not NaN',
+  ada.ob === 0 && ada.obConnectPct === 0, [ada.ob, ada.obConnectPct]);
+
+/*
+ * The same hold seconds, per QUEUE. Queue 700 took the two held calls (30 s and
+ * 20 s), queue 701 none - and the queues endpoint counts hold on every call that
+ * reached the queue, so the three figures below are the rows a supervisor reads
+ * off the queue grid.
+ */
+await harness.seedPbx('callqueues', [
+  { callqueue: '700', description: 'Sales queue', site: 'HQ' },
+  { callqueue: '701', description: 'Support queue', site: 'HQ' }
+]);
+const holdCradle = await harness.request('cradle.php', {
+  body: { start: '2026-08-19', end: '2026-08-19' },
+  user: USERS.office_manager
+});
+check('cradle.php answers for the hold day', holdCradle.status === 200, holdCradle.log ?? holdCradle.status);
+if (holdCradle.status === 200) {
+  const rows = Object.fromEntries((holdCradle.body.data.queueStats ?? []).map(r => [r.callqueue, r]));
+  check('queue 700 carries its own hold seconds', rows['700']?.holdTotal === 50 && rows['700']?.holdCalls === 2, rows['700']);
+  check('queue 700 average hold is over the calls that held', rows['700']?.holdAvg === 25, rows['700']?.holdAvg);
+  check('a queue that never held reports zeroes, not a missing field',
+    rows['701']?.holdTotal === 0 && rows['701']?.holdCalls === 0 && rows['701']?.holdAvg === 0, rows['701']);
+  check('the per-queue hold seconds add up to the dashboard summary (50 s)',
+    (rows['700']?.holdTotal || 0) + (rows['701']?.holdTotal || 0) === 50,
+    [rows['700']?.holdTotal, rows['701']?.holdTotal]);
+  check('the per-queue hold equals the per-agent hold for the same calls',
+    (rows['700']?.holdTotal || 0) === ada.holdTotal, [rows['700']?.holdTotal, ada.holdTotal]);
+}
+
 console.log('');
 if (failures.length) {
   console.log(`FAILED: ${failures.length} check(s)`);

@@ -12,7 +12,7 @@ import { countBy, maxBy, sumBy, weightedMean, weightedPct } from '../lib/totals.
 import { KpiCard } from './charts.js';
 import { Tooltip, skel, skelKpis } from './ui.js';
 
-function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSeconds,missedPct,abandonPct,ahtMinutes}) {
+function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSeconds,missedPct,abandonPct,ahtMinutes,contactPct}) {
 
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(10);
@@ -37,7 +37,12 @@ function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSecon
         ['obArt', ['Outbound', 'ART'], 'Outbound average ring time. Click to open outbound calls.', 'dur', 'outbound', 'Outbound Average Ring Time'],
         ['obAat', ['Outbound', 'AAT'], 'Outbound average answer time. Click to open outbound calls.', 'dur', 'outbound', 'Outbound Average Answer Time'],
         ['obLtt', ['Outbound', 'LTT'], 'Outbound longest talking time. Click to open outbound calls.', 'dur', 'outbound', 'Outbound Longest Talking Time'],
-        ['obTct', ['Outbound', 'TCT'], 'Outbound total talking time. Click to open outbound calls.', 'dur', 'outbound', 'Outbound Total Calling Time']
+        ['obTct', ['Outbound', 'TCT'], 'Outbound total talking time. Click to open outbound calls.', 'dur', 'outbound', 'Outbound Total Calling Time'],
+        /* Sprint B: the two figures the review asks for weekly and that the CDR
+         * already carries - a contact rate with its base, and hold. */
+        ['obConnectPct', ['Outbound', 'Contact', 'Rate'], 'Outbound calls a human answered ÷ outbound attempts (connects ÷ attempts). Red when below the domain contact-rate setting. Click to open outbound calls — answered ones are the connects.', 'pct', 'outbound', 'Outbound Contact Rate'],
+        ['holdAvg', ['Hold', 'Avg'], 'Average hold time on this agent\'s calls that used hold (calls with no hold are not averaged in, so a few long holds are not diluted). Click to open the calls.', 'dur', 'total', 'Average Hold Time'],
+        ['holdTotal', ['Hold', 'Total'], 'Total seconds this agent\'s callers spent on hold. Click to open the calls.', 'dur', 'total', 'Total Hold Time']
     ];
     const COLS_KEY = 'callscope-agent-cols';
     const defaultCols = () => Object.fromEntries(columns.map(c => [c[0], true]));
@@ -63,6 +68,7 @@ function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSecon
     const abLimit = Number(abandonPct != null ? abandonPct : 10);
     const ahtLimitSec = Number(ahtMinutes != null ? ahtMinutes : 5) * 60;
     const slaRing = Number(slaSeconds != null ? slaSeconds : 20);
+    const connectLimit = Number(contactPct != null ? contactPct : 50);
 
     const offeredOf = agent => {
         const n = Number(agent.offered);
@@ -96,6 +102,13 @@ function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSecon
         }
         if (field === 'ibAht' && Number(agent.ib || 0) > 0) {
             return Number(agent.ibAht || 0) > ahtLimitSec ? 'fail' : 'pass';
+        }
+        /* Contact rate is a "more is better" figure, so it fails UNDER the
+         * target, unlike every other threshold on this table. An agent with no
+         * outbound attempts is neither: there is no rate to judge. */
+        if (field === 'obConnectPct') {
+            if (Number(agent.ob || 0) === 0) return null;
+            return Number(agent.obConnectPct || 0) < connectLimit ? 'fail' : 'pass';
         }
         if (field === 'ibAat' && Number(agent.ib || 0) > 0) {
             return Number(agent.ibAat || 0) > slaRing ? 'fail' : 'pass';
@@ -217,6 +230,12 @@ function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSecon
             case 'obAat': return totalsRows.length ? fmt(weightedMean(totalsRows, 'obAat', 'ob')) : '—';
             case 'obLtt': return totalsRows.length ? fmt(maxBy(totalsRows, 'obLtt')) : '—';
             case 'obTct': return totalsRows.length ? fmt(sumBy(totalsRows, 'obTct')) : '—';
+            /* Connects ÷ attempts over the whole table, and hold over the calls
+             * that held - the same rules the rows use, so the total line is a
+             * real grand total rather than a sum of rates. */
+            case 'obConnectPct': return totalsRows.length ? weightedPct(totalsRows, 'obConnected', 'ob').toFixed(1) + '%' : '—';
+            case 'holdAvg': return totalsRows.length ? fmt(weightedMean(totalsRows, 'holdAvg', 'holdCalls')) : '—';
+            case 'holdTotal': return totalsRows.length ? fmt(sumBy(totalsRows, 'holdTotal')) : '—';
             default: return '—';
         }
     };
@@ -225,7 +244,8 @@ function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSecon
         total: 'num', ib: 'num', ob: 'num', onnet: 'num', mc: 'num', ab: 'num',
         mcRate: 'num',
         ibAht: 'dur', ibAat: 'dur', ibLtt: 'dur', ibTct: 'dur',
-        obArt: 'dur', obAat: 'dur', obLtt: 'dur', obTct: 'dur'
+        obArt: 'dur', obAat: 'dur', obLtt: 'dur', obTct: 'dur',
+        obConnectPct: 'num', holdAvg: 'dur', holdTotal: 'dur'
     };
     const totalsRow = totalsRows.length
         ? h('tr', {className: 'grid-totals'},
@@ -246,11 +266,12 @@ function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSecon
     };
 
     const exportCsv = () => {
-        const header = ['name','extension','department','site','total_calls','inbound','outbound','onnet','missed_calls','missed_rate','abandoned_calls','abandoned_rate','ib_aht','ib_aat','ib_ltt','ib_tct','ob_art','ob_aat','ob_ltt','ob_tct'];
+        const header = ['name','extension','department','site','total_calls','inbound','outbound','onnet','missed_calls','missed_rate','abandoned_calls','abandoned_rate','ib_aht','ib_aat','ib_ltt','ib_tct','ob_art','ob_aat','ob_ltt','ob_tct','ob_contact_pct','hold_avg','hold_total'];
         const body = sorted.map(a => [
             a.name, a.extension, a.department, a.site, a.total, a.ib, a.ob, a.onnet, a.mc, rateOf(a, 'mcRate').toFixed(1),
             a.ab, rateOf(a, 'abRate').toFixed(1),
-            a.ibAht, a.ibAat, a.ibLtt, a.ibTct, a.obArt, a.obAat, a.obLtt, a.obTct
+            a.ibAht, a.ibAat, a.ibLtt, a.ibTct, a.obArt, a.obAat, a.obLtt, a.obTct,
+            Number(a.obConnectPct || 0).toFixed(1), a.holdAvg, a.holdTotal
         ]);
         /*
          * The same totals line, computed with the rules of the row on screen and
@@ -263,7 +284,9 @@ function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSecon
             Math.round(weightedMean(totalsRows, 'ibAht', 'ib')), Math.round(weightedMean(totalsRows, 'ibAat', 'ib')),
             maxBy(totalsRows, 'ibLtt'), sumBy(totalsRows, 'ibTct'),
             Math.round(weightedMean(totalsRows, 'obArt', 'ob')), Math.round(weightedMean(totalsRows, 'obAat', 'ob')),
-            maxBy(totalsRows, 'obLtt'), sumBy(totalsRows, 'obTct')];
+            maxBy(totalsRows, 'obLtt'), sumBy(totalsRows, 'obTct'),
+            weightedPct(totalsRows, 'obConnected', 'ob').toFixed(1),
+            Math.round(weightedMean(totalsRows, 'holdAvg', 'holdCalls')), sumBy(totalsRows, 'holdTotal')];
         const csv = [header, ...body, totalsRow].map(r => r.map(v => '"' + String(v ?? '').replace(/"/g, '""') + '"').join(',')).join('\n');
         const blob = new Blob([csv], {type: 'text/csv;charset=utf-8'});
         const url = URL.createObjectURL(blob);

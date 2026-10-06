@@ -335,6 +335,19 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
         $count = count($group);
         $talk = array_sum(array_map(fn($c) => seconds($c, 'call-talking-duration-seconds'), $group));
         $rings = array_map(fn($c) => ringSeconds($c), $group);
+        /*
+         * Sprint B: connects ÷ attempts for the outbound panel, so the contact
+         * rate is available where the outbound AHT already was (the Settings
+         * live chip reads this block) without a second definition of
+         * "answered" living in the client. The test is callAnswered(), the same
+         * one the agents endpoint and the type classifier use.
+         */
+        $connected = 0;
+        foreach ($group as $member) {
+            if (callAnswered($member)) {
+                $connected++;
+            }
+        }
         return [
             'count' => $count,
             'avgHandling' => $count ? (int)round($talk / $count) : 0,
@@ -342,6 +355,8 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
             'avgRing' => $count ? (int)round(array_sum($rings) / $count) : 0,
             'longestTalk' => $group ? max(array_map(fn($c) => seconds($c, 'call-talking-duration-seconds'), $group)) : 0,
             'totalTalk' => $talk,
+            'connected' => $connected,
+            'connectPct' => $count ? round(($connected / $count) * 100, 1) : 0.0,
         ];
     };
     return [

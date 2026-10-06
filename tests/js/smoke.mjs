@@ -194,6 +194,23 @@ console.log('\n== totals rows on every grid (review 5.1) ==');
     /20:?0?1|201|3:21/.test(agentText) || /03:21/.test(agentText), agentText.slice(0, 260));
   check('the totals row is a real row, not a footer that scrolls away',
     !!agentTotals && agentTotals.parentElement.tagName === 'TBODY');
+  /*
+   * Sprint B: the contact rate and hold, per agent. Ada dialled 40 and connected
+   * 29 (72.5 %); Alan dialled 20 and connected 8 (40 %, under the 50 % floor, so
+   * his cell is marked). The totals row is connects ÷ attempts over the table —
+   * (29 + 8) / (40 + 20) = 61.7 % — not the mean of the two rates (56.3 %), and
+   * hold averages over the calls that held: (900 + 120) / (30 + 4) = 30 s.
+   */
+  check('the agent table offers the outbound contact rate and hold columns',
+    /Contact/i.test(agentSection ? agentSection.textContent : '') &&
+    /Hold/.test(agentSection ? agentSection.textContent : ''),
+    (agentSection ? agentSection.textContent : '').slice(0, 200));
+  check('the agent totals row recomputes the contact rate (37 of 60 = 61.7 %, not the 56.3 % mean)',
+    /61\.7%/.test(agentText) && !/56\.3%/.test(agentText), agentText.slice(0, 320));
+  check('the agent totals row sums hold seconds (900 + 120 = 1,020 s)',
+    /00:17:00/.test(agentText), agentText.slice(0, 320));
+  check('the agent totals row averages hold over the calls that held (1,020 / 34 = 30 s)',
+    /00:00:30/.test(agentText), agentText.slice(0, 320));
 
   await goTo('Queues');
   await flush(10);
@@ -216,6 +233,15 @@ console.log('\n== totals rows on every grid (review 5.1) ==');
     /00:00:16/.test(queueText) && !/00:00:15/.test(queueText), queueText.slice(0, 260));
   check('the queue totals row sums total talk time (20,000 + 8,000 = 28,000 s)',
     /07:46:40/.test(queueText), queueText.slice(0, 300));
+  /*
+   * Sprint B: hold, per queue and per agent. Queue 700 held 270 s over 6 calls
+   * (avg 45 s); queue 701 never held. The totals row must average over the calls
+   * that held (45 s, NOT the 22.5 s mean of 45 and 0) and sum the seconds.
+   */
+  check('the queue totals row averages hold over the calls that held (45 s, not 22.5 s)',
+    /00:00:45/.test(queueText) && !/00:00:22/.test(queueText), queueText.slice(0, 320));
+  check('the queue totals row sums hold seconds (270 + 0)',
+    /00:04:30/.test(queueText), queueText.slice(0, 320));
 
   await goTo('Telephone Numbers');
   await flush(10);

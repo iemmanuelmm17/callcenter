@@ -1,3 +1,77 @@
+# CHANGES — Sprint B, phase 3: hold time and the outbound contact rate
+
+**What this phase is about.** Two numbers the manager asks for weekly that the
+CDR already carried and nobody published. `call-batch-on-hold-duration-seconds`
+was read inside `ringSeconds()` and thrown away, so "hold time per agent" and
+"hold time per queue" had no column anywhere. The outbound contact rate —
+connects ÷ attempts — was not computed at all, although every outbound leg's
+answer state was already on the wire.
+
+## Hold time, counted the same way everywhere
+
+Hold is accumulated with one rule, stated once: **a call with zero hold is not
+averaged in.** A team where two calls held 90 s each reports a 90 s average, not
+30 s diluted by twenty calls that never held. Every site publishes the same
+three figures — `holdTotal` (seconds), `holdCalls` (the denominator) and
+`holdAvg` — so a rate never appears without its base:
+
+- `api/agents.php` — per agent, over that agent's calls.
+- `api/cradle.php` — per queue, over every call that reached the queue
+  (`cradle.php` reads the call list itself; abandons that held are counted,
+  because a caller who held and then left still held).
+- `summary.hold` on the report — already there for the whole period, unchanged.
+
+The three levels add up: the per-agent and per-queue totals sum to the
+dashboard's `summary.hold.totalSeconds` for the same range, which is asserted.
+
+## The outbound contact rate
+
+`obConnected` and `obConnectPct` on the agents endpoint and `connected`/
+`connectPct` on the report's outbound panel, both using the app's own
+`callAnswered()` — an answer timestamp (plain or on the queue batch leg) or
+talking seconds. That last clause matters: an outbound call with 15 s of talking
+and no answer timestamp is a connect, and a dial that rang out is not. An agent
+with no outbound attempts reports `0.0` and is never coloured, because there is
+no rate to judge.
+
+Unlike every other threshold in Settings, the contact rate is a **floor**: the
+agent table marks a rate *below* it red. It ships at **50 %**, beside the other
+domain thresholds, and is manager-writable like them (`contactPct`).
+
+## On screen
+
+- Agent table: **Outbound · Contact · Rate**, **Hold · Avg** and **Hold · Total**
+  columns, each with a tooltip that names its base; the contact rate gets a
+  green/red verdict against the floor, and the CSV export carries all three
+  (`ob_contact_pct`, `hold_avg`, `hold_total`).
+- Queue stats grid: **Hold · Avg** and **Hold · Total**, plus the CSV columns.
+- Both grids' totals rows recompute rather than average: contact rate is
+  Σconnects ÷ Σattempts (61.7 % for the fixture, where the mean of 72.5 % and
+  40 % is 56.3 %), hold average is Σhold ÷ Σcalls-that-held (30 s, not the mean
+  of the two agents' averages).
+- Settings: the new floor, with a live chip reading the same outbound panel the
+  report publishes (`api/report.php` → `summary.outbound.connected`).
+
+## Evidence
+
+`tests/php/report-metrics.mjs` seeds one day (2026-08-19) whose arithmetic is
+written out in the assertions: Ada two inbound calls holding 30 s and 20 s (avg
+25 s), Alan three outbound attempts of which two connected — one answered, one
+with no answer timestamp but talking seconds, one rang out — for 66.7 %. It then
+checks the same seconds per queue (700 holds 50 s over 2 calls, 701 holds
+nothing) and that agent, queue and dashboard hold totals all agree. 17 checks.
+
+`tests/js/smoke.mjs` asserts the columns exist, that the totals rows recompute
+(61.7 %, 00:17:00, 30 s; queue 45 s and 00:04:30) and that a rate is never shown
+without a total to check it against. `npm test` = 25 suites green.
+
+**Behaviour change to disclose:** the report payload gains
+`summary.outbound.connected`/`connectPct` and the agents endpoint gains five
+fields; both are additions. The agent and queue grids gain three columns and the
+Settings modal one threshold — no existing figure moves.
+
+---
+
 # CHANGES — Sprint B, phase 2: longer windows for the manager, preset ranges (F2)
 
 **What this phase is about.** Two halves of the same complaint. A supervisor can

@@ -301,6 +301,45 @@ try {
 
         $obTct = $obTalk;
 
+        /*
+         * Sprint B: outbound contact rate.
+         *
+         * The review's line is "connects / attempts", and the answer test is
+         * the same callAnswered() the rest of the app uses (an answer timestamp,
+         * plain or on the batch leg, or talking seconds) - so a call centre
+         * cannot report a 100% contact rate by dialling a busy signal. An
+         * attempt with no answer is exactly the number a dialer owner needs to
+         * see, and it is not the complement of the answered count: a call with
+         * zero duration and no answer timestamp is neither answered nor a
+         * "complete" attempt in the PBX's own bookkeeping, so both are reported.
+         */
+        $obConnected = 0;
+        foreach ($outbound as $call) {
+            if (callAnswered($call)) {
+                $obConnected++;
+            }
+        }
+        $obConnectPct = $obCount > 0 ? round(($obConnected / $obCount) * 100, 1) : 0.0;
+
+        /*
+         * Sprint B: hold time, per agent.
+         *
+         * holdSeconds() was already read inside ringSeconds() and the result
+         * thrown away, so the phrase "hold time per agent" had no column
+         * anywhere. Same two figures as the dashboard summary (calls that used
+         * hold at all, and the average over those calls) so a row here adds up
+         * to the summary's line.
+         */
+        $holdTotal = 0;
+        $holdCalls = 0;
+        foreach ($calls as $call) {
+            $hold = holdSeconds($call);
+            if ($hold > 0) {
+                $holdTotal += $hold;
+                $holdCalls++;
+            }
+        }
+
 
         /*
          * Agent name.
@@ -355,7 +394,14 @@ try {
             'obArt' => $obArt,
             'obAat' => $obAat,
             'obLtt' => $obLtt,
-            'obTct' => $obTct
+            'obTct' => $obTct,
+
+            /* Sprint B: the two derivable metrics the review asks for weekly. */
+            'obConnected' => $obConnected,
+            'obConnectPct' => $obConnectPct,
+            'holdTotal' => $holdTotal,
+            'holdCalls' => $holdCalls,
+            'holdAvg' => $holdCalls > 0 ? (int)round($holdTotal / $holdCalls) : 0
         ];
     }
 

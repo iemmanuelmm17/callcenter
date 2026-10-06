@@ -12,7 +12,7 @@ import { writeSlaSeconds } from '../lib/sla.js';
 
 function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClose, onSaved, onNotify}) {
   useEscape(true, onClose);
-  const DEFAULTS = { slaSeconds: 20, slaPct: 80, missedPct: 20, abandonPct: 10, ahtMinutes: 5, ahtOutboundMinutes: 5, topAgentAhtMinutes: 5, topAgentMinCalls: 20 };
+  const DEFAULTS = { slaSeconds: 20, slaPct: 80, missedPct: 20, abandonPct: 10, ahtMinutes: 5, ahtOutboundMinutes: 5, contactPct: 50, topAgentAhtMinutes: 5, topAgentMinCalls: 20 };
   /* QA-5: supervisors may read the thresholds, only managers change them. */
   const canSave = user.role === 'office_manager';
   const [form, setForm] = useState({
@@ -22,6 +22,7 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
     abandonPct: DEFAULTS.abandonPct,
     ahtMinutes: DEFAULTS.ahtMinutes,
     ahtOutboundMinutes: DEFAULTS.ahtOutboundMinutes,
+    contactPct: DEFAULTS.contactPct,
     topAgentAhtMinutes: DEFAULTS.topAgentAhtMinutes,
     topAgentMinCalls: DEFAULTS.topAgentMinCalls
   });
@@ -57,6 +58,7 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
         abandonPct: Number(d.abandonPct || DEFAULTS.abandonPct),
         ahtMinutes: Number(d.ahtMinutes || DEFAULTS.ahtMinutes),
         ahtOutboundMinutes: Number(d.ahtOutboundMinutes || d.ahtMinutes || DEFAULTS.ahtOutboundMinutes),
+        contactPct: Number(d.contactPct || DEFAULTS.contactPct),
         topAgentAhtMinutes: Number(d.topAgentAhtMinutes || d.ahtMinutes || DEFAULTS.topAgentAhtMinutes),
         topAgentMinCalls: Number(d.topAgentMinCalls ?? DEFAULTS.topAgentMinCalls)
       });
@@ -95,13 +97,19 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
           missedPct,
           abandonPct,
           ahtMinutes: ahtSec / 60,
-          ahtOutboundMinutes: ahtOutSec / 60
+          ahtOutboundMinutes: ahtOutSec / 60,
+          /* Sprint B: the contact-rate chip reads the outbound panel's own
+           * connects ÷ attempts, so the modal quotes no rate the report does
+           * not also publish. */
+          ob: Number(outbound.count || 0),
+          obConnected: Number(outbound.connected || 0),
+          contactPct: Number(outbound.connectPct || 0)
         });
       })
       .catch(() => setLive(null));
   }, [filters && filters.start, filters && filters.end, form.slaSeconds]);
   const clamp = (key, v) => {
-    const spec = { slaSeconds: [5, 120, 1], slaPct: [1, 100, 0.5], missedPct: [1, 100, 0.5], abandonPct: [1, 100, 0.5], ahtMinutes: [1, 120, 0.5], ahtOutboundMinutes: [1, 120, 0.5], topAgentAhtMinutes: [0.5, 120, 0.5], topAgentMinCalls: [0, 10000, 1] }[key];
+    const spec = { slaSeconds: [5, 120, 1], slaPct: [1, 100, 0.5], missedPct: [1, 100, 0.5], abandonPct: [1, 100, 0.5], ahtMinutes: [1, 120, 0.5], ahtOutboundMinutes: [1, 120, 0.5], contactPct: [1, 100, 0.5], topAgentAhtMinutes: [0.5, 120, 0.5], topAgentMinCalls: [0, 10000, 1] }[key];
     const n = Number(v);
     if (!Number.isFinite(n)) return form[key];
     const [min, max, step] = spec;
@@ -110,7 +118,7 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
   };
   const setKey = (key, v) => setForm(f => ({ ...f, [key]: clamp(key, v) }));
   const stepKey = (key, dir) => {
-    const step = { slaSeconds: 1, slaPct: 0.5, missedPct: 0.5, abandonPct: 0.5, ahtMinutes: 0.5, ahtOutboundMinutes: 0.5, topAgentAhtMinutes: 0.5, topAgentMinCalls: 1 }[key];
+    const step = { slaSeconds: 1, slaPct: 0.5, missedPct: 0.5, abandonPct: 0.5, ahtMinutes: 0.5, ahtOutboundMinutes: 0.5, contactPct: 0.5, topAgentAhtMinutes: 0.5, topAgentMinCalls: 1 }[key];
     setKey(key, Number(form[key]) + dir * step);
   };
   const save = async () => {
@@ -124,6 +132,7 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
         abandonPct: clamp('abandonPct', form.abandonPct),
         ahtMinutes: clamp('ahtMinutes', form.ahtMinutes),
         ahtOutboundMinutes: clamp('ahtOutboundMinutes', form.ahtOutboundMinutes),
+        contactPct: clamp('contactPct', form.contactPct),
         topAgentAhtMinutes: clamp('topAgentAhtMinutes', form.topAgentAhtMinutes),
         topAgentMinCalls: clamp('topAgentMinCalls', form.topAgentMinCalls),
         /*
@@ -269,6 +278,15 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
           unit: 'min',
           liveNode: live
             ? liveChip('Current outbound: ' + Number(live.ahtOutboundMinutes || 0).toFixed(1) + ' min', ahtOutOver)
+            : h('span', { className: 'set-live is-na' }, 'Current: —')
+        }),
+        row({
+          key: 'contactPct', tone: 'good', icon: 'fa-solid fa-phone-arrow-up-right',
+          title: 'Outbound contact rate (at least)',
+          desc: 'Outbound calls a human answered ÷ outbound attempts. The agent table marks a rate below this red — a floor, where every other threshold here is a ceiling.',
+          unit: '%',
+          liveNode: live
+            ? liveChip('Current outbound connects: ' + Number(live.obConnected || 0) + ' of ' + Number(live.ob || 0) + ' attempts', false)
             : h('span', { className: 'set-live is-na' }, 'Current: —')
         }),
         h('div', { className: 'set-sec-label' }, 'Top agent qualification'),

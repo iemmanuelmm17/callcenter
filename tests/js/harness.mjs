@@ -35,7 +35,7 @@ export const FIXTURES = {
   },
   settings: {
     slaSeconds: 20, slaPct: 80, abandonPct: 10, missedPct: 20,
-    ahtMinutes: 5, ahtOutboundMinutes: 5, topAgentAhtMinutes: 5, topAgentMinCalls: 20,
+    ahtMinutes: 5, ahtOutboundMinutes: 5, contactPct: 50, topAgentAhtMinutes: 5, topAgentMinCalls: 20,
     /* Sprint A: the service-desk block. The calendar ships OFF, exactly as a
      * fresh install does, with the Mon-Fri grid pre-filled. */
     businessHours: {
@@ -157,15 +157,15 @@ export const FIXTURES = {
      * ib + mc + ab, mcRate is every missed call ÷ offered.
      */
     agentPerformance: [
-      { extension: '6080', name: 'Ada Lovelace', department: 'Sales', site: 'HQ', total: 245, ib: 200, ob: 40, mc: 24, ab: 16, onnet: 5, ibAht: 210, ibAat: 12, ibLtt: 900, ibTct: 42000, obArt: 8, obAat: 10, obLtt: 300, obTct: 1200, offered: 240, mcRate: 16.7, abRate: 6.7 },
-      { extension: '6081', name: 'Alan Turing', department: 'Support', site: 'HQ', total: 185, ib: 150, ob: 20, mc: 20, ab: 15, onnet: 3, ibAht: 190, ibAat: 14, ibLtt: 700, ibTct: 28500, obArt: 9, obAat: 11, obLtt: 240, obTct: 800, offered: 185, mcRate: 18.9, abRate: 8.1 }
+      { extension: '6080', name: 'Ada Lovelace', department: 'Sales', site: 'HQ', total: 245, ib: 200, ob: 40, mc: 24, ab: 16, onnet: 5, ibAht: 210, ibAat: 12, ibLtt: 900, ibTct: 42000, obArt: 8, obAat: 10, obLtt: 300, obTct: 1200, offered: 240, mcRate: 16.7, abRate: 6.7, obConnected: 29, obConnectPct: 72.5, holdTotal: 900, holdCalls: 30, holdAvg: 30 },
+      { extension: '6081', name: 'Alan Turing', department: 'Support', site: 'HQ', total: 185, ib: 150, ob: 20, mc: 20, ab: 15, onnet: 3, ibAht: 190, ibAat: 14, ibLtt: 700, ibTct: 28500, obArt: 9, obAat: 11, obLtt: 240, obTct: 800, offered: 185, mcRate: 18.9, abRate: 8.1, obConnected: 8, obConnectPct: 40, holdTotal: 120, holdCalls: 4, holdAvg: 30 }
     ],
     inventory: { agents: 2, totalNumbers: 4, enabledNumbers: 3, autoAttendants: 2, aaCalls: 300, queues: 3 },
     timezone: 'US/Eastern'
   },
   agents: { data: [
-    { extension: '6080', name: 'Ada Lovelace', department: 'Sales', site: 'HQ', total: 245, ib: 200, ob: 40, mc: 24, ab: 16, onnet: 5, ibAht: 210, ibAat: 12, ibLtt: 900, ibTct: 42000, obArt: 8, obAat: 10, obLtt: 300, obTct: 1200 },
-    { extension: '6081', name: 'Alan Turing', department: 'Support', site: 'HQ', total: 185, ib: 150, ob: 20, mc: 20, ab: 15, onnet: 3, ibAht: 190, ibAat: 14, ibLtt: 700, ibTct: 28500, obArt: 9, obAat: 11, obLtt: 240, obTct: 800 }
+    { extension: '6080', name: 'Ada Lovelace', department: 'Sales', site: 'HQ', total: 245, ib: 200, ob: 40, mc: 24, ab: 16, onnet: 5, ibAht: 210, ibAat: 12, ibLtt: 900, ibTct: 42000, obArt: 8, obAat: 10, obLtt: 300, obTct: 1200, obConnected: 29, obConnectPct: 72.5, holdTotal: 900, holdCalls: 30, holdAvg: 30 },
+    { extension: '6081', name: 'Alan Turing', department: 'Support', site: 'HQ', total: 185, ib: 150, ob: 20, mc: 20, ab: 15, onnet: 3, ibAht: 190, ibAat: 14, ibLtt: 700, ibTct: 28500, obArt: 9, obAat: 11, obLtt: 240, obTct: 800, obConnected: 8, obConnectPct: 40, holdTotal: 120, holdCalls: 4, holdAvg: 30 }
   ], total: 2, page: 1, size: 25, last_page: 1 },
   telephone_numbers: {
     numbers: [
@@ -216,10 +216,12 @@ export const FIXTURES = {
     queueStats: [
       { callqueue: '700', description: 'Sales queue', site: 'HQ', totalCalls: 100, offered: 80, handled: 70,
         slaMiss: 14, sla: 80, abandoned: 10, abandonRate: 12.5,
-        avgRing: 20, maxRing: 90, avgTalk: 180, maxTalk: 600, totalTalk: 20000 },
+        avgRing: 20, maxRing: 90, avgTalk: 180, maxTalk: 600, totalTalk: 20000,
+        holdCalls: 6, holdAvg: 45, holdTotal: 270 },
       { callqueue: '701', description: 'Support queue', site: 'HQ', totalCalls: 60, offered: 50, handled: 45,
         slaMiss: 5, sla: 90, abandoned: 5, abandonRate: 10,
-        avgRing: 10, maxRing: 60, avgTalk: 120, maxTalk: 400, totalTalk: 8000 }
+        avgRing: 10, maxRing: 60, avgTalk: 120, maxTalk: 400, totalTalk: 8000,
+        holdCalls: 0, holdAvg: 0, holdTotal: 0 }
     ],
     /*
      * Service level by interval (Sprint A): two busy intervals, so the card's

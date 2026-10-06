@@ -106,7 +106,9 @@ function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, o
     ['maxRing', ['Longest', 'Ring', 'Time'], 'Longest ring / wait before answer.', 'dur', '7%'],
     ['avgTalk', ['Average', 'Talk', 'Time'], 'Average talking duration on answered queue calls.', 'dur', '7%'],
     ['maxTalk', ['Longest', 'Talk', 'Time'], 'Longest talking duration on this queue.', 'dur', '7%'],
-    ['totalTalk', ['Total', 'Talk', 'Time'], 'Sum of talking duration on this queue.', 'dur', '8%']
+    ['totalTalk', ['Total', 'Talk', 'Time'], 'Sum of talking duration on this queue.', 'dur', '8%'],
+    ['holdAvg', ['Hold', 'Avg'], 'Average hold time on this queue\'s calls that used hold (calls with no hold are not averaged in). Counted for every call that reached the queue, abandoned ones included.', 'dur', '7%'],
+    ['holdTotal', ['Hold', 'Total'], 'Total seconds callers spent on hold in this queue.', 'dur', '8%']
   ];
   const statsFiltered = queueStats.filter(q => {
     if (statsSite && String(q.site || '') !== statsSite) return false;
@@ -205,7 +207,7 @@ function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, o
   const exportCsv = () => {
     const rows = tab === 'summary'
       ? [['queue', 'name', 'site', 'total_calls', 'offered', 'handled', 'sla_missed', 'sla_rate', 'abandoned', 'abandon_rate', 'avg_ring', 'max_ring', 'avg_talk', 'max_talk', 'total_talk'],
-         ...queueStats.map(q => [q.callqueue, q.description, q.site, q.totalCalls, q.offered, q.handled, q.slaMiss, q.sla, q.abandoned, q.abandonRate, q.avgRing, q.maxRing, q.avgTalk, q.maxTalk, q.totalTalk])]
+         ...queueStats.map(q => [q.callqueue, q.description, q.site, q.totalCalls, q.offered, q.handled, q.slaMiss, q.sla, q.abandoned, q.abandonRate, q.avgRing, q.maxRing, q.avgTalk, q.maxTalk, q.totalTalk, q.holdAvg, q.holdTotal])]
       : [
           ['metric', 'value'],
           ['waiting', kpis.waiting ?? 0],
@@ -644,7 +646,9 @@ function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, o
           h('td', {className: 'qs-num'}, fmt(maxBy(statsFiltered, 'maxRing'))),
           h('td', {className: 'qs-num'}, fmt(weightedMean(statsFiltered, 'avgTalk', 'handled'))),
           h('td', {className: 'qs-num'}, fmt(maxBy(statsFiltered, 'maxTalk'))),
-          h('td', {className: 'qs-num'}, fmt(sumBy(statsFiltered, 'totalTalk')))
+          h('td', {className: 'qs-num'}, fmt(sumBy(statsFiltered, 'totalTalk'))),
+          h('td', {className: 'qs-num'}, fmt(weightedMean(statsFiltered, 'holdAvg', 'holdCalls'))),
+          h('td', {className: 'qs-num'}, fmt(sumBy(statsFiltered, 'holdTotal')))
         )
       : null;
   const overallSla = statsTotals.slaWBase ? (statsTotals.slaW / statsTotals.slaWBase) : 0;
@@ -789,7 +793,9 @@ function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, o
                   numCell(q, 'maxRing', fmt(q.maxRing || 0), 'answered', null),
                   numCell(q, 'avgTalk', fmt(q.avgTalk || 0), 'answered', null),
                   numCell(q, 'maxTalk', fmt(q.maxTalk || 0), 'answered', null),
-                  numCell(q, 'totalTalk', fmt(q.totalTalk || 0), 'answered', null)
+                  numCell(q, 'totalTalk', fmt(q.totalTalk || 0), 'answered', null),
+                  numCell(q, 'holdAvg', fmt(q.holdAvg || 0), 'total', null),
+                  numCell(q, 'holdTotal', fmt(q.holdTotal || 0), 'total', null)
                 );
               })
         )

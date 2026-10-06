@@ -190,6 +190,10 @@ try {
             'waitSum' => 0,
             'talkSum' => 0,
             'talkN' => 0,
+            /* Sprint B: hold seconds, counted only on the calls that used hold,
+             * exactly like the dashboard summary and the per-agent figures. */
+            'holdSum' => 0,
+            'holdN' => 0,
         ];
     }
 
@@ -313,6 +317,16 @@ try {
         }
         $queueStats[$through]['totalCalls']++;
         $queueStats[$through]['slaSeconds'] = $queueTarget($through);
+        /*
+         * Hold is accumulated for every call that reached the queue, answered
+         * or not: a caller who held and then abandoned still held, and dropping
+         * those made the queue's average look better than the agent's own.
+         */
+        $queueHold = holdSeconds($row);
+        if ($queueHold > 0) {
+            $queueStats[$through]['holdSum'] += $queueHold;
+            $queueStats[$through]['holdN']++;
+        }
         if ($answeredCall) {
             $queueStats[$through]['answered']++;
             $queueStats[$through]['waitSum'] += $wait;
@@ -657,6 +671,9 @@ try {
                     'avgRing' => $waitN ? (int)round($st['waitSum'] / $waitN) : 0,
                     'avgTalk' => $talkN ? (int)round($st['talkSum'] / $talkN) : 0,
                     'totalTalk' => (int)$st['talkSum'],
+                    'holdCalls' => (int)$st['holdN'],
+                    'holdAvg' => $st['holdN'] ? (int)round($st['holdSum'] / $st['holdN']) : 0,
+                    'holdTotal' => (int)$st['holdSum'],
                 ];
             }, $queueStats)),
         ],
