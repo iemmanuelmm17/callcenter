@@ -431,6 +431,10 @@ console.log('\n== call modal: recording + sip flow (P7) ==');
   const flowCol = cols.find(c => c.title === 'SIP flow');
   check('the drill-down table is built with a SIP flow column', !!flowCol,
     cols.map(c => c.title).join('|'));
+  /* QA-11: the columns now live in call-modal-columns.js — pin the set. */
+  check('the drill-down table keeps its full column set and order',
+    cols.map(c => c.title).join('|') === 'Date|Time|Type|From Name|From|Dialed|To|Talk|Ring|Reason|Total|Rec|SIP flow',
+    cols.map(c => c.title).join('|'));
   check('the Rec column is bound to hasRecordingHint and the flow column to hasFlowHint',
     !!recCol && recCol.field === 'hasRecordingHint' && !!flowCol && flowCol.field === 'hasFlowHint',
     [recCol && recCol.field, flowCol && flowCol.field]);

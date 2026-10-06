@@ -10,6 +10,24 @@ import { skel, skelKpis, skelPanel } from './ui.js';
 import { fmtNum } from '../lib/format.js';
 import { h } from '../lib/react.js';
 import { APP_TZ, nsTimestampParts, parseCallInstant, tzParts } from '../lib/time.js';
+import {
+    getAdditionalCase,
+    getAdditionalPrompt,
+    getAdditionalTier,
+    getAnswer,
+    getCaller,
+    getCase,
+    getDestination,
+    getDirection,
+    getDisconnectReason,
+    getEnd,
+    getQueue,
+    getStart,
+    getTalkSeconds,
+    getTotalSeconds,
+    isAdditionalTier,
+    value
+} from '../lib/aa-call-fields.js';
 
 function AutoAttendantReport({
     data,
@@ -71,125 +89,16 @@ function AutoAttendantReport({
      * =========================================================
      */
 
-    const value = (call, ...keys) => {
-
-        for (const key of keys) {
-
-            if (
-                call[key] !== undefined &&
-                call[key] !== null &&
-                String(call[key]).trim() !== ''
-            ) {
-                return call[key];
-            }
-        }
-
-        return '';
-    };
-
-    const getCaller = call =>
-        value(
-            call,
-            'caller',
-            'origCaller',
-            'call-orig-caller-id'
-        );
-
-    const getCase = call =>
-        String(
-            value(call, 'case')
-        ).trim();
-
-    const getAdditionalTier = call =>
-        String(
-            value(call, 'additionalTier')
-        ).trim();
-
-    const getAdditionalPrompt = call =>
-        String(
-            value(call, 'additionalPrompt')
-        ).trim();
-
-    const getAdditionalCase = call =>
-        String(
-            value(call, 'additionalCase')
-        ).trim();
-
-    const getQueue = call =>
-        String(
-            value(call, 'queue')
-        ).trim();
-
-    const getDestination = call =>
-        String(
-            value(call, 'destination')
-        ).trim();
-
-    const getStart = call =>
-        value(
-            call,
-            'start',
-            'call-start-datetime'
-        );
-
-    const getAnswer = call =>
-        value(
-            call,
-            'answer',
-            'call-answer-datetime'
-        );
-
-    const getEnd = call =>
-        value(
-            call,
-            'end',
-            'call-disconnect-datetime'
-        );
-
-    const getTalkSeconds = call =>
-        Number(
-            value(
-                call,
-                'talkSeconds',
-                'call-talking-duration-seconds'
-            )
-        ) || 0;
-
-    const getTotalSeconds = call =>
-        Number(
-            value(
-                call,
-                'totalSeconds',
-                'call-total-duration-seconds'
-            )
-        ) || 0;
-
-    const getDisconnectReason = call =>
-        String(
-            value(
-                call,
-                'disconnectReason',
-                'call-disconnect-reason-text'
-            )
-        ).trim();
-
-    const getDirection = call =>
-        Number(
-            value(
-                call,
-                'direction',
-                'call-direction'
-            )
-        );
+    /*
+     * Field readers (getCaller, getStart, ...) live in lib/aa-call-fields.js
+     * so they can be unit-tested without rendering this page (QA-11).
+     */
 
     /*
      * =========================================================
      * ADDITIONAL TIER
      * =========================================================
      */
-
-    const isAdditionalTier = call =>
-        getAdditionalTier(call) !== '';
 
     const additionalTierCalls =
         calls.filter(isAdditionalTier);
