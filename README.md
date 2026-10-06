@@ -37,6 +37,33 @@ immutable`): their names change whenever their bytes do, so a deploy cannot be
 half-served. `npm run build:prod` before committing any source change — `npm
 test` fails if the committed pair is stale.
 
+**Upload in binary mode, and verify it.** Every vendored file and both build
+artifacts are loaded with a Subresource Integrity hash, so the bytes that arrive
+at the browser must be the bytes in `VENDOR.json` / `build-manifest.json`. An
+ASCII-mode FTP transfer rewrites LF as CRLF, the browser then blocks the file
+("failed to find a valid digest in the integrity attribute") and the dashboard
+renders blank. Two things are here to make that visible rather than mysterious:
+
+* the repository pins line endings in `.gitattributes` (`* text=auto eol=lf`,
+  and `-text` for everything whose bytes are hashed), so a Windows checkout
+  cannot rewrite them either;
+* `node tools/deploy-check.mjs <base-url>` fetches what the server is actually
+  serving and compares it byte for byte with this repository, naming any file
+  that differs and saying whether the cause was a line-ending rewrite:
+
+  ```
+  node tools/deploy-check.mjs http://example.com/callscope/
+  npm run deploy:check -- http://example.com/callscope/
+  ```
+
+  It also checks that the manifests on the server are this revision's, so a
+  deploy of the wrong tree is reported as such. Exit code is 1 on any mismatch,
+  so it can gate a deploy script.
+
+If a mangled upload does get through, the page says so itself: portal.php stats
+every file the manifests name and renders a `#deploy-warning` block listing the
+files whose size does not match, above the (blocked) app.
+
 ## Third-party assets
 
 The page loads React, ReactDOM, Chart.js, Font Awesome and IBM Plex Mono from

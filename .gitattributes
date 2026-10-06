@@ -1,0 +1,22 @@
+# Line endings, and why they are pinned here.
+#
+# The files under assets/vendor/ and the deployed build (assets/js/app.<hash>.js,
+# assets/css/app.<hash>.css, assets/build-manifest.json) are loaded with
+# Subresource Integrity: the browser hashes the bytes it receives and blocks the
+# file when they differ from the hash recorded in VENDOR.json or
+# build-manifest.json. A checkout that rewrites LF to CRLF changes exactly those
+# bytes, and the page then fails with "failed to find a valid digest in the
+# integrity attribute" — which is what happened on a Windows clone of this
+# repository (QA-3 deploy hotfix).
+#
+# So: LF in the repository, LF in the working tree, on every platform. There is
+# no autocrlf setting anywhere that can win over an attribute.
+* text=auto eol=lf
+
+# Hashed byte-for-byte — never converted, never normalized.
+assets/vendor/** -text
+assets/js/app.js -text
+assets/js/app.*.js -text
+assets/css/app.css -text
+assets/css/app.*.css -text
+assets/build-manifest.json -text

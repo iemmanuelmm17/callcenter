@@ -34,6 +34,45 @@ if (is_readable($buildPath)) {
     }
 }
 
+/*
+ * QA-3 deploy check: the integrity hashes only mean anything if the bytes that
+ * arrive at the browser are the bytes in the manifest. A transfer that rewrites
+ * line endings (FTP in ASCII mode, a Windows editor, a plain `cp` through a
+ * text-mode tool) changes every size in assets/vendor/VENDOR.json and makes the
+ * browser block the file — from the operator's side: a blank dashboard and a
+ * console error. stat() is metadata, so compare every declared size on each
+ * render and say so in the page instead of failing silently.
+ */
+$deployProblems = [];
+$checkBytes = static function (string $relative, int $expected, string $label) use (&$deployProblems): void {
+    $full = __DIR__ . '/' . $relative;
+    if (!is_file($full)) {
+        $deployProblems[] = $label . ' is missing (' . $relative . ')';
+        return;
+    }
+    $actual = filesize($full);
+    if ($actual !== $expected) {
+        $deployProblems[] = sprintf(
+            '%s is %s bytes on disk but %s in the manifest (%s)',
+            $label,
+            number_format($actual),
+            number_format($expected),
+            $relative
+        );
+    }
+};
+if ($vendorManifest !== null) {
+    foreach (($vendorManifest['files'] ?? []) as $entry) {
+        if (isset($entry['target'], $entry['bytes'])) {
+            $checkBytes((string)$entry['target'], (int)$entry['bytes'], (string)($entry['id'] ?? 'vendor file'));
+        }
+    }
+}
+if ($buildManifest !== null) {
+    $checkBytes((string)$buildManifest['js']['file'], (int)$buildManifest['js']['bytes'], 'the bundle');
+    $checkBytes((string)$buildManifest['css']['file'], (int)$buildManifest['css']['bytes'], 'the stylesheet');
+}
+
 function assetTag(array $entry, string $kind): string
 {
     $integrity = isset($entry['sha384'])
@@ -87,6 +126,20 @@ function vendorTag(array $entry): string
 <?php endif; ?>
 </head>
 <body class="min-h-screen bg-slate-950 text-slate-200 antialiased">
+<?php if ($deployProblems !== []): ?>
+  <!-- The files on this server are not the files in the manifest. The integrity
+       hashes still fail closed (that is what blocks the scripts), so this is a
+       deploy problem, not a tampering one — see tools/deploy-check.mjs. -->
+  <div id="deploy-warning" style="margin:1.5rem;padding:1rem 1.25rem;border:1px solid #b91c1c;background:#450a0a;color:#fecaca;font:13px/1.6 ui-monospace,monospace">
+    <strong>Deploy problem: <?= count($deployProblems) ?> file<?= count($deployProblems) === 1 ? '' : 's' ?> on this server do not match assets/vendor/VENDOR.json.</strong>
+    <ul style="margin:.5rem 0 0 1.1rem;padding:0">
+<?php foreach ($deployProblems as $problem): ?>
+      <li><?= htmlspecialchars($problem, ENT_QUOTES) ?></li>
+<?php endforeach; ?>
+    </ul>
+    <p style="margin:.6rem 0 0">Every script above carries an integrity hash, so the browser blocks any file whose bytes differ from the manifest — the dashboard will stay blank until the upload is fixed. Upload in <strong>binary mode</strong> (an ASCII-mode FTP transfer rewrites LF as CRLF and changes every hash), then verify with <code>node tools/deploy-check.mjs &lt;base-url&gt;</code>.</p>
+  </div>
+<?php endif; ?>
   <div id="root"></div>
 
 <?php if ($buildManifest !== null): ?>

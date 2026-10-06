@@ -91,6 +91,65 @@ git update-ref -d refs/original/…   # then reflog expire --expire=now --all &&
   git remote set-head origin -a
   ```
 
+## Deploy hotfix — the integrity hashes vs a CRLF upload
+
+**Reported from the deployed server:** the browser refused
+`assets/vendor/chart.js/chart.umd.js` with
+
+```
+Failed to find a valid digest in the 'integrity' attribute … with computed
+SHA-384 integrity 'cxXbu9HOn/Jw1+RQ88i8dDge6E6nLsrhWlv5BEuiMd1ZCuLQui8frGqdvY8L9wcL'.
+The resource has been blocked.
+```
+
+**Diagnosis.** The hash the browser computed for the file it received is not the
+hash we shipped, and it is not a version problem: it is exactly the sha384 of
+our file with LF rewritten as CRLF.
+
+```
+as committed (LF)   sha384-zYPBGXwO4633CABX/5Spf6emCKUJCfoOkhOMYyxMsatqQZPnDblmmOewfjsIVWCM  205,615 bytes
+LF -> CRLF          sha384-cxXbu9HOn/Jw1+RQ88i8dDge6E6nLsrhWlv5BEuiMd1ZCuLQui8frGqdvY8L9wcL  205,629 bytes  ← what the browser got
+```
+
+14 line feeds became 14 CRLF pairs. The vendored Chart.js is protected by the
+integrity attribute we added in QA-3, so the browser did the right thing and
+blocked it — the deploy transferred text as text. The same thing would hit
+`assets/js/app.<hash>.js` (230 kB, ~28 line endings), i.e. the whole app.
+
+**Why it could happen at all.** Two doors were open: an FTP/SFTP transfer in
+ASCII mode rewrites line endings on the way up, and a Windows checkout of a
+repository with no `.gitattributes` hands you CRLF files in the working tree to
+upload in the first place. The code in the repository was correct; the bytes
+that reached the server were not.
+
+**Fixes, in order of importance:**
+
+1. **`.gitattributes` (new).** `* text=auto eol=lf`, and `-text` for every path
+   whose bytes are hashed (`assets/vendor/**`, `assets/js/app*.js`,
+   `assets/css/app*.css`, `assets/build-manifest.json`). LF in the repository
+   and LF in the working tree, on every platform, whatever `core.autocrlf` says.
+2. **`tools/deploy-check.mjs` (new).** `node tools/deploy-check.mjs <base-url>`
+   fetches what the server serves and compares every manifest-listed file with
+   this repository: status, byte count, sha384 — and it distinguishes "the same
+   text with CRLF" from "a different file". It also compares the server's own
+   `VENDOR.json` / `build-manifest.json` with ours, so deploying the wrong
+   revision is reported as such. Exit code 1 on any mismatch, so a deploy script
+   can gate on it. `tests/js/deploy-check.mjs` (new suite) proves the diagnosis
+   against three staged trees: identical, CRLF-converted, one byte flipped.
+3. **`portal.php` says it in the page.** It now stats every file the manifests
+   name and, when a size does not match, renders a `#deploy-warning` block
+   naming the files and both sizes above `<div id="root">`, with the binary-mode
+   instruction. `stat()` is metadata, so this costs nothing per render; the
+   integrity attributes still fail closed and are still the actual protection.
+   `tests/php/portal.mjs` covers it (a correctly-sized tree renders no warning;
+   a CRLF-sized file is named with both numbers).
+
+**For the operator:** re-upload `assets/` in **binary mode** (FTP clients have a
+transfer-type setting; `scp`, `rsync`, `zip` and `robocopy` never rewrite line
+endings), then run `node tools/deploy-check.mjs <base-url>` and confirm it says
+`DEPLOY OK`. On a Windows machine, refresh the working tree first so it really
+is the repository's bytes: `git rm -r --cached . && git reset --hard HEAD`.
+
 ## QA-5 — Settings: supervisors read, managers write
 
 `api/settings.php` had one `GET`/`POST` for everyone: the panel was in every
@@ -212,6 +271,9 @@ a console.error); and the calendar extraction left the picker without its
 * `node tools/module-budget.mjs` — 37 modules, 13,310 lines, largest 1,459.
 * `node tools/prod-build.mjs` — `PROD BUILD OK — hashed, minified,
   integrity-checked, in sync with the sources`.
+* `node tests/js/deploy-check.mjs` — `DEPLOY CHECK OK — the tool catches the
+  incident it was written for`; `node tools/deploy-check.mjs .` against this
+  working tree — `DEPLOY OK — all 15 files match this repository byte for byte`.
 * History purge — see the verification list above (all four checks pass, both
   remote refs confirmed).
 

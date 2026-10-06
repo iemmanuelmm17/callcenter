@@ -114,6 +114,48 @@ check('a malformed manifest falls back to the dev build instead of breaking',
 check('the app bundle is still loaded',
   tags.some(t => /src="assets\/js\/app\.js"/.test(t)), tags.join(' ').slice(0, 160));
 
+console.log('\n== portal.php: a deploy that changed the bytes says so ==');
+{
+  /*
+   * The integrity hashes fail closed, which means a mangled upload produces a
+   * blank dashboard and a console error — the operator's only clue. portal.php
+   * compares every declared size (stat, not read) and names the files in the
+   * page. The sizes are what matter here, so the stubs are only as long as the
+   * manifest says; tools/deploy-check.mjs is what compares real bytes.
+   */
+  /* The first render had the manifest but no files on disk at all. */
+  check('a manifest whose files are not on the server is reported',
+    html.includes('id="deploy-warning"') && /do not match assets\/vendor\/VENDOR\.json/.test(html),
+    (html.match(/Deploy problem[^<]*/) || [''])[0]);
+
+  const vendorFiles = new Map((manifest.files || []).map(f => [f.target, f.bytes]));
+  for (const [relative, bytes] of vendorFiles) {
+    await harness.write(relative, 'x'.repeat(bytes));
+  }
+  await harness.write(buildManifest.js.file, 'x'.repeat(buildManifest.js.bytes));
+  await harness.write(buildManifest.css.file, 'x'.repeat(buildManifest.css.bytes));
+  const matching = await harness.script(`require '${TMP}/portal.php';`);
+  check('every file the right size renders no warning', !matching.includes('deploy-warning'),
+    (matching.match(/<div id="deploy-warning"[\s\S]{0,200}/) || [''])[0]);
+
+  /* Now the incident: one file arrives with CRLF instead of LF. */
+  const chart = 'assets/vendor/chart.js/chart.umd.js';
+  const crlfBytes = vendorFiles.get(chart) + 14;
+  await harness.write(chart, 'x'.repeat(crlfBytes));
+  const mangled = await harness.script(`require '${TMP}/portal.php';`);
+  check('a file whose size differs from the manifest is reported in the page',
+    mangled.includes('id="deploy-warning"') && mangled.includes('Deploy problem'), mangled.slice(mangled.indexOf('deploy-warning') - 40, mangled.indexOf('deploy-warning') + 120));
+  /* Sizes are printed for a human, so they carry thousands separators. */
+  const human = n => n.toLocaleString('en-US');
+  check('the report names the file and both sizes',
+    mangled.includes(chart) && mangled.includes(human(crlfBytes)) && mangled.includes(human(vendorFiles.get(chart))),
+    [human(crlfBytes), human(vendorFiles.get(chart))]);
+  check('the report explains the binary-mode fix',
+    /binary mode/i.test(mangled) && /deploy-check\.mjs/.test(mangled));
+  check('the report counts only the mangled file', /1 file on this server does not match/.test(mangled) ||
+    /Deploy problem: 1 file/.test(mangled), (mangled.match(/Deploy problem[^<]*/) || [''])[0]);
+}
+
 console.log('\n== portal.php: lazy Tabulator hashes for the bundle ==');
 const manifestNode = (html.match(/<script type="application\/json" id="vendor-manifest">([\s\S]*?)<\/script>/) || [])[1];
 let lazy = null;
