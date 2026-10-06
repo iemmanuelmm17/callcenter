@@ -1,3 +1,50 @@
+# CHANGES — Reporting layer split behind a facade, plus the splitter tool (2026-10-06)
+
+**Scope:** structure only. Every function keeps its name, signature, guards and
+byte-identical body; no caller changed, no endpoint contract changed.
+**Files:** `includes/reporting.php` (2,348 → 41 lines, now a facade),
+`includes/reporting/{cache,support,cdr_fields,rows,inventory,cradle,settings}.php`
+(new), `tools/split-php-file.mjs` + `tools/reporting-modules.json` (new),
+`tests/php/php.mjs`, `README.md`.
+
+## What moved where
+
+| module | lines | contents |
+| --- | --- | --- |
+| `reporting/cache.php` | 304 | day-cache read/write, TTL, range status, warming, raw CDR load |
+| `reporting/support.php` | 186 | timezone/date maths, durations, percentile, exception logging |
+| `reporting/cdr_fields.php` | 464 | per-CDR field accessors and call classification |
+| `reporting/rows.php` | 901 | row sets, aggregation, SLA resolution, AA/inventory reads |
+| `reporting/inventory.php` | 316 | PBX list caches, phone normalisation, user directory |
+| `reporting/cradle.php` | 138 | cradle path helpers (the `function_exists` guards are preserved) |
+| `reporting/settings.php` | 113 | domain settings file handling |
+
+`includes/reporting.php` still exists and still requires `auth.php` and
+`PbxClient.php` first, so all 17 endpoints and every include that requires it
+keep working untouched.
+
+## How the split was done, and why that is safe
+
+`tools/split-php-file.mjs` locates each top-level declaration with php-parser
+(offsets, not text matching), keeps docblocks attached, preserves the original
+order inside each module, and refuses to run unless the map covers every
+function exactly once. The map is committed as `tools/reporting-modules.json`.
+
+Verification that nothing was altered: hashing every function's exact source
+text before and after gives **74 functions before, 74 after, 0 missing, 0
+added, 0 changed bytes**. The full PHP suite then exercises the result: API
+matrix 86 checks, CSV exports 17, URL policy 62 — all pass, which means every
+endpoint still produces the same responses through the new facade.
+
+The test harness had to learn one thing: `tests/php/php.mjs` now mirrors
+`includes/` recursively (it copied only the flat `includes/*.php` before), so
+the package is present inside the phpwasm interpreter too.
+
+## Deploy note
+
+`includes/reporting/` is new — the deploy set for this commit is
+`includes/reporting.php` **and** `includes/reporting/*.php`. Nothing else.
+
 # CHANGES — CSV exports export everything, not just the visible page (2026-10-06)
 
 **Scope:** export correctness + the bugs found while auditing every export in

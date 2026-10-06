@@ -1,0 +1,91 @@
+{
+  "__facade__": "Facade for the reporting layer.\n *\n * includes/reporting.php used to be 2,348 lines holding the day cache, time\n * helpers, CDR field accessors, row sets, PBX-list caches, cradle helpers and\n * domain settings. It is now a facade over the modules below; every function\n * keeps its name, signature and behaviour, so no caller changed.\n *\n * Module map (see tools/split-php-file.mjs, which produced the split):\n *   reporting/cache.php     day cache read/write, range status, warming, raw load\n *   reporting/support.php   timezone/date maths, durations, logging\n *   reporting/cdr_fields.php per-CDR accessors and call classification\n *   reporting/rows.php      row sets, aggregation, SLA resolution, AA/inventory reads\n *   reporting/inventory.php PBX list caches, phone normalisation, user directory\n *   reporting/cradle.php    cradle path helpers (guarded: also defined elsewhere)\n *   reporting/settings.php  domain settings file handling\n *\n * Adding a reporting function? Put it in the module that matches its concern\n * and make sure includes/reporting.php still requires that module.",
+  "includes/reporting/cache.php": [
+    "isClosedRange",
+    "cacheFile",
+    "cdrDayCacheTtl",
+    "readCdrDayCache",
+    "writeCdrDayCache",
+    "nodeCdrDir",
+    "readNodeDayJsonl",
+    "loadRawCdrs",
+    "reportingDateList",
+    "cdrDayIsCached",
+    "cdrRangeCacheStatus",
+    "warmCdrDay",
+    "cdrCacheKey"
+  ],
+  "includes/reporting/support.php": [
+    "reportingTimezone",
+    "easternDayWindow",
+    "parseEasternDateTime",
+    "seconds",
+    "ringSeconds",
+    "callLocalDate",
+    "filterCallsByLocalDate",
+    "percentileInt",
+    "appExceptionLog"
+  ],
+  "includes/reporting/cdr_fields.php": [
+    "cdrFirstField",
+    "cdrDigits",
+    "cdrLooksLikeVoicemail",
+    "cdrLooksExternalNumber",
+    "cdrExtractExt",
+    "cdrOnnetFlag",
+    "cdrQueueMatch",
+    "classifyCdrType",
+    "callType",
+    "callAgent",
+    "callDepartment",
+    "callSite",
+    "callWentQueueOrAa",
+    "missedKind",
+    "callDisconnectReason",
+    "callPartyIsOutbound",
+    "callFromName",
+    "callFrom",
+    "callFromNumber",
+    "callDialed",
+    "callTo",
+    "normalizeCdrs",
+    "phoneNumberFromCdr",
+    "cdrMatchesPhoneNumber"
+  ],
+  "includes/reporting/rows.php": [
+    "reportingCdrRows",
+    "scopedCdrs",
+    "filterCallTypes",
+    "summary",
+    "previousFilters",
+    "agentPerformance",
+    "findRelatedCdrs",
+    "extractDtmfCase",
+    "resolveAaAdditionalTier",
+    "loadAaCdrs",
+    "reportingInventory",
+    "resolveSlaSeconds"
+  ],
+  "includes/reporting/inventory.php": [
+    "cachedUsers",
+    "cachedCallQueues",
+    "cachedCallQueueAgents",
+    "phoneNumberCacheFile",
+    "cachedPhoneNumbers",
+    "normalizePhoneNumber",
+    "userDirectory"
+  ],
+  "includes/reporting/cradle.php": [
+    "cradleExtractExt",
+    "cradleUnix10",
+    "cradleKeyFromCdr",
+    "cradlePortalPath",
+    "cradleHopsFromEvents"
+  ],
+  "includes/reporting/settings.php": [
+    "domainSettingsFile",
+    "defaultDomainSettings",
+    "loadDomainSettings",
+    "saveDomainSettings"
+  ]
+}

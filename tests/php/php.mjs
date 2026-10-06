@@ -12,7 +12,7 @@
  * JSON shapes, scoping helpers, pure computation (concurrency, summaries).
  * What it cannot prove: live PBX behaviour (curl) or MySQL/SQLite servers.
  */
-import { readFileSync, readdirSync, mkdirSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import PhpNodePkg from 'php-wasm/PhpNode.js';
@@ -221,15 +221,22 @@ define('PBX_SERVERS', ['nms1' => 'https://pbx.example']);
 `);
     await this.write('includes/bootstrap.php', BOOTSTRAP_STUB);
     await this.write('includes/PbxClient.php', PBX_STUB);
-    for (const name of readdirSync(path.join(ROOT, 'includes'))) {
-      if (!name.endsWith('.php') || ['config.php', 'bootstrap.php', 'PbxClient.php'].includes(name)) continue;
-      const source = readFileSync(path.join(ROOT, 'includes', name), 'utf8');
-      await this.write(`includes/${name}`, source);
-    }
-    for (const name of readdirSync(path.join(ROOT, 'api'))) {
-      if (!name.endsWith('.php')) continue;
-      await this.write(`api/${name}`, readFileSync(path.join(ROOT, 'api', name), 'utf8'));
-    }
+    /* Mirror includes/ recursively (reporting/ is a package of modules) and
+     * api/ flat, skipping the files the harness replaces with stubs. */
+    const skip = new Set(['config.php', 'bootstrap.php', 'PbxClient.php']);
+    const mirror = async (absolute, relative) => {
+      for (const name of readdirSync(absolute)) {
+        const full = path.join(absolute, name);
+        if (statSync(full).isDirectory()) {
+          await mirror(full, `${relative}/${name}`);
+          continue;
+        }
+        if (!name.endsWith('.php') || (relative === 'includes' && skip.has(name))) continue;
+        await this.write(`${relative}/${name}`, readFileSync(full, 'utf8'));
+      }
+    };
+    await mirror(path.join(ROOT, 'includes'), 'includes');
+    await mirror(path.join(ROOT, 'api'), 'api');
     this.includes = this.relativeIncludes();
     return this;
   }

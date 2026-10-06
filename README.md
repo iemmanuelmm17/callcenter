@@ -8,7 +8,8 @@ JSON cache of PBX CDRs under `cache/`.
 index.php            → redirects into the app shell (portal.php)
 portal.php           → the HTML shell that boots assets/js/app.js
 api/*.php            → one endpoint per view (session + role gated, JSON in/out)
-includes/            → shared code: bootstrap, auth, PBX client, reporting, config
+includes/            → shared code: bootstrap, auth, security, export, PBX client, config
+includes/reporting/  → the reporting layer as modules, loaded by includes/reporting.php
 assets/js/app.js     → BUILT bundle (generated — never edit by hand)
 assets/js/src/       → bundle source (this is what you edit)
 assets/css/app.css   → BUILT stylesheet (generated — never edit by hand)
@@ -20,7 +21,8 @@ tests/, tools/       → development harness (not deployed)
 ## Deploying
 
 The deployed application is plain PHP + static files: copy `*.php`, `api/`,
-`includes/`, `assets/`, and `CHANGES.md` to the web root. There is no build step
+`includes/` **including `includes/reporting/`**, `assets/`, and `CHANGES.md` to
+the web root. There is no build step
 on the server and no database to migrate — the front end is the committed bundle.
 
 Configuration comes from the environment (`PBX_SERVERS`, `PBX_CLIENT_ID`,
