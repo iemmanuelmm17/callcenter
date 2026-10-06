@@ -6,7 +6,7 @@
 
 import { CallFlowDialog, loadCallFlow } from './call-flow-dialog.js';
 import { RecordingPlayer } from './recording-player.js';
-import { CallTypeIcon, NavIcon, skel } from './ui.js';
+import { CallTypeIcon, ErrorState, NavIcon, skel } from './ui.js';
 import { api, apiDownload } from '../lib/api.js';
 import { fmt, fmtNum, histInitials, histOutcomeMeta, histPartyLabel, histTypeTone } from '../lib/format.js';
 import { h, keyActivate, useEffect, useEscape, useRef, useState } from '../lib/react.js';
@@ -30,6 +30,8 @@ function CallHistoryDashboard({ filters, callTypes }) {
   const [insight, setInsight] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  /* Bumped by Retry. */
+  const [reload, setReload] = useState(0);
   const [openRec, setOpenRec] = useState(null);
   const [flow, setFlow] = useState(null);
   const [exporting, setExporting] = useState(false);
@@ -73,7 +75,7 @@ function CallHistoryDashboard({ filters, callTypes }) {
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [filters, callerQ, calledQ, agentQ, outcome, page, size, callTypes]);
+  }, [filters, callerQ, calledQ, agentQ, outcome, page, size, callTypes, reload]);
 
   /*
    * Only one recording open at a time: collapsing the previous row
@@ -285,7 +287,7 @@ function CallHistoryDashboard({ filters, callTypes }) {
         disabled: exporting || loading || total === 0
       }, exporting ? 'Exporting…' : 'Export CSV')
     ),
-    error ? h('div', { className: 'border border-rose-900 bg-rose-950/30 p-3 text-sm text-rose-300' }, error) : null,
+    error ? h(ErrorState, {message: error, onRetry: () => setReload(n => n + 1), className: 'mb-2 text-sm'}) : null,
     h('div', { className: 'q-table-wrap hist-table-wrap' },
       h('table', { className: 'q-table hist-table' },
         h('thead', null,

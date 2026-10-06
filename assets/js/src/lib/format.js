@@ -51,6 +51,13 @@ function histOutcomeMeta(outcome) {
   return { label: 'Unknown', tone: 'dim' };
 }
 
+/*
+ * NANP display format, shared by every screen (QA-9). Anything that is not a
+ * 10/11-digit North-American number — an extension, an international number, a
+ * SIP URI — is returned untouched rather than guessed at: a wrong grouping
+ * reads as a data bug. telephone-numbers.js used to carry a byte-identical
+ * private copy (formatTopNumber).
+ */
 const formatPhoneNumber = value => {
   const digits = String(value || '').replace(/\D/g, '');
   if (digits.length === 10) return `(${digits.slice(0,3)}) ${digits.slice(3,6)}-${digits.slice(6)}`;

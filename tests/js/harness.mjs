@@ -279,6 +279,17 @@ export async function createHarness(options = {}) {
     }
 
     if (/^https?:/.test(href)) return binaryResponse('');
+
+    /*
+     * A fixture tagged {__status: 502, ...} is answered with that status, so a
+     * test can force a panel failure, restore the fixture, and assert the
+     * Retry button recovers (QA-9).
+     */
+    if (fixture && typeof fixture === 'object' && fixture.__status) {
+      const {__status, ...body} = fixture;
+      return jsonResponse(body, __status);
+    }
+
     return jsonResponse(fixture);
   };
 

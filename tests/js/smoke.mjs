@@ -349,6 +349,35 @@ console.log('\n== agent KPI scope is the table it was clicked in ==');
   }
 }
 
+console.log('\n== error states: one look, one retry (QA-9) ==');
+{
+  /* Force the queue panel to fail, then let Retry put it back. */
+  const originalQueue = FIXTURES.queue;
+  await goTo('Dashboard');
+  await flush(4);
+  FIXTURES.queue = {__status: 502, error: 'Unable to load queues.'};
+  requested.length = 0;
+  await goTo('Queues');
+  await flush(10);
+
+  const alert = document.querySelector('[role="alert"]');
+  check('a failed panel shows the shared error block',
+    !!alert && /Unable to load queues/.test(alert.textContent),
+    alert && alert.textContent.slice(0, 120));
+  const retry = alert && [...alert.querySelectorAll('button')].find(b => /^Retry$/.test(b.textContent.trim()));
+  check('the error block offers a Retry button', !!retry, alert && alert.outerHTML.slice(0, 200));
+
+  FIXTURES.queue = originalQueue;
+  const before = requested.length;
+  if (retry) await click(retry);
+  await flush(10);
+  check('Retry re-requests the panel and recovers',
+    requested.length > before &&
+      requested.filter(r => r.endpoint === 'queue').length >= 2 &&
+      !document.querySelector('[role="alert"]'),
+    requested.map(r => r.endpoint).slice(-4));
+}
+
 console.log('\n== call modal: recording + sip flow (P7) ==');
 {
   /* The dashboard's Total calls KPI opens the modal with a row that has a

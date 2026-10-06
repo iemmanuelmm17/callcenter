@@ -498,6 +498,25 @@
       ) : null
     );
   }
+  function ErrorState({ message, onRetry, className = "" }) {
+    return h(
+      "div",
+      {
+        role: "alert",
+        className: "border border-rose-900 bg-rose-950/30 p-3 text-xs text-rose-300 " + className
+      },
+      h("span", null, message || "Unable to load this panel."),
+      typeof onRetry === "function" ? h(
+        "button",
+        {
+          type: "button",
+          className: "ml-3 font-semibold text-rose-200 underline hover:text-rose-100",
+          onClick: onRetry
+        },
+        "Retry"
+      ) : null
+    );
+  }
   function CallTypeIcon({ type, size = 14 }) {
     const t = String(type || "").toLowerCase();
     const phone = "M1.885.511a1.745 1.745 0 0 1 2.612.163L6.29 2.98c.329.423.445.974.315 1.494l-.547 2.19a.678.678 0 0 0 .178.643l2.457 2.457a.678.678 0 0 0 .644.178l2.189-.547a1.745 1.745 0 0 1 1.494.315l2.306 1.794c.829.645.905 1.87.163 2.611l-1.034 1.034c-.74.74-1.846 1.065-2.877.702a18.634 18.634 0 0 1-7.01-4.42 18.634 18.634 0 0 1-4.42-7.009c-.362-1.03-.037-2.137.703-2.877L1.885.511z";
@@ -2830,6 +2849,7 @@
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
+    const [reload, setReload2] = useState(0);
     const [intervalMinutes, setIntervalMinutes] = useState(15);
     const [search, setSearch] = useState("");
     const [minPeak, setMinPeak] = useState("");
@@ -2862,14 +2882,14 @@
       }).catch((err) => {
         if (cancelled) return;
         setData(null);
-        setError(err && err.message ? err.message : "Failed to load simultaneous calls.");
+        setError(err && err.message ? err.message : "Unable to load simultaneous calls.");
       }).finally(() => {
         if (!cancelled) setLoading(false);
       });
       return () => {
         cancelled = true;
       };
-    }, [filters?.start, filters?.end, filters?.department, filters?.site, intervalMinutes]);
+    }, [filters?.start, filters?.end, filters?.department, filters?.site, intervalMinutes, reload]);
     const summary = data && data.summary ? data.summary : {};
     const intervals = Array.isArray(data?.intervals) ? data.intervals : [];
     const byHour = Array.isArray(data?.byHour) ? data.byHour : [];
@@ -3176,7 +3196,7 @@
       return h(
         "section",
         { className: "min-w-0 flex-1 overflow-auto" },
-        h("section", { className: "border border-red-900 bg-slate-900 p-4 text-xs text-red-400" }, error)
+        h(ErrorState, { message: error, onRetry: () => setReload2((n) => n + 1), className: "bg-slate-900 text-xs" })
       );
     }
     if (loading) {
@@ -3655,7 +3675,7 @@
     return h(
       "section",
       { className: "border border-slate-700 bg-slate-900" },
-      error ? h("div", { className: "border-b border-rose-900 bg-rose-950/30 p-2 text-[11px] text-rose-300" }, error) : null,
+      error ? h(ErrorState, { message: error, onRetry: () => setReload((n) => n + 1), className: "border-x-0 border-t-0 p-2 text-[11px]" }) : null,
       h(
         "div",
         { className: "overflow-x-auto" },
@@ -3995,16 +4015,6 @@
       };
     }, [duration.map((d) => d.count).join("|")]);
     const topMax = Math.max(1, ...top.map((n) => n.calls));
-    const formatTopNumber = (value) => {
-      const digits = String(value || "").replace(/\D/g, "");
-      if (digits.length === 10) {
-        return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
-      }
-      if (digits.length === 11 && digits.startsWith("1")) {
-        return `(${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
-      }
-      return value || "";
-    };
     const panel = (title, hint, body, extra) => h(
       "section",
       { className: "border border-slate-700 bg-slate-900 p-2 " + (extra || "") },
@@ -4081,11 +4091,11 @@
               {
                 key: n.number,
                 type: "button",
-                title: "Open the inbound calls to " + formatTopNumber(n.number),
+                title: "Open the inbound calls to " + formatPhoneNumber(n.number),
                 onClick: () => onNumberClick && onNumberClick(n.number),
                 className: "flex w-full cursor-pointer items-center gap-2 text-left"
               },
-              h("span", { className: "w-24 shrink-0 truncate font-mono text-[10px] text-slate-400" }, formatTopNumber(n.number)),
+              h("span", { className: "w-24 shrink-0 truncate font-mono text-[10px] text-slate-400" }, formatPhoneNumber(n.number)),
               h(
                 "span",
                 { className: "min-w-0 flex-1" },
@@ -4155,6 +4165,7 @@
     const [typeFilter, setTypeFilter] = useState("all");
     const [hideZeroCalls, setHideZeroCalls] = useState(false);
     const [tnView, setTnView] = useState("inventory");
+    const [reload, setReload2] = useState(0);
     useEffect(() => {
       let cancelled = false;
       setLoading(true);
@@ -4170,14 +4181,14 @@
       }).catch((err) => {
         if (cancelled) return;
         setNumbers([]);
-        setError(err?.message || "Failed to load telephone numbers.");
+        setError(err?.message || "Unable to load telephone numbers.");
       }).finally(() => {
         if (!cancelled) setLoading(false);
       });
       return () => {
         cancelled = true;
       };
-    }, [filters?.start, filters?.end, filters?.department, filters?.site]);
+    }, [filters?.start, filters?.end, filters?.department, filters?.site, reload]);
     const term = search.toLowerCase().trim();
     const unusedCount = numbers.filter((p) => tnCallVolume(p) === 0).length;
     const visibleNumbers = useMemo(() => numbers.filter((phone) => {
@@ -4213,7 +4224,7 @@
       return h(
         "section",
         { className: "min-w-0 flex-1 overflow-auto p-3" },
-        h("section", { className: "border border-red-900 bg-slate-900 p-4 text-xs text-red-400" }, error)
+        h(ErrorState, { message: error, onRetry: () => setReload2((n) => n + 1), className: "bg-slate-900 text-xs" })
       );
     }
     if (loading) {
@@ -6526,13 +6537,14 @@
     });
     return direct.concat(proxied);
   }
+  var audioSeq = 0;
   function buildRecordingAudio(nsUrl, row) {
     const sources = recordingSources(nsUrl);
     if (!sources.length) return null;
     const audio = document.createElement("audio");
     audio.className = "cdraudio";
     audio.preload = "auto";
-    audio.id = "audio-" + String(row && (row.termCallId || row.origCallId || row.id) || "");
+    audio.id = "callscope-audio-" + ++audioSeq;
     if (row && row.origCallId) audio.setAttribute("data-orig-id", String(row.origCallId));
     if (row && row.termCallId) audio.setAttribute("data-term-id", String(row.termCallId));
     sources.forEach((source) => {
@@ -6798,6 +6810,7 @@
     const [insight, setInsight] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
+    const [reload, setReload2] = useState(0);
     const [openRec, setOpenRec] = useState(null);
     const [flow, setFlow] = useState(null);
     const [exporting, setExporting] = useState(false);
@@ -6842,7 +6855,7 @@
       return () => {
         cancelled = true;
       };
-    }, [filters, callerQ, calledQ, agentQ, outcome, page, size, callTypes]);
+    }, [filters, callerQ, calledQ, agentQ, outcome, page, size, callTypes, reload]);
     const toggleRec = (row, ev) => {
       if (ev) ev.stopPropagation();
       const id = String(row.id || row.origCallId || "");
@@ -7022,7 +7035,7 @@
           disabled: exporting || loading || total === 0
         }, exporting ? "Exporting\u2026" : "Export CSV")
       ),
-      error ? h("div", { className: "border border-rose-900 bg-rose-950/30 p-3 text-sm text-rose-300" }, error) : null,
+      error ? h(ErrorState, { message: error, onRetry: () => setReload2((n) => n + 1), className: "mb-2 text-sm" }) : null,
       h(
         "div",
         { className: "q-table-wrap hist-table-wrap" },
@@ -9133,7 +9146,7 @@
   }
 
   // assets/js/src/components/queue.js
-  function QueueDashboard({ filters, slaSeconds, slaPct, abandonPct, onSlaChange, onCallClick, paused, initialQueue }) {
+  function QueueDashboard({ filters, slaSeconds, slaPct, abandonPct, onSlaChange, onCallClick, initialQueue }) {
     const hourCanvas = useRef(null);
     const hourChart = useRef(null);
     const [term, setTerm] = useState("");
@@ -9155,11 +9168,8 @@
     const [statsSite, setStatsSite] = useState("");
     const [hideInactive, setHideInactive] = useState(true);
     const [sideCollapsed, setSideCollapsed] = useState(false);
+    const [reload, setReload2] = useState(0);
     useEffect(() => {
-      if (paused) {
-        setLoading(true);
-        return;
-      }
       let active = true;
       setLoading(true);
       setError("");
@@ -9177,7 +9187,7 @@
       return () => {
         active = false;
       };
-    }, [filters.start, filters.end, filters.site, filters.department, selected, slaSeconds, paused, tab]);
+    }, [filters.start, filters.end, filters.site, filters.department, selected, slaSeconds, tab, reload]);
     useEffect(() => {
       setPage(1);
       setExpanded("");
@@ -10037,7 +10047,7 @@
             }, "Export CSV")
           )
         ),
-        error ? h("div", { className: "mb-2 border border-rose-900 bg-rose-950/30 p-3 text-xs text-rose-300" }, error) : null,
+        error ? h(ErrorState, { message: error, onRetry: () => setReload2((n) => n + 1), className: "mb-2" }) : null,
         loading && !data ? skeletonMain : tab === "summary" ? summary : overview
       )
     );
@@ -10360,6 +10370,14 @@
     const [aaRoster, setAaRoster] = useState([]);
     const [aaRosterLoading, setAaRosterLoading] = useState(false);
     const [aaError, setAaError] = useState("");
+    const [aaReload, setAaReload] = useState(0);
+    const retryAa = () => {
+      setAaError("");
+      setAaRoster([]);
+      setAaReport(null);
+      setAaStructures(null);
+      setAaReload((n) => n + 1);
+    };
     const [aaLoading, setAaLoading] = useState(false);
     const [cacheJob, setCacheJob] = useState(null);
     const rangeDayCount = (() => {
@@ -10597,7 +10615,7 @@
       return () => {
         active = false;
       };
-    }, [route, filters.start, filters.end, filters.department, filters.site]);
+    }, [route, filters.start, filters.end, filters.department, filters.site, aaReload]);
     useEffect(() => {
       setAaReport(null);
       setAaStructures(null);
@@ -10824,7 +10842,7 @@
               }, label)
             )
           ) : null,
-          aaError ? h("div", { className: "border border-rose-900 bg-rose-950/30 p-4 text-sm text-rose-300" }, aaError) : !aaHasSelection ? h(
+          aaError ? h(ErrorState, { message: aaError, onRetry: retryAa, className: "p-4 text-sm" }) : !aaHasSelection ? h(
             "div",
             { className: "aa-empty" },
             h(NavIcon, { name: "attendants", className: "aa-empty-icon" }),
@@ -10852,7 +10870,6 @@
         slaSeconds,
         slaPct: domainSettings.slaPct,
         abandonPct: domainSettings.abandonPct,
-        paused: false,
         initialQueue: focusQueue,
         onSlaChange: setSlaSeconds,
         onCallClick: (payload) => setModal({

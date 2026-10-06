@@ -338,6 +338,38 @@ function SearchableSelect({value, onChange, options, placeholder, accent}) {
   );
 }
 
+/*
+ * The one error block (QA-9).
+ *
+ * Five panels repeated this markup inline, two of them with different wording
+ * ("Failed to load..." vs "Unable to load..."), and none offered a retry — a
+ * transient PBX failure meant reloading the whole page.
+ */
+function ErrorState({message, onRetry, className = ''}) {
+  return h(
+    'div',
+    {
+      role: 'alert',
+      className:
+        'border border-rose-900 bg-rose-950/30 p-3 text-xs text-rose-300 ' +
+        className
+    },
+    h('span', null, message || 'Unable to load this panel.'),
+    typeof onRetry === 'function'
+      ? h(
+          'button',
+          {
+            type: 'button',
+            className:
+              'ml-3 font-semibold text-rose-200 underline hover:text-rose-100',
+            onClick: onRetry
+          },
+          'Retry'
+        )
+      : null
+  );
+}
+
 function CallTypeIcon({type, size = 14}) {
   const t = String(type || '').toLowerCase();
   const phone = 'M1.885.511a1.745 1.745 0 0 1 2.612.163L6.29 2.98c.329.423.445.974.315 1.494l-.547 2.19a.678.678 0 0 0 .178.643l2.457 2.457a.678.678 0 0 0 .644.178l2.189-.547a1.745 1.745 0 0 1 1.494.315l2.306 1.794c.829.645.905 1.87.163 2.611l-1.034 1.034c-.74.74-1.846 1.065-2.877.702a18.634 18.634 0 0 1-7.01-4.42 18.634 18.634 0 0 1-4.42-7.009c-.362-1.03-.037-2.137.703-2.877L1.885.511z';
@@ -361,4 +393,4 @@ function CallTypeIcon({type, size = 14}) {
   );
 }
 
-export { CallTypeIcon, FlowKindIcon, NavIcon, SearchableSelect, SlaControl, ThemeToggle, ToastHost, Tooltip, navItems, skel, skelKpis, skelPanel, useToasts };
+export { CallTypeIcon, ErrorState, FlowKindIcon, NavIcon, SearchableSelect, SlaControl, ThemeToggle, ToastHost, Tooltip, navItems, skel, skelKpis, skelPanel, useToasts };

@@ -15,7 +15,7 @@ import { OverviewDashboard } from './overview.js';
 import { QueueDashboard } from './queue.js';
 import { SettingsModal } from './settings.js';
 import { TelephoneNumbers } from './telephone-numbers.js';
-import { NavIcon, ThemeToggle, ToastHost, navItems, useToasts } from './ui.js';
+import { ErrorState, NavIcon, ThemeToggle, ToastHost, navItems, useToasts } from './ui.js';
 import { api, routesForRole } from '../lib/api.js';
 import { histInitials } from '../lib/format.js';
 import { h, useEffect, useRef, useState } from '../lib/react.js';
@@ -45,6 +45,19 @@ const [aaRoster, setAaRoster] = useState([]);
 /* Phase 1 (list) is tracked separately from phase 2 (selected AA data). */
 const [aaRosterLoading, setAaRosterLoading] = useState(false);
 const [aaError, setAaError] = useState('');
+/*
+ * QA-9: every AA panel used to dead-end on a failed fetch. Retry clears the
+ * cached payloads (the effects re-run on their null-ness) and bumps this
+ * counter so the roster — which has no payload guard — refetches too.
+ */
+const [aaReload, setAaReload] = useState(0);
+const retryAa = () => {
+    setAaError('');
+    setAaRoster([]);
+    setAaReport(null);
+    setAaStructures(null);
+    setAaReload(n => n + 1);
+};
 const [aaLoading, setAaLoading] = useState(false);
 const [cacheJob, setCacheJob] = useState(null);
 const rangeDayCount = (() => {
@@ -319,7 +332,7 @@ useEffect(() => {
             if (active) setAaRosterLoading(false);
         });
     return () => { active = false; };
-}, [route, filters.start, filters.end, filters.department, filters.site]);
+}, [route, filters.start, filters.end, filters.department, filters.site, aaReload]);
 
 /*
  * Filters changed: whatever was computed for the previous range is stale.
@@ -613,7 +626,7 @@ if (route === 'agents') {
                 )
                 : null,
             aaError
-                ? h('div', {className: 'border border-rose-900 bg-rose-950/30 p-4 text-sm text-rose-300'}, aaError)
+                ? h(ErrorState, {message: aaError, onRetry: retryAa, className: 'p-4 text-sm'})
                 : !aaHasSelection
                     /*
                      * Nothing is computed until an attendant is picked, so
@@ -650,7 +663,6 @@ if (route === 'agents') {
         slaSeconds,
         slaPct: domainSettings.slaPct,
         abandonPct: domainSettings.abandonPct,
-        paused: false,
         initialQueue: focusQueue,
         onSlaChange: setSlaSeconds,
         onCallClick: payload => setModal({

@@ -5,14 +5,14 @@
  * original source — the move is verified by declaration hash. */
 
 import { DonutChart, KpiCard, splineArea } from './charts.js';
-import { SlaControl, Tooltip, skelKpis, skelPanel } from './ui.js';
+import { ErrorState, SlaControl, Tooltip, skelKpis, skelPanel } from './ui.js';
 import { api } from '../lib/api.js';
 import { fmt, fmtNum } from '../lib/format.js';
 import { h, keyActivate, useEffect, useRef, useState } from '../lib/react.js';
 import { slaRingClass } from '../lib/sla.js';
 import { formatCallDate, formatCallTime } from '../lib/time.js';
 
-function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, onCallClick, paused, initialQueue}) {
+function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, onCallClick, initialQueue}) {
   const hourCanvas = useRef(null);
   const hourChart = useRef(null);
   const [term, setTerm] = useState('');
@@ -34,12 +34,10 @@ function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, o
   const [statsSite, setStatsSite] = useState('');
   const [hideInactive, setHideInactive] = useState(true);
   const [sideCollapsed, setSideCollapsed] = useState(false);
+  /* Bumped by Retry; the panel had no way back from a transient failure. */
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
-    if (paused) {
-      setLoading(true);
-      return;
-    }
     let active = true;
     setLoading(true);
     setError('');
@@ -56,7 +54,7 @@ function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, o
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [filters.start, filters.end, filters.site, filters.department, selected, slaSeconds, paused, tab]);
+  }, [filters.start, filters.end, filters.site, filters.department, selected, slaSeconds, tab, reload]);
 
   useEffect(() => { setPage(1); setExpanded(''); setCradleHops({}); }, [selected, data, pageSize]);
   useEffect(() => { setStatsPage(1); }, [data, statsSize, statsSortKey, statsSortDir, statsQuery, statsSite, hideInactive]);
@@ -769,7 +767,7 @@ function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, o
           }, 'Export CSV')
         )
       ),
-      error ? h('div', {className: 'mb-2 border border-rose-900 bg-rose-950/30 p-3 text-xs text-rose-300'}, error) : null,
+      error ? h(ErrorState, {message: error, onRetry: () => setReload(n => n + 1), className: 'mb-2'}) : null,
       loading && !data ? skeletonMain : (tab === 'summary' ? summary : overview)
     )
   );
