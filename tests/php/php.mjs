@@ -127,6 +127,34 @@ final class PbxClient
         array $existing = [],
         ?callable $onPage = null
     ): array {
+        /*
+         * fetchCdrs.json          → one complete page (the default)
+         * fetchCdrsPages.json     → [[newRowsOfPage, nextOffset, complete], ...]
+         *                           so a test can drive the multi-page path.
+         *                           The stub accumulates the pages and hands
+         *                           the callback the accumulated list, which
+         *                           is what the real client passes (its
+         *                           $serverRows grows per CDR_PAGE_SIZE page).
+         */
+        $pages = (array)$this->canned('fetchCdrsPages', []);
+        if ($pages !== []) {
+            $accumulated = [];
+            $result = ['records' => [], 'complete' => false, 'nextOffset' => 0];
+            foreach ($pages as $page) {
+                $rows = is_array($page[0] ?? null) ? $page[0] : [];
+                foreach ($rows as $row) {
+                    if (is_array($row)) $accumulated[] = $row;
+                }
+                $offset = isset($page[1]) ? (int)$page[1] : count($accumulated);
+                $complete = !empty($page[2]);
+                if (is_callable($onPage)) {
+                    $onPage($accumulated, $offset, $complete);
+                }
+                $result = ['records' => $accumulated, 'complete' => $complete, 'nextOffset' => $offset];
+            }
+            return $result;
+        }
+
         $rows = (array)$this->canned('fetchCdrs', []);
         if (is_callable($onPage)) {
             $onPage($rows, count($rows), true);

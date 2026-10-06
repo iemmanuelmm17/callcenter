@@ -38,6 +38,14 @@ declare(strict_types=1);
  */
 // define('PBX_RECORDING_HOSTS', 'recordings.example-cdn.net,storage.example-cdn.net');
 
+/* --- CDR cache backend -------------------------------------------------- */
+/**
+ * Day cache storage: 'auto' (SQLite when pdo_sqlite is available, else JSON
+ * files), 'sqlite' or 'json'. See tools/cdr-cache.php for the migration.
+ */
+// define('CDR_CACHE_DRIVER', 'sqlite');
+// define('CDR_STORE_FILE', '/var/lib/callscope/cdrs.sqlite');
+
 /* --- Other tunables (defaults shown) ------------------------------------ */
 // define('DEFAULT_TIMEZONE', 'US/Eastern');
 // define('SESSION_IDLE_SECONDS', 1800);

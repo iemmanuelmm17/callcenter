@@ -32,6 +32,7 @@ if (!defined('CDR_PAGE_SIZE')) {
  * The implementation lives in includes/reporting/*.php. This file stays as the
  * single entry point every caller already requires, so no call site changed.
  */
+require_once __DIR__ . '/reporting/cdr_store.php';
 require_once __DIR__ . '/reporting/cache.php';
 require_once __DIR__ . '/reporting/support.php';
 require_once __DIR__ . '/reporting/cdr_fields.php';

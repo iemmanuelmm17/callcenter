@@ -57,6 +57,27 @@ if (!defined('CDR_PAGE_SIZE')) {
 if (!defined('TREND_NOISE_THRESHOLD')) {
     define('TREND_NOISE_THRESHOLD', 2.0);
 }
+/**
+ * CDR day-cache backend.
+ *
+ *   'auto'   SQLite when pdo_sqlite is available, otherwise the JSON day files
+ *            (default: a host without the extension keeps working unchanged)
+ *   'sqlite' force the store (logs and falls back when the driver is missing)
+ *   'json'   force the original cdr-day-*.json files
+ *
+ * Move an existing deployment over with:
+ *   php tools/cdr-cache.php status
+ *   php tools/cdr-cache.php import <domain> [first-day] [last-day] --delete-json
+ *   php tools/cdr-cache.php verify <domain>
+ */
+if (!defined('CDR_CACHE_DRIVER')) {
+    define('CDR_CACHE_DRIVER', strtolower(trim((string)(getenv('CDR_CACHE_DRIVER') !== false ? getenv('CDR_CACHE_DRIVER') : 'auto'))) ?: 'auto');
+}
+/** The SQLite file; inside CACHE_DIR by default. */
+if (!defined('CDR_STORE_FILE')) {
+    define('CDR_STORE_FILE', trim((string)getenv('CDR_STORE_FILE')) !== '' ? trim((string)getenv('CDR_STORE_FILE')) : '');
+}
+
 /** First date the tenant retained CDRs; historical days are cached raw. */
 if (!defined('HISTORICAL_CDR_START_DATE')) {
     define('HISTORICAL_CDR_START_DATE', '2021-01-01');

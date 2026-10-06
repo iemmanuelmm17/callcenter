@@ -24,13 +24,17 @@ const syntaxOnly = process.argv.includes('--syntax');
 
 /* Deliberately banned in this codebase: any of these in application code is a
  * finding, not a style question. */
+const SHELL_FUNCTIONS = ['exec', 'shell_exec', 'system', 'passthru', 'popen', 'proc_open'];
 const BANNED = [
-  { pattern: /\beval\s*\(/, why: 'eval() executes arbitrary code' },
-  { pattern: /\bassert\s*\(\s*\$/, why: 'assert() with a variable is code execution in old PHP' },
-  { pattern: /\bcreate_function\s*\(/, why: 'create_function() is removed in PHP 8' },
-  { pattern: /\bunserialize\s*\(\s*\$_(GET|POST|REQUEST|COOKIE)/, why: 'unserialize() of user input (object injection)' },
-  { pattern: /\b(exec|shell_exec|system|passthru|popen|proc_open)\s*\(/, why: 'shell execution' },
-  { pattern: /extract\s*\(\s*\$_(GET|POST|REQUEST|COOKIE)/, why: 'extract() of user input' }
+  { pattern: /\beval\s*\(/, why: 'eval() executes arbitrary code', targets: ['eval('] },
+  { pattern: /\bassert\s*\(\s*\$/, why: 'assert() with a variable is code execution in old PHP', targets: ['assert($x'] },
+  { pattern: /\bcreate_function\s*\(/, why: 'create_function() is removed in PHP 8', targets: ['create_function('] },
+  { pattern: /\bunserialize\s*\(\s*\$_(GET|POST|REQUEST|COOKIE)/, why: 'unserialize() of user input (object injection)', targets: ['unserialize($_GET['] },
+  /* Shell execution. The negative lookbehind keeps the method form
+   * ($pdo->exec(...), PDO::exec(...)) out of it: the ban is about running a
+   * command, and the self-test below pins both directions. */
+  { pattern: /(?<!function )(?<![>:\w])(exec|shell_exec|system|passthru|popen|proc_open)\b\s*\(/, why: 'shell execution', targets: SHELL_FUNCTIONS.map(name => name + '(') },
+  { pattern: /extract\s*\(\s*\$_(GET|POST|REQUEST|COOKIE)/, why: 'extract() of user input', targets: ['extract($_POST['] }
 ];
 /* Informational: these have legitimate uses but deserve a look during review. */
 const NOTES = [
@@ -50,6 +54,38 @@ function walk(dir, out = []) {
     else if (name.endsWith('.php')) out.push(full);
   }
   return out;
+}
+
+/* The banned list is a security control, so prove it catches what it claims to
+ * catch (and does not fire on the method forms the codebase legitimately uses)
+ * before scanning a single file: a regex edit that quietly neuters it would
+ * otherwise pass unnoticed. */
+const BANNED_SAMPLES = [
+  /* Must fire: the rule's own target plus the shell functions, which every
+   * rule that is not the shell rule is expected to ignore. */
+  [...SHELL_FUNCTIONS.map(name => name + '('), 'eval(', 'create_function(', 'assert($x', 'unserialize($_GET[', 'extract($_POST['],
+  /* Must not fire: the legitimate method forms and names that merely contain
+   * a banned word. `-> execute(` is the PDO statement call, spaced out. */
+  ['$pdo->exec(', 'PDO::exec(', 'exec_pdo(', 'my_shell_exec(', 'solve(', 'systematic(', '$statement->execute(', 'function exec(string $sql): int {']
+];
+let selfTestFailures = 0;
+for (const { pattern, why, targets } of BANNED) {
+  for (const sample of targets) {
+    if (pattern.test(sample)) { pattern.lastIndex = 0; continue; }
+    console.log(`FAIL self-test: pattern for "${why}" does not match ${JSON.stringify(sample)}`);
+    selfTestFailures++;
+  }
+  for (const sample of BANNED_SAMPLES[1]) {
+    if (!pattern.test(sample)) continue;
+    pattern.lastIndex = 0;
+    console.log(`FAIL self-test: pattern for "${why}" must not match ${JSON.stringify(sample)}`);
+    selfTestFailures++;
+  }
+  pattern.lastIndex = 0;
+}
+if (selfTestFailures) {
+  console.log(`\n${selfTestFailures} self-test failure(s) — the banned-construct rules are broken`);
+  process.exit(1);
 }
 
 const parser = new PhpParser.Engine({
