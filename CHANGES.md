@@ -1,3 +1,90 @@
+# CHANGES — Sprint B, phase 2: longer windows for the manager, preset ranges (F2)
+
+**What this phase is about.** Two halves of the same complaint. A supervisor can
+only ask for 31 days, which is right — a bookmarked multi-month URL used to fan
+out into hundreds of upstream requests. But the person who produces the
+month-end and year-on-year packs is the office manager, and they were held to the
+same 31 days and then had to stitch twelve exports together. And once a range is
+longer, the reader needs the presets a longer range implies.
+
+## The cap is per role, and both sides use it
+
+`maxRangeDaysFor(role)` (assets/js/src/lib/date-range.js) returns **366** for
+`office_manager` and **31** for everyone else — the same split
+`authorizedFilters()` already enforces server-side. The picker's own clamp, the
+picker's span check and the preset visibility all take the cap as a parameter,
+and `app-shell.js` passes the signed-in role's number in. Nothing else changed:
+a caller that passes no cap gets 31, which is exactly the old behaviour, and a
+supervisor's API answer is still trimmed to 31 days anchored on the requested
+start (pinned in `tests/php/endpoints.mjs` against the live endpoint).
+
+## Three new presets, and the timezone bug they found
+
+The filter bar gains **Last 90 days**, **Quarter to date** and **Year to date**.
+Each is only offered when its whole span fits the role's cap: a "Last 90 days"
+button that quietly meant 31 days would be worse than no button, because the
+label *is* the range. Quarter-to-date on 5 October genuinely is five days, so it
+appears whenever the calendar boundary is the real start.
+
+Building them exposed a real bug in the existing presets, so it is fixed for all
+of them. They were built as `new Date(y, m, 1)` — an *instant* at the browser's
+local midnight — and then labelled by the app's Eastern formatter. For a reader
+east of New York that instant is the previous day in Eastern time, so "Year to
+date" asked the API for **31 December of the previous year**, and "This month"
+could ask for the last day of the previous month. Every boundary is now string
+arithmetic on the Eastern calendar date (`monthStart`, `shiftMonths` — day
+clamped exactly like the API's month shift — `monthEnd`, `weekStart`,
+`quarterStart`, `yearStart`), so the label and the request are the same string
+and cannot disagree. `tests/js/date-range.mjs` pins the boundaries, including
+31 Mar − 1 month = 28 Feb and 29 Feb 2028 − 12 months = 28 Feb 2027.
+
+## Warming a long range, in batches
+
+`cdrRangeCacheStatus()` still counts the range day by day, and the day cache is
+still filled one day at a time — that granularity is what makes a partial fetch
+resumable. What changed is how many days one request fills: `warmCdrBatch()`
+(includes/reporting/cache.php) warms up to **5 days per request, or until a 20 s
+time budget**, whichever comes first, in date order. The response reports what it
+did — `batch: {attempted, warmed, days, stopped, seconds}` with `stopped` one of
+`complete | days | time | partial` — and `api/cache_job.php` passes an optional
+`batch` request key through (clamped to 1–31). The loop stays resumable and never
+re-fetches a finished day; a batch on a complete range does nothing.
+
+The progress banner says so ("7 of 366 days cached · fetching 2026-08-09 · 5 days
+per pass"), and the client's warm-loop guard now counts *passes* rather than days
+— the old `days * 4` ceiling would have let a 366-day range keep round-tripping
+long after the work was done.
+
+## Evidence
+
+- `tests/js/date-range.mjs` — the role caps (31 / 366, and a role string that is
+  merely similar still gets 31), a quarter inside the wider cap, exactly 366 days
+  inclusive (1 Jan 2026 → 1 Jan 2027) and a day past it trimming back to the same
+  span; the eight calendar boundaries; the unchanged default when no cap is
+  passed.
+- `tests/js/smoke.mjs` — the manager is offered all three long presets; clicking
+  **Year to date** puts `start = <year>-01-01` and `end = today` in the report
+  request body (the Eastern-date bug above would fail this); the warming banner
+  renders the batch response, driven through a fresh app booted on a one-year
+  URL.
+- `tests/php/cdr-cache.mjs` — a 12-day range at batch 4 takes exactly three warm
+  calls, four days each, in date order, `stopped: 'days'` while work remains then
+  `complete`; a batch on a complete range warms and fetches nothing.
+- `tests/php/endpoints.mjs` — the API's own clamps: 90 days for a supervisor →
+  31 days anchored on the requested start; 90 days for a manager → 90; two years
+  for a manager → exactly 366 days.
+
+`npm test` = 25 suites green.
+
+**Behaviour change to disclose:** the office manager may now select up to 366
+days per report (previously 31); the new presets appear only for that role. The
+bug fix above changes what the *existing* presets request for a reader in a
+timezone east of Eastern — that is the fix, not a regression: the request now
+matches the label. No published figure moves for anyone who does not press a
+preset or pick a longer range.
+
+---
+
 # CHANGES — Sprint B, phase 1: comparison modes (F3)
 
 **What this phase is about.** The dashboard had exactly one baseline: the

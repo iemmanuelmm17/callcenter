@@ -23,6 +23,7 @@ import { api, routesForRole } from '../lib/api.js';
 import { CAN_READ_SETTINGS } from '../lib/roles.js';
 import { histInitials } from '../lib/format.js';
 import { h, useEffect, useRef, useState } from '../lib/react.js';
+import { maxRangeDaysFor } from '../lib/date-range.js';
 import { readSlaSeconds, writeSlaSeconds } from '../lib/sla.js';
 import { today } from '../lib/time.js';
 
@@ -213,7 +214,14 @@ useEffect(() => {
             apply(st);
             await tick();
             let guard = 0;
-            const maxWarm = Math.max(days * 4, 16);
+            /*
+             * F2: each warm request fills a batch of days (server default 5), so
+             * the loop guard counts passes, not days: one pass per five days
+             * with slack for a partial day or a stop on the time budget. The
+             * old `days * 4` ceiling would have let a 366-day range spin for
+             * thousands of round-trips after the work was already done.
+             */
+            const maxWarm = Math.max(Math.ceil(days / 5) + 8, 16);
             while (active && st && !st.complete && guard < maxWarm) {
                 const warmingDay = st.next || '';
                 if (warmingDay) {
@@ -891,13 +899,29 @@ return h('div', { className: 'min-h-screen' },
                     h('span', { className: 'text-[10px] uppercase tracking-wider text-cyan-400' }, user.role.replace('_', ' '))
                 )
             ),
-            h(Filters, { filters, setFilters, role: user.role, rangeLocked: !!cacheJob }),
+            h(Filters, {
+                filters,
+                setFilters,
+                role: user.role,
+                rangeLocked: !!cacheJob,
+                /*
+                 * F2: the span cap this role may pick. The server enforces the
+                 * same number in authorizedFilters(); passing it here is what
+                 * stops the picker offering a range the API would silently trim.
+                 */
+                maxRangeDays: maxRangeDaysFor(user.role)
+            }),
             cacheJob ? h('div', {className: 'cache-job'},
                 h('div', {className: 'cache-job-copy'},
                     h('span', {className: 'font-medium text-slate-200'}, 'Preparing call history'),
                     h('span', {className: 'text-slate-500'},
                         ' ' + (cacheJob.ready || 0) + ' of ' + (cacheJob.total || 0) + ' days cached' +
-                        (cacheJob.next ? ' · fetching ' + cacheJob.next : '')
+                        (cacheJob.next ? ' · fetching ' + cacheJob.next : '') +
+                        /* F2: say that the fetch is batched, so a long range
+                         * reads as steady progress rather than a stall. */
+                        (cacheJob.batch && cacheJob.batch.warmed > 1
+                            ? ' · ' + cacheJob.batch.warmed + ' days per pass'
+                            : '')
                     )
                 ),
                 h('div', {className: 'cache-job-track'},

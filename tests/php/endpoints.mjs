@@ -263,6 +263,34 @@ for (const [trace, why] of [
     { status: res.status, sipflow, body: res.body });
 }
 
+/*
+ * F2: the span cap is part of the endpoint contract, not just a picker rule.
+ * The picker uses maxRangeDaysFor(role); the API uses authorizedFilters(); the
+ * two must agree or the reader sees numbers for a range a button did not name.
+ * These run the real API with a 90-day request for both roles.
+ */
+{
+  const span = (body, user) => harness.request('report.php', { body, user });
+  const sup = await span({ start: '2026-08-01', end: '2026-10-29' }, USERS.supervisor);
+  const mgr = await span({ start: '2026-08-01', end: '2026-10-29' }, USERS.office_manager);
+  const spanDays = (f) => Math.round((new Date(f.end + 'T00:00:00') - new Date(f.start + 'T00:00:00')) / 864e5) + 1;
+  check('a supervisor asking for 90 days is held to the 31-day window',
+    sup.status === 200 && spanDays(sup.body.filters) === 31 && sup.body.filters.end === '2026-08-31',
+    { status: sup.status, filters: sup.body.filters });
+  check('an office manager asking for 90 days gets the range that was asked for',
+    mgr.status === 200 && spanDays(mgr.body.filters) === 90 && mgr.body.filters.end === '2026-10-29',
+    { status: mgr.status, filters: mgr.body.filters });
+  check('the clamp anchors on the requested start, not today (a bookmarked link still means what it says)',
+    sup.body.filters.start === '2026-08-01', sup.body.filters.start);
+
+  /* The manager's own ceiling, and the leap-day arithmetic in it: 1 Jan 2026
+   * + 365 days is 1 Jan 2027, i.e. 366 days inclusive. */
+  const wide = await span({ start: '2026-01-01', end: '2027-12-31' }, USERS.office_manager);
+  check('an office manager asking for two years is trimmed to 366 days',
+    wide.status === 200 && wide.body.filters.end === '2027-01-01' && spanDays(wide.body.filters) === 366,
+    { status: wide.status, filters: wide.body.filters, days: wide.status === 200 ? spanDays(wide.body.filters) : null });
+}
+
 console.log(`\n${results.filter(r => r.ok).length}/${results.length} checks passed`);
 if (failures.length) {
   console.log('FAILURES:\n - ' + failures.join('\n - '));

@@ -1151,6 +1151,58 @@ console.log('\n== filter date-range picker (calendar popup) ==');
   check('the date-range picker threw nothing', errors.length === 0, errors.slice(0, 2));
 }
 
+console.log('\n== F2: long-range presets and the warming banner ==');
+{
+  /*
+   * The manager is the role the longer window exists for (authorizedFilters()
+   * gives office_manager 366 days, everyone else 31). The presets must appear
+   * for them and must ask for the range their label names.
+   */
+  await goTo('Dashboard');
+  await flush(8);
+  const preset = label => [...document.querySelectorAll('.filters-bar button')]
+    .find(b => (b.textContent || '').trim() === label);
+  const today = new Date();
+  const ymd = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+
+  check('the manager is offered the long presets',
+    !!preset('Last 90 days') && !!preset('Quarter to date') && !!preset('Year to date'),
+    [...document.querySelectorAll('.filters-bar button')].map(b => (b.textContent || '').trim()).join('|'));
+
+  const beforeYtd = requested.filter(r => r.endpoint === 'report').length;
+  const ytd = preset('Year to date');
+  if (ytd) {
+    await click(ytd);
+    await flush(8);
+    const fresh = requested.filter(r => r.endpoint === 'report').slice(beforeYtd);
+    const body = fresh.length ? JSON.parse(fresh[fresh.length - 1].body || '{}') : null;
+    check('Year to date asks for 1 January of the current year through today',
+      !!body && body.start === today.getFullYear() + '-01-01' && body.end === ymd(today),
+      body && [body.start, body.end, ymd(today)]);
+  }
+
+  /*
+   * The warming banner reports the batch, so a 366-day range reads as steady
+   * progress rather than a stall. A fresh app booted on a one-year URL is what
+   * makes the range long enough for the banner to appear.
+   */
+  const cacheFixture = FIXTURES.cache_job;
+  FIXTURES.cache_job = {
+    complete: false, ready: 7, total: 366, percent: 2, next: '2026-08-09',
+    start: '2026-01-01', end: '2026-12-31', warming: true,
+    batch: { attempted: 5, warmed: 5, days: [], stopped: 'days' }
+  };
+  const banner = await createHarness({search: 'start=2026-01-01&end=2026-12-31'});
+  await banner.flush(12);
+  const rail = banner.document.querySelector('.cache-job');
+  const railText = rail ? rail.textContent : '';
+  check('an incomplete range shows the warming banner', !!rail, banner.root().textContent.slice(0, 160));
+  check('the banner counts the range out of the whole', /7 of 366 days cached/.test(railText), railText.slice(0, 160));
+  check('the banner names the day being fetched', /fetching 2026-08-09/.test(railText), railText.slice(0, 160));
+  check('the banner reports the batch size', /5 days per pass/.test(railText), railText.slice(0, 160));
+  FIXTURES.cache_job = cacheFixture;
+}
+
 console.log('\n== global error budget ==');
 check('no unexpected runtime errors', errors.length === 0, errors.slice(0, 5).join(' | '));
 const uniqueWarnings = [...new Set(warnings)];
