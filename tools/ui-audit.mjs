@@ -361,11 +361,14 @@ const shellStyles = [...shell.matchAll(/<link[^>]*href="([^"]+)"/g)].map(m => m[
 const remoteAssets = [...shellScripts, ...shellStyles].filter(url => /^https?:/.test(url));
 const lazyAttrs = [...source.matchAll(/loading\s*=\s*'lazy'|loading:\s*'lazy'/g)].length;
 const imageElements = [...source.matchAll(/h\(\s*'(?:img)'/g)].length;
-/* Tabulator is ~500 kB and only the call modal needs it: the shell must load it
+/* Tabulator is ~460 kB and only the call modal needs it: the shell must load it
  * through ensureTabulator() on first use, never eagerly. Dropping the eager
- * tags without the loader in app.js would silently break the call table. */
+ * tags without the loader in app.js would silently break the call table.
+ *
+ * QA-3: the loader points at the vendored copy (assets/vendor/tabulator/), so
+ * that is what proves it is still lazy. */
 const eagerHeavyAssets = remoteAssets.filter(url => /tabulator/i.test(url));
-const tabulatorLazyLoader = /ensureTabulator\s*=/.test(source) && /tabulator-tables@6\.3\.1/.test(source);
+const tabulatorLazyLoader = /ensureTabulator\s*=/.test(source) && /assets\/vendor\/tabulator\//.test(source);
 const lazyDependencyFindings = [
   ...eagerHeavyAssets.map(url => ({ line: 0, detail: 'loaded eagerly by the shell: ' + url })),
   ...(eagerHeavyAssets.length === 0 && !tabulatorLazyLoader

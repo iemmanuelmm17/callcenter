@@ -1,0 +1,398 @@
+/* The agent performance table (one row per agent, sortable, drillable).
+ *
+ * Split out of the single-file assets/js/src/app.js by
+ * tools/split-js-file.mjs, then out of components/agents.js when that file
+ * reached four views in one. Every function body below is byte-identical to the
+ * original — the split is verified by hashing the declaration before and after
+ * (see CHANGES.md, QA round 2). */
+
+import { fmt, fmtNum } from '../lib/format.js';
+import { h, useEffect, useEscape, useMemo, useState } from '../lib/react.js';
+import { KpiCard } from './charts.js';
+import { Tooltip, skel, skelKpis } from './ui.js';
+
+function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSeconds,missedPct,abandonPct,ahtMinutes}) {
+
+    const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(10);
+    const [sortKey, setSortKey] = useState('total');
+    const [sortDir, setSortDir] = useState('desc');
+
+    const columns = [
+        ['extension', ['Ext'], 'Agent extension number.', 'text', null, 'Extension'],
+        ['agent', ['Agent'], 'Agent name. Click to open Overview for this agent.', 'text', null, 'Agent name'],
+        ['site', ['Site'], 'Site assigned to the agent.', 'text', null, 'Site'],
+        ['total', ['Total', 'Calls'], 'All calls attributed to this agent in the selected range. Click to open those calls.', 'num', 'total', 'Total Calls'],
+        ['ib', ['Inbound'], 'Answered inbound calls. Click to open inbound calls.', 'num', 'inbound', 'Inbound Calls'],
+        ['ob', ['Outbound'], 'Outbound calls placed by this agent. Click to open outbound calls.', 'num', 'outbound', 'Outbound Calls'],
+        ['onnet', ['On-net'], 'Internal (on-network) calls. Click to open on-net calls.', 'num', 'onnet', 'On-net Calls'],
+        ['mc', ['Missed', 'Calls'], 'Inbound calls that were not answered and were not abandoned (rang out or went to voicemail). Click to open exactly these calls — abandoned ones have their own column.', 'num', 'missed_no_abandon', 'Missed Calls'],
+        ['ab', ['Abandoned', 'Calls'], 'Inbound calls the caller abandoned in a queue or auto attendant. Click to open abandoned calls.', 'num', 'missed_abandon', 'Abandoned Calls'],
+        ['mcRate', ['Missed', 'Rate'], 'All missed calls (missed + abandoned) ÷ offered inbound (inbound + missed + abandoned). Same definition as the Dashboard, so both screens show the same rate. Red when above the domain missed-call rate setting.', 'pct', 'missed', 'Missed Rate'],
+        ['ibAht', ['Inbound', 'AHT'], 'Inbound average handling time (talk). Red when above the domain AHT setting.', 'dur', 'answered', 'Inbound Average Handling Time'],
+        ['ibAat', ['Inbound', 'AAT'], 'Inbound average answer / ring time. Red when above the SLA max-ring setting.', 'dur', 'answered', 'Inbound Average Answer Time'],
+        ['ibLtt', ['Inbound', 'LTT'], 'Inbound longest talking time. Click to open answered inbound calls.', 'dur', 'answered', 'Inbound Longest Talking Time'],
+        ['ibTct', ['Inbound', 'TCT'], 'Inbound total talking time. Click to open answered inbound calls.', 'dur', 'answered', 'Inbound Total Calling Time'],
+        ['obArt', ['Outbound', 'ART'], 'Outbound average ring time. Click to open outbound calls.', 'dur', 'outbound', 'Outbound Average Ring Time'],
+        ['obAat', ['Outbound', 'AAT'], 'Outbound average answer time. Click to open outbound calls.', 'dur', 'outbound', 'Outbound Average Answer Time'],
+        ['obLtt', ['Outbound', 'LTT'], 'Outbound longest talking time. Click to open outbound calls.', 'dur', 'outbound', 'Outbound Longest Talking Time'],
+        ['obTct', ['Outbound', 'TCT'], 'Outbound total talking time. Click to open outbound calls.', 'dur', 'outbound', 'Outbound Total Calling Time']
+    ];
+    const COLS_KEY = 'callscope-agent-cols';
+    const defaultCols = () => Object.fromEntries(columns.map(c => [c[0], true]));
+    const [query, setQuery] = useState('');
+    const [siteFilter, setSiteFilter] = useState('');
+    const [colsOpen, setColsOpen] = useState(false);
+
+    useEscape(colsOpen, () => setColsOpen(false));
+    const [colOn, setColOn] = useState(() => {
+        try {
+            const raw = JSON.parse(localStorage.getItem(COLS_KEY) || 'null');
+            return raw && typeof raw === 'object' ? Object.assign(defaultCols(), raw) : defaultCols();
+        } catch (e) { return defaultCols(); }
+    });
+    const visibleCols = columns.filter(c => colOn[c[0]] !== false);
+    const persistCols = next => {
+        setColOn(next);
+        try { localStorage.setItem(COLS_KEY, JSON.stringify(next)); } catch (e) {}
+    };
+
+    const durationFields = ['ibAht','ibAat','ibLtt','ibTct','obArt','obAat','obLtt','obTct'];
+    const missLimit = Number(missedPct != null ? missedPct : 20);
+    const abLimit = Number(abandonPct != null ? abandonPct : 10);
+    const ahtLimitSec = Number(ahtMinutes != null ? ahtMinutes : 5) * 60;
+    const slaRing = Number(slaSeconds != null ? slaSeconds : 20);
+
+    const offeredOf = agent => {
+        const n = Number(agent.offered);
+        if (Number.isFinite(n) && n > 0) return n;
+        return Number(agent.ib || 0) + Number(agent.mc || 0) + Number(agent.ab || 0);
+    };
+    const rateOf = (agent, field) => {
+        if (agent[field] != null && agent[field] !== '') return Number(agent[field] || 0);
+        const off = offeredOf(agent);
+        if (!off) return 0;
+        /* Missed rate is every missed call ÷ offered inbound, exactly like
+         * the Dashboard: (mc + ab) / (ib + mc + ab). abRate is the abandon
+         * share of the same denominator. */
+        if (field === 'mcRate') return ((Number(agent.mc || 0) + Number(agent.ab || 0)) / off) * 100;
+        if (field === 'abRate') return (Number(agent.ab || 0) / off) * 100;
+        return 0;
+    };
+
+    const cellValue = (agent, field) => {
+        if (field === 'extension') return agent.extension || '';
+        if (field === 'agent') return (agent.name || agent.extension || '') + ' ' + (agent.department || '');
+        if (field === 'mcRate' || field === 'abRate') return rateOf(agent, field);
+        return agent[field];
+    };
+
+    const failTone = (field, agent) => {
+        const off = offeredOf(agent);
+        if (field === 'mcRate' || field === 'mc') {
+            if (!off && !Number(agent.mc || 0)) return null;
+            return rateOf(agent, 'mcRate') > missLimit ? 'fail' : 'pass';
+        }
+        if (field === 'ibAht' && Number(agent.ib || 0) > 0) {
+            return Number(agent.ibAht || 0) > ahtLimitSec ? 'fail' : 'pass';
+        }
+        if (field === 'ibAat' && Number(agent.ib || 0) > 0) {
+            return Number(agent.ibAat || 0) > slaRing ? 'fail' : 'pass';
+        }
+        return null;
+    };
+
+    const formatValue = (field, agent) => {
+        const blank = v => {
+            const s = String(v == null ? '' : v).trim();
+            if (!s || s === '0' || s === '0.0' || s === '0.0%' || s === '0%' || s === '00:00:00' || s === '00:00') return '—';
+            return s;
+        };
+        if (field === 'extension') return agent.extension || '—';
+        if (field === 'agent') {
+            return h('div', {className: 'min-w-[10rem]'},
+                h('div', {className: 'truncate font-medium text-cyan-400'}, agent.name || agent.extension || '—'),
+                h('div', {className: 'truncate text-[10px] text-slate-500'}, agent.department || '')
+            );
+        }
+        if (durationFields.includes(field)) return blank(fmt(agent[field] || 0));
+        if (field === 'site') return agent.site || '—';
+        if (field === 'mcRate') return blank(rateOf(agent, field).toFixed(1) + '%');
+        const n = Number(agent[field] || 0);
+        return blank(fmtNum(n));
+    };
+
+    const rows = Array.isArray(data) ? data : [];
+    const sites = Array.from(new Set(rows.map(a => String(a.site || '').trim()).filter(Boolean))).sort();
+
+    const sorted = useMemo(() => {
+        const copy = rows.filter(a => {
+            if (siteFilter && String(a.site || '') !== siteFilter) return false;
+            const q = query.trim().toLowerCase();
+            if (!q) return true;
+            return ((a.name || '') + ' ' + (a.extension || '') + ' ' + (a.department || '') + ' ' + (a.site || '')).toLowerCase().includes(q);
+        });
+        const col = columns.find(c => c[0] === sortKey);
+        const kind = col ? col[3] : 'num';
+        copy.sort((a, b) => {
+            let av, bv;
+            if (kind === 'text') {
+                av = String(cellValue(a, sortKey) || '').toLowerCase();
+                bv = String(cellValue(b, sortKey) || '').toLowerCase();
+                if (av < bv) return sortDir === 'asc' ? -1 : 1;
+                if (av > bv) return sortDir === 'asc' ? 1 : -1;
+                return 0;
+            }
+            av = Number(cellValue(a, sortKey) || 0);
+            bv = Number(cellValue(b, sortKey) || 0);
+            return sortDir === 'asc' ? av - bv : bv - av;
+        });
+        return copy;
+    }, [rows, sortKey, sortDir, query, siteFilter]);
+
+    useEffect(() => { setPage(1); }, [data, pageSize, sortKey, sortDir, query, siteFilter]);
+
+    const totalRows = sorted.length;
+    const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+    const currentPage = Math.min(page, totalPages);
+    const startIndex = (currentPage - 1) * pageSize;
+    const endIndex = Math.min(startIndex + pageSize, totalRows);
+    const paginatedData = sorted.slice(startIndex, endIndex);
+
+    const totals = rows.reduce((acc, a) => {
+        acc.calls += Number(a.total || 0);
+        acc.missed += Number(a.mc || 0);
+        acc.abandoned += Number(a.ab || 0);
+        acc.handle += Number(a.ibAht || 0);
+        acc.handleN += Number(a.ibAht || 0) > 0 || Number(a.total || 0) > 0 ? 1 : 0;
+        if (Number(a.total || 0) > 0) acc.active += 1;
+        return acc;
+    }, {calls: 0, missed: 0, abandoned: 0, handle: 0, handleN: 0, active: 0});
+    const avgHandle = rows.length
+        ? (rows.reduce((s, a) => s + Number(a.ibAht || 0) * Math.max(1, Number(a.ib || 0)), 0) /
+           Math.max(1, rows.reduce((s, a) => s + Math.max(0, Number(a.ib || 0)), 0)))
+        : 0;
+    const ahtFallback = rows.length
+        ? rows.reduce((s, a) => s + Number(a.ibAht || 0), 0) / Math.max(1, rows.filter(a => Number(a.ibAht || 0) > 0).length)
+        : 0;
+    const ahtShow = Number.isFinite(avgHandle) && avgHandle > 0 ? avgHandle : ahtFallback;
+
+    const toggleSort = field => {
+        if (sortKey === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+        else {
+            setSortKey(field);
+            setSortDir(field === 'agent' || field === 'site' || field === 'extension' ? 'asc' : 'desc');
+        }
+    };
+
+    const exportCsv = () => {
+        const header = ['name','extension','department','site','total_calls','inbound','outbound','onnet','missed_calls','missed_rate','abandoned_calls','abandoned_rate','ib_aht','ib_aat','ib_ltt','ib_tct','ob_art','ob_aat','ob_ltt','ob_tct'];
+        const body = sorted.map(a => [
+            a.name, a.extension, a.department, a.site, a.total, a.ib, a.ob, a.onnet, a.mc, rateOf(a, 'mcRate').toFixed(1),
+            a.ab, rateOf(a, 'abRate').toFixed(1),
+            a.ibAht, a.ibAat, a.ibLtt, a.ibTct, a.obArt, a.obAat, a.obLtt, a.obTct
+        ]);
+        const csv = [header, ...body].map(r => r.map(v => '"' + String(v ?? '').replace(/"/g, '""') + '"').join(',')).join('\n');
+        const blob = new Blob([csv], {type: 'text/csv;charset=utf-8'});
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'agent-performance.csv';
+        link.click();
+        URL.revokeObjectURL(url);
+    };
+
+    const kpi = (label, value, accent, onClick, tip, icon) =>
+        h(KpiCard, {
+            label, value, onClick, tooltip: tip, icon,
+            tone: (accent && String(accent).includes('rose')) ? 'bad' : null
+        });
+
+    if (loading) {
+        return h('div', {className: 'space-y-3'},
+            skelKpis(4),
+            h('section', {className: 'border border-slate-700 bg-slate-900'},
+                h('div', {className: 'border-b border-slate-700 px-3 py-2'}, skel('h-3 w-40')),
+                ...Array.from({length: 8}, (_, i) => h('div', {key: i, className: 'border-b border-slate-800 px-3 py-3'},
+                    skel('h-3 w-full')))
+            )
+        );
+    }
+
+    return h('div', {className: 'space-y-3'},
+        h('section', {className: 'dash-kpi'},
+            kpi('Total calls', fmtNum(totals.calls), 'text-cyan-300', () => onMetricClick && onMetricClick('total'), 'All calls for agents in this table for the selected date range. Click to open the call list.', 'fa-solid fa-phone'),
+            kpi('Active agents', fmtNum(totals.active), null, null, 'Agents with at least one call in the selected range.', 'fa-solid fa-user-check'),
+            kpi('Avg handle time', fmt(ahtShow), 'text-cyan-300', null, 'Inbound average handling time, weighted by inbound call volume across agents in this table.', 'fa-solid fa-hourglass-half'),
+            kpi('Missed calls', fmtNum(totals.missed + totals.abandoned), 'text-rose-300', () => onMetricClick && onMetricClick('missed'), 'Inbound calls that were not answered, abandoned ones included (missed + abandoned). Click to open those calls.', 'fa-solid fa-phone-slash')
+        ),
+        h('div', {className: 'ap-toolbar'},
+            h('input', {
+                value: query,
+                onChange: e => setQuery(e.target.value),
+                placeholder: 'Search name, extension, department…',
+                className: 'ap-search'
+            }),
+            h('select', {
+                value: siteFilter,
+                onChange: e => setSiteFilter(e.target.value),
+                className: 'ap-site',
+                title: 'Filter by site'
+            },
+                h('option', {value: ''}, 'All sites'),
+                ...sites.map(s => h('option', {key: s, value: s}, s))
+            ),
+            h('button', {
+                type: 'button',
+                className: 'ap-cols-btn',
+                title: 'Choose visible columns',
+                onClick: () => setColsOpen(true)
+            },
+                h('i', {className: 'fa-solid fa-table-columns', 'aria-hidden': 'true'}),
+                ' Columns'
+            )
+        ),
+        colsOpen ? h('div', {className: 'hist-modal-bg set-overlay ap-cols-overlay cursor-default', role: 'presentation', onClick: () => setColsOpen(false)},
+            h('div', {
+                className: 'set-modal ap-cols-modal cursor-default',
+                role: 'dialog',
+                'aria-modal': 'true',
+                'aria-label': 'Choose columns',
+                onClick: e => e.stopPropagation()
+            },
+                h('div', {className: 'set-head'},
+                    h('div', {className: 'set-title'}, 'Columns'),
+                    h('button', {type: 'button', className: 'hist-modal-x', onClick: () => setColsOpen(false)}, '×')
+                ),
+                h('div', {className: 'set-scroll'},
+                    h('p', {className: 'set-row-desc mb-2'}, 'Choose which stats appear in Agent stats.'),
+                    h('div', {className: 'ap-col-grid'},
+                        ...columns.map(([field, lines, tip, kind, metric, fullName]) => {
+                            const label = fullName || (Array.isArray(lines) ? lines.join(' ') : lines);
+                            return h('label', {key: field, className: 'ap-col-row'},
+                                h('input', {
+                                    type: 'checkbox',
+                                    checked: colOn[field] !== false,
+                                    onChange: e => persistCols({ ...colOn, [field]: e.target.checked })
+                                }),
+                                h('span', null, label)
+                            );
+                        })
+                    )
+                ),
+                h('div', {className: 'set-foot'},
+                    h('button', {type: 'button', className: 'set-ghost', onClick: () => persistCols(defaultCols())}, 'Show all'),
+                    h('button', {type: 'button', className: 'set-save', onClick: () => setColsOpen(false)}, 'Done')
+                )
+            )
+        ) : null,
+        h('section', {className: 'border border-slate-700 bg-slate-900'},
+            h('div', {className: 'flex items-start justify-between gap-2 border-b border-slate-700 px-3 py-2'},
+                h('div', null,
+                    h('h2', {className: 'text-xs font-semibold uppercase tracking-wide text-slate-300'}, 'Agent stats'),
+                    h('p', {className: 'mt-0.5 text-[10px] text-slate-500'}, 'Click a number to open matching calls. Click an agent name to open Overview.')
+                ),
+                h('button', {
+                    type: 'button',
+                    onClick: exportCsv,
+                    disabled: !rows.length,
+                    className: 'shrink-0 cursor-pointer rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-300 hover:border-cyan-500 hover:text-cyan-300 disabled:opacity-40'
+                }, 'Export CSV')
+            ),
+            h('div', {className: 'overflow-x-auto qs-table-fit'},
+                h('table', {className: 'w-full min-w-[1400px] text-xs q-table qs-table'},
+                    h('thead', null,
+                        h('tr', {className: 'border-b border-slate-700 bg-slate-950 text-[10px] text-slate-500'},
+                            ...visibleCols.map(([field, lines, tip, kind]) => {
+                                const active = sortKey === field;
+                                const arrow = active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '';
+                                const labelLines = Array.isArray(lines) ? lines : [lines];
+                                return h('th', {key: field, className: 'qs-th px-2 py-2 text-left'},
+                                    h('div', {className: 'qs-th-inner'},
+                                        h('button', {
+                                            type: 'button',
+                                            className: 'qs-sort' + (active ? ' is-on' : ''),
+                                            onClick: () => toggleSort(field)
+                                        },
+                                            ...labelLines.map((ln, i) => h('span', {key: i, className: 'qs-th-line'}, ln + (i === labelLines.length - 1 ? arrow : '')))
+                                        ),
+                                        h(Tooltip, {text: tip}, h('span', {className: 'qs-i cursor-help', title: tip}, 'i'))
+                                    )
+                                );
+                            })
+                        )
+                    ),
+                    h('tbody', null,
+                        paginatedData.length === 0
+                            ? h('tr', null, h('td', {colSpan: visibleCols.length, className: 'px-4 py-10 text-center text-xs text-slate-500'}, 'No agent stats.'))
+                            : paginatedData.map((agent, index) => h('tr', {
+                                key: [agent.extension, agent.department, agent.site, startIndex + index].join('-'),
+                                className: 'border-b border-slate-800 hover:bg-slate-800/60'
+                            },
+                                ...visibleCols.map(([field, , tip, kind, metric]) => {
+                                    const tone = failTone(field, agent);
+                                    const shown = formatValue(field, agent);
+                                    if (field === 'agent' || field === 'extension') {
+                                        return h('td', {key: field, className: 'px-2 py-2 text-left'},
+                                            h('button', {
+                                                type: 'button',
+                                                className: 'qs-qbtn cursor-pointer text-left text-cyan-400 hover:text-cyan-300 hover:underline',
+                                                title: 'Open Overview for ' + (agent.name || agent.extension),
+                                                onClick: ev => { ev.stopPropagation(); onAgentClick && onAgentClick(agent.extension); }
+                                            }, shown)
+                                        );
+                                    }
+                                    if (field === 'site' || !metric) {
+                                        return h('td', {key: field, className: 'px-2 py-2 text-left text-slate-300'}, shown);
+                                    }
+                                    return h('td', {key: field, className: 'qs-num px-2 py-2'},
+                                        h('button', {
+                                            type: 'button',
+                                            className: 'qs-num-btn cursor-pointer' + (shown === '—' ? '' : (tone === 'fail' ? ' is-fail' : (tone === 'pass' ? ' is-pass' : ''))),
+                                            title: tip,
+                                            onClick: ev => {
+                                                ev.stopPropagation();
+                                                onMetricClick && onMetricClick(metric, agent.extension);
+                                            }
+                                        }, shown)
+                                    );
+                                })
+                            ))
+                    )
+                )
+            ),
+            h('div', {className: 'flex flex-wrap items-center justify-between gap-3 border-t border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-400'},
+                h('div', {className: 'flex items-center gap-2'},
+                    'Rows per page:',
+                    h('select', {
+                        value: pageSize,
+                        onChange: e => { setPageSize(Number(e.target.value)); setPage(1); },
+                        className: 'rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-300'
+                    },
+                        h('option', {value: 10}, '10'),
+                        h('option', {value: 25}, '25'),
+                        h('option', {value: 50}, '50'),
+                        h('option', {value: 100}, '100')
+                    ),
+                    h('span', {className: 'ml-2 text-slate-500'},
+                        totalRows === 0 ? 'Showing 0 of 0' : ('Showing ' + (startIndex + 1) + ' - ' + endIndex + ' of ' + totalRows))
+                ),
+                h('div', {className: 'flex items-center gap-1'},
+                    h('button', {
+                        disabled: currentPage <= 1,
+                        onClick: () => setPage(p => Math.max(1, p - 1)),
+                        className: 'rounded border border-slate-700 bg-slate-900 px-3 py-1 text-xs font-medium hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40'
+                    }, 'Prev'),
+                    h('span', {className: 'px-2 text-slate-300'}, 'Page ' + currentPage + ' of ' + totalPages),
+                    h('button', {
+                        disabled: currentPage >= totalPages,
+                        onClick: () => setPage(p => Math.min(totalPages, p + 1)),
+                        className: 'rounded border border-slate-700 bg-slate-900 px-3 py-1 text-xs font-medium hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40'
+                    }, 'Next')
+                )
+            )
+        )
+    );
+}
+
+export { AgentPerformanceTable };

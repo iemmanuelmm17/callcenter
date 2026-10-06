@@ -322,7 +322,15 @@ export async function createHarness(options = {}) {
 
   /* --- globals + libraries --------------------------------------------- */
   const React = (await import('react')).default;
-  const ReactDOM = await import('react-dom/client');
+  /*
+   * The page loads the full react-dom UMD build, which carries createPortal as
+   * well as createRoot. The client-only entry point has no createPortal, so
+   * every portalled dialog (the call modal, the date-range popup, the AA sheet)
+   * used to explode the moment this suite opened one — merge both.
+   */
+  const ReactDOMFull = await import('react-dom');
+  const ReactDOMClient = await import('react-dom/client');
+  const ReactDOM = { ...ReactDOMFull, ...ReactDOMClient };
   const g = globalThis;
   g.window = window;
   g.document = window.document;

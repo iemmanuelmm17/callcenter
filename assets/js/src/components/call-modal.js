@@ -8,6 +8,7 @@ import { CallFlowDialog, loadCallFlow } from './call-flow-dialog.js';
 import { buildCallColumns } from './call-modal-columns.js';
 import { RecordingPlayer } from './recording-player.js';
 import { api, apiDownload } from '../lib/api.js';
+import { PAGE_SIZES, buildPages, clampPage, recordRangeLabel } from '../lib/pagination.js';
 import { useMetricCatalog } from '../lib/metrics.js';
 import { formatPhoneNumber } from '../lib/format.js';
 import { formatCallDate, formatCallTime } from '../lib/time.js';
@@ -274,15 +275,13 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
      * =========================================================
      */
 
-    const changePageSize =
-        value => {
+    const changePageSize = value => {
+        setPageSize(Number(value));
+        setPage(1);
+    };
 
-            const size =
-                Number(value);
-
-            setPageSize(size);
-            setPage(1);
-        };
+    const goToPage = target =>
+        setPage(clampPage(target, totalPages));
 
 
     /*
@@ -290,22 +289,6 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
      * PAGE NAVIGATION
      * =========================================================
      */
-
-    const goToPage =
-        target => {
-
-            const next =
-                Math.max(
-                    1,
-                    Math.min(
-                        totalPages,
-                        target
-                    )
-                );
-
-            setPage(next);
-        };
-
 
     /*
      * =========================================================
@@ -325,127 +308,8 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
      * =========================================================
      */
 
-    const buildPages =
-        () => {
-
-            if (totalPages <= 7) {
-
-                return Array.from(
-                    {
-                        length:
-                            totalPages
-                    },
-
-                    (_, i) =>
-                        i + 1
-                );
-            }
-
-
-            const result = [
-                1
-            ];
-
-
-            /*
-             * -------------------------------------------------
-             * Near beginning
-             * -------------------------------------------------
-             */
-
-            if (page <= 4) {
-
-                result.push(2);
-                result.push(3);
-                result.push(4);
-                result.push(5);
-
-                result.push(
-                    'ellipsis-right'
-                );
-            }
-
-
-            /*
-             * -------------------------------------------------
-             * Near end
-             * -------------------------------------------------
-             */
-
-            else if (
-                page >=
-                totalPages - 3
-            ) {
-
-                result.push(
-                    'ellipsis-left'
-                );
-
-                result.push(
-                    totalPages - 4
-                );
-
-                result.push(
-                    totalPages - 3
-                );
-
-                result.push(
-                    totalPages - 2
-                );
-
-                result.push(
-                    totalPages - 1
-                );
-            }
-
-
-            /*
-             * -------------------------------------------------
-             * Middle
-             * -------------------------------------------------
-             */
-
-            else {
-
-                result.push(
-                    'ellipsis-left'
-                );
-
-                result.push(
-                    page - 1
-                );
-
-                result.push(
-                    page
-                );
-
-                result.push(
-                    page + 1
-                );
-
-                result.push(
-                    'ellipsis-right'
-                );
-            }
-
-
-            /*
-             * -------------------------------------------------
-             * Always show last page
-             * -------------------------------------------------
-             */
-
-            result.push(
-                totalPages
-            );
-
-
-            return result;
-        };
-
-
     const paginationPages =
-        buildPages();
+        buildPages(totalPages, page);
 
 
     /*
@@ -455,17 +319,7 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
      */
 
     const recordRange =
-        totalRecords === 0
-
-            ? 'Showing 0 of 0'
-
-            : `Showing ${
-                startIndex + 1
-            }–${
-                endIndex
-            } of ${
-                totalRecords.toLocaleString()
-            }`;
+        recordRangeLabel(totalRecords, startIndex, endIndex);
 
     const csvCell = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
 
@@ -920,43 +774,22 @@ return h(
                                 'focus:border-cyan-500'
                         },
 
-                        h(
-                            'option',
-                            {
-                                value:
-                                    10
-                            },
-                            '10'
-                        ),
+                        ...PAGE_SIZES.map(
+                            size =>
+                                h(
+                                    'option',
+                                    {
+                                        key:
+                                            size,
 
-                        h(
-                            'option',
-                            {
-                                value:
-                                    25
-                            },
-                            '25'
-                        ),
+                                        value:
+                                            size
+                                    },
 
-                        h(
-                            'option',
-                            {
-                                value:
-                                    50
-                            },
-                            '50'
-                        ),
-
-                        h(
-                            'option',
-                            {
-                                value:
-                                    100
-                            },
-                            '100'
+                                    String(size)
+                                )
                         )
                     ),
-
                     h(
                         'span',
                         {

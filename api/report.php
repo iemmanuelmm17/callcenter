@@ -368,6 +368,12 @@ $current['topAgents'] = $topAgents;
 		'topAgents' => $topAgents,
 		'agentPerformance' => $agentPerformance,
 		'inventory' => reportingInventory($user, $directory, $calls),
+		/*
+		 * QA-5: the effective domain thresholds ride along for EVERY role, so a
+		 * screen's red/green is the same red/green the manager sees without
+		 * handing non-privileged users the settings endpoint.
+		 */
+		'settings' => loadDomainSettings((string)($user['domain'] ?? '')),
 		'timezone' => DEFAULT_TIMEZONE
 	]);
 

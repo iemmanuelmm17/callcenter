@@ -405,5 +405,7 @@ define('PBX_SERVERS', ['nms1' => 'https://pbx.example']);
 export const USERS = {
   office_manager: { username: 'om', role: 'office_manager', domain: 'test.example', extension: '1000', department: '', site: '', displayName: 'OM' },
   supervisor: { username: 'sup', role: 'supervisor', domain: 'test.example', extension: '1100', department: 'Sales', site: '', displayName: 'Sup' },
-  agent: { username: 'ag', role: 'agent', domain: 'test.example', extension: '6080', department: 'Sales', site: '', displayName: 'Agent' }
+  agent: { username: 'ag', role: 'agent', domain: 'test.example', extension: '6080', department: 'Sales', site: '', displayName: 'Agent' },
+  /* The dashboard-only role: never allowed into a report or a setting. */
+  basic_user: { username: 'bu', role: 'basic_user', domain: 'test.example', extension: '6082', department: '', site: '', displayName: 'Basic' }
 };

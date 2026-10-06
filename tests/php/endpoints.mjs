@@ -39,7 +39,12 @@ const MATRIX = [
   { endpoint: 'alerts.php', method: 'POST', body: { start: '2026-08-02', end: '2026-08-02' }, allowed: 'office_manager', forbidden: [] },
   { endpoint: 'call_flow.php', method: 'POST', body: { traceApi: '/ns-api/v2/sipflow?x=1', origCallId: 'o1', startTime: '2026-08-02 10:00:00' }, allowed: 'office_manager', forbidden: ['agent'] },
   { endpoint: 'filters.php', method: 'POST', body: {}, allowed: 'office_manager', forbidden: [], allowGet: true },
-  { endpoint: 'settings.php', method: 'POST', body: {}, allowed: 'office_manager', forbidden: ['agent'], allowGet: true },
+  /*
+   * QA-5: reading the thresholds is manager/supervisor, changing them is the
+   * office manager's alone.
+   */
+  { endpoint: 'settings.php', method: 'POST', body: {}, allowed: 'office_manager', forbidden: ['supervisor', 'agent', 'basic_user'], allowGet: true },
+  { endpoint: 'settings.php', method: 'GET', body: null, allowed: 'supervisor', forbidden: ['agent', 'basic_user'], allowGet: true },
   { endpoint: 'cache_job.php', method: 'POST', body: { start: '2026-08-02', end: '2026-08-02', action: 'status' }, allowed: 'office_manager', forbidden: [] },
   /* session.php intentionally answers 200 {user:null} when not logged in — the
    * login screen uses it to detect an existing session. */
@@ -113,6 +118,41 @@ for (const entry of MATRIX) {
     const res = await harness.request(endpoint, { method, body, user: USERS.office_manager, query: {} });
     check(`${label} → ${expectStatus.join('/')}`, expectStatus.includes(res.status), { status: res.status, body: res.body });
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * QA-5: the thresholds every screen colours with travel with the dashboard
+ * payload, because the settings endpoint is manager/supervisor only.
+ * ------------------------------------------------------------------------- */
+console.log('\n== QA-5 settings access ==');
+{
+  const save = await harness.request('settings.php', {
+    method: 'POST', body: { slaPct: 91, missedPct: 33, abandonPct: 12 }, user: USERS.office_manager
+  });
+  check('an office manager can save the thresholds', save.status === 200, save.body);
+
+  const saved = await harness.request('settings.php', { method: 'GET', user: USERS.office_manager });
+  check('the GET reports the saved values and that the caller may edit',
+    Number(saved.body?.data?.slaPct) === 91 && saved.body?.canEdit === true, saved.body);
+
+  const supGet = await harness.request('settings.php', { method: 'GET', user: USERS.supervisor });
+  check('a supervisor may read them but not edit',
+    supGet.status === 200 && supGet.body?.canEdit === false, supGet.body);
+
+  const supWrite = await harness.request('settings.php', {
+    method: 'POST', body: { slaPct: 55 }, user: USERS.supervisor
+  });
+  check('a supervisor cannot change them', supWrite.status === 403, supWrite.status);
+  const reread = await harness.request('settings.php', { method: 'GET', user: USERS.office_manager });
+  check('the refused write changed nothing', Number(reread.body?.data?.slaPct) === 91, reread.body?.data);
+
+  const forAgent = await harness.request('report.php', {
+    method: 'POST', body: { start: '2026-08-02', end: '2026-08-02' }, user: USERS.agent
+  });
+  const thresholds = forAgent.body?.settings || {};
+  check('report.php ships the thresholds to an agent (so the colours match)',
+    Number(thresholds.slaPct) === 91 && Number(thresholds.missedPct) === 33 && Number(thresholds.abandonPct) === 12,
+    thresholds);
 }
 
 /* ---------------------------------------------------------------------------

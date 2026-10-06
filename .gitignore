@@ -8,6 +8,14 @@
 *.jsonl
 
 # ---------------------------------------------------------------------------
+# Dev build output (QA-4). The deploy artifacts are the content-hashed files
+# named by assets/build-manifest.json; these unversioned copies are what
+# `node tools/build.mjs` produces locally and what the jsdom harness mounts.
+# ---------------------------------------------------------------------------
+/assets/js/app.js
+/assets/css/app.css
+
+# ---------------------------------------------------------------------------
 # Local configuration and secrets. Deployment values live in the environment
 # (PBX_SERVERS, PBX_CLIENT_ID, PBX_CLIENT_SECRET, PBX_SIP_TOKEN, ...) or in
 # includes/config.local.php, which must stay on the server.

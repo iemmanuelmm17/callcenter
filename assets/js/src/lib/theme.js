@@ -22,21 +22,12 @@ const applyTheme = theme => {
   };
 
 applyTheme(readTheme());
-
-if (!document.getElementById('fa-icons')) {
-    const fa = document.createElement('link');
-    fa.id = 'fa-icons';
-    fa.rel = 'stylesheet';
-    fa.href = 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css';
-    document.head.appendChild(fa);
-  }
-
-if (!document.getElementById('plex-mono')) {
-    const plex = document.createElement('link');
-    plex.id = 'plex-mono';
-    plex.rel = 'stylesheet';
-    plex.href = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600;700&display=swap';
-    document.head.appendChild(plex);
-  }
+/*
+ * QA-3: the icon font (cdnjs) and IBM Plex Mono (fonts.googleapis.com) used to
+ * be injected here from public CDNs. Both are vendored and loaded by
+ * portal.php from assets/vendor, so nothing in the app reaches a third party.
+ * Loading them in the document head is also one round-trip earlier than a
+ * post-bundle injection was.
+ */
 
 export { applyTheme, readTheme };

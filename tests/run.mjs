@@ -19,16 +19,27 @@ const which = (process.argv[2] || 'all').toLowerCase();
 
 const SUITES = {
   static: [
+    /*
+     * The dev build runs first: css-coverage, ui-audit and the jsdom smoke all
+     * read assets/js/app.js + assets/css/app.css, which are git-ignored build
+     * output (QA-4) — a fresh clone has no stylesheet until this step runs.
+     */
+    { name: 'build', cmd: ['node', 'tools/build.mjs'] },
+    { name: 'prod build', cmd: ['node', 'tools/prod-build.mjs'] },
     { name: 'php lint', cmd: ['node', 'tools/php-lint.mjs'] },
     { name: 'css coverage', cmd: ['node', 'tools/css-coverage.mjs'] },
     { name: 'ui audit', cmd: ['node', 'tools/ui-audit.mjs', '--strict'] },
     { name: 'module budget', cmd: ['node', 'tools/module-budget.mjs'] },
-    { name: 'dead code', cmd: ['node', 'tools/dead-code.mjs', '--strict'] }
+    { name: 'dead code', cmd: ['node', 'tools/dead-code.mjs', '--strict'] },
+    { name: 'no cdn', cmd: ['node', 'tools/no-cdn.mjs'] },
+    { name: 'vendor check', cmd: ['node', 'tools/vendor.mjs', '--check'] }
   ],
   js: [
-    { name: 'build', cmd: ['node', 'tools/build.mjs'] },
     { name: 'js smoke', cmd: ['node', 'tests/js/smoke.mjs'] },
-    { name: 'aa fields', cmd: ['node', 'tests/js/aa-fields.mjs'] }
+    { name: 'aa fields', cmd: ['node', 'tests/js/aa-fields.mjs'] },
+    { name: 'aa model', cmd: ['node', 'tests/js/aa-model.mjs'] },
+    { name: 'date range', cmd: ['node', 'tests/js/date-range.mjs'] },
+    { name: 'pagination', cmd: ['node', 'tests/js/pagination.mjs'] }
   ],
   php: [
     { name: 'api matrix', cmd: ['node', 'tests/php/endpoints.mjs'] },
@@ -36,7 +47,8 @@ const SUITES = {
     { name: 'csv exports', cmd: ['node', 'tests/php/export.mjs'] },
     { name: 'cdr store', cmd: ['node', 'tests/php/cdr-store.mjs'] },
     { name: 'cdr cache', cmd: ['node', 'tests/php/cdr-cache.mjs'] },
-    { name: 'outcome parity', cmd: ['node', 'tests/php/outcomes.mjs'] }
+    { name: 'outcome parity', cmd: ['node', 'tests/php/outcomes.mjs'] },
+    { name: 'portal', cmd: ['node', 'tests/php/portal.mjs'] }
   ]
 };
 
