@@ -1,0 +1,27 @@
+@import "tailwindcss" source(none);
+
+/*
+ * Explicit scan list.
+ *
+ * `source(none)` above disables Tailwind's automatic project-wide detection.
+ * That detection also walks the COMPILED artefacts (assets/js/app.js,
+ * assets/css/app.css) and any stray scratch file, which made the build
+ * non-deterministic: a class that only existed in yesterday's bundle kept
+ * generating utilities, and two consecutive builds of identical sources
+ * produced different CSS. With an explicit list the build is reproducible:
+ * same sources in, byte-identical CSS out.
+ *
+ * When a new class-bearing file/directory is added, add it here AND to
+ * tools/css-coverage.mjs so the coverage check keeps guarding the build.
+ */
+@source "../../../*.php";
+@source "../../../includes/**/*.php";
+@source "../../../portal/**/*.php";
+@source "../../../api/**/*.php";
+@source "../../js/src/**/*.js";
+
+@theme {
+  --color-accent: #22d3ee;
+}
+
+@import "./custom.css";

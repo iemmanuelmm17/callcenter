@@ -24,3 +24,5 @@
 .DS_Store
 Thumbs.db
 *.swp
+# Test scratch space (see tests/php/php.mjs)
+/tests/.tmp/

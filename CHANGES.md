@@ -1,3 +1,87 @@
+# CHANGES — Development toolchain, committed build, test harness (2026-10-06)
+
+**Scope:** engineering hygiene only — no change to what the application does.
+**Files:** `package.json`, `package-lock.json`, `README.md`, `tools/build.mjs`,
+`tools/css-coverage.mjs`, `tools/php-lint.mjs`, `tests/run.mjs`,
+`tests/js/{harness,smoke}.mjs`, `tests/php/{php,endpoints}.mjs`,
+`assets/js/src/app.js`, `assets/css/src/{app,custom}.css`,
+regenerated `assets/js/app.js` + `assets/css/app.css`, `.gitignore`.
+
+## Why
+
+`app.js` (12 254 lines) and `app.css` were edited directly and had drifted:
+105 Tailwind utilities used by the markup were **not** in the committed
+stylesheet (the CDN produced them at runtime), 52 custom classes were missing
+too, and `app.js` injected 15 KB of CSS at run time. This commit puts both
+bundles under a real, reproducible build and adds the harness the rest of the
+refactor is verified against.
+
+## The build
+
+* **Split the source out of the artefacts.** The hand-written part of the old
+  `app.css` (2 585 lines) now lives in `assets/css/src/custom.css`; the new
+  16-line entry `assets/css/src/app.css` imports Tailwind, lists its scan
+  sources explicitly, and imports the hand-written file. `assets/js/src/app.js`
+  is the bundle entry (the previous `app.js`, unchanged in behaviour).
+* `node tools/build.mjs` runs esbuild (IIFE, es2020, banner-marked as
+  generated) and the Tailwind CLI, then asserts that a set of load-bearing
+  selectors (`.q-table`, `.hist-listen`, `.sim-panel`, `.tn-kpi-mini`, …) is
+  present in the output — a build that silently drops a stylesheet fails.
+* **Deterministic output.** Tailwind's automatic source detection was walking
+  the compiled bundles, so class names from yesterday's `app.css` kept
+  generating utilities and two consecutive builds of identical sources
+  produced different CSS (verified: `.filter` and two theme variables appeared
+  only on the first build). The entry now uses `source(none)` plus an explicit
+  `@source` list, and `tests/run.mjs` rebuilds on every run — a rebuild that
+  changes the committed bundle is a signal, not noise.
+* The 15 631-character CSS block that `app.js` injected at run time (recording
+  player styles, `rec-player-styles`) moved into `custom.css`; the injection
+  code is gone.
+
+## Bugs the new pipeline surfaced (fixed)
+
+* `custom.css` carried a corrupted declaration (`lor: #94a3b8;` plus a stray
+  brace) and a duplicated `.qs-table thead th` rule, both inherited from the
+  committed `app.css` (line 3579). Tailwind v4 refuses to parse it
+  (`CssSyntaxError: Missing opening {`); browsers had been dropping the rule
+  silently. Both removed.
+* Concrete missing-class fixes: `.sim-table-scroll` added, the inert
+  `tn-table` class dropped. Coverage is now **0 missing utilities, 0 missing
+  custom classes** (34 documented exceptions: FontAwesome names and inert
+  selector hooks).
+
+## The harness
+
+* `tests/js/` boots the **built** bundle in jsdom with real React 18 and Chart
+  stubs, then walks all six nav routes, the four Telephone Numbers tabs, the
+  settings modal, an agent sub-tab and a dashboard-KPI → call-modal drill-down,
+  failing on any unexpected runtime error.
+* `tests/php/` runs every `api/*.php` under real PHP 8.4 (php-wasm) with a
+  stubbed `PbxClient` that mirrors the real client's method signatures, and
+  asserts **90** checks: no session → 401, wrong verb → 405, forbidden role →
+  403, allowed role → 2xx, and no PHP fatal leaking into a response.
+* `npm test` runs php lint → CSS coverage → build → JS smoke → API matrix in
+  about four seconds. The API matrix is the contract the next refactors
+  (security fixes, dead-code removal, file splits, SQLite cache) are checked
+  against, so it is written as a table that is meant to be extended.
+
+## Verification
+
+* `npm test` → **ALL SUITES PASSED** (php lint on 34 files, 690 class tokens
+  with 0 missing, build 443.7 kB JS / 134.4 kB CSS, JS smoke clean, API matrix
+  90/90).
+* Bundle behaviour is unchanged: the previous single-file `app.js` was moved
+  to `assets/js/src/app.js` verbatim and rebuilt — the built JS is byte-identical
+  to the pre-refactor bundle apart from the removed run-time CSS injection.
+* No endpoint, no cache format, no config and no database change.
+
+## Deploy checklist
+
+1. Copy `assets/js/app.js`, `assets/css/app.css` (or leave the SFTP mirror to
+   handle static files). Nothing else in this commit is deployed.
+2. `tests/`, `tools/`, `package.json`, `README.md` are development-only and can
+   be left out of the deploy set.
+
 # CHANGES — Simultaneous calls (concurrency) report (2026-10-06)
 
 **New view:** Telephone Numbers → **Simultaneous** tab (graph + interval summary table).

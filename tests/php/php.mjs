@@ -1,0 +1,278 @@
+/**
+ * Real-PHP harness (php-wasm, PHP 8.4) for the API layer.
+ *
+ * There is no PHP binary in CI/dev containers, so the endpoints are executed
+ * by the phpwasm runtime with:
+ *   - the repo's real includes/ files,
+ *   - a stubbed bootstrap (no session_start, no PBX),
+ *   - stubbed PBX responses so every endpoint can be exercised offline,
+ *   - a captured jsonResponse() so status codes + payloads can be asserted.
+ *
+ * What this can prove: routing/method handling, role gates, input validation,
+ * JSON shapes, scoping helpers, pure computation (concurrency, summaries).
+ * What it cannot prove: live PBX behaviour (curl) or MySQL/SQLite servers.
+ */
+import { readFileSync, readdirSync, mkdirSync, rmSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import PhpNodePkg from 'php-wasm/PhpNode.js';
+
+const { PhpNode } = PhpNodePkg;
+export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const TMP = path.join(ROOT, 'tests/.tmp');
+
+const BOOTSTRAP_STUB = `<?php
+declare(strict_types=1);
+/*
+ * Test bootstrap: mirrors includes/bootstrap.php (config, timezone, session
+ * shape, jsonResponse, readJsonBody) without session_start() or PBX calls.
+ * jsonResponse() writes THE response to disk and exits, exactly like the real
+ * one terminates the request.
+ */
+require_once __DIR__ . '/config.php';
+date_default_timezone_set(DEFAULT_TIMEZONE);
+foreach ([CACHE_DIR, LOG_DIR] as $directory) {
+    if (!is_dir($directory) && !@mkdir($directory, 0770, true) && !is_dir($directory)) {}
+}
+function appLog(string $message, ?Throwable $e = null): void {
+    if ($e instanceof Throwable) $message .= ' ' . $e->getMessage();
+    file_put_contents(TEST_LOG, gmdate('c') . " {$message}\\n", FILE_APPEND);
+}
+function jsonResponse(array $data, int $status = 200): never {
+    file_put_contents(TEST_OUT, json_encode(['status' => $status, 'body' => $data]));
+    exit(0);
+}
+function requireMethod(string $method): void {
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== $method) jsonResponse(['error' => 'Method not allowed'], 405);
+}
+function readJsonBody(?string $raw = null): array {
+    $raw = $raw ?? (string)file_get_contents(TEST_BODY);
+    if (trim($raw) === '') return [];
+    $data = json_decode($raw, true);
+    if (!is_array($data)) jsonResponse(['error' => 'Invalid JSON body.'], 422);
+    return $data;
+}
+if (!defined('TEST_TMP')) define('TEST_TMP', dirname(__DIR__) . '/.tmp');
+if (!defined('TEST_OUT')) define('TEST_OUT', __DIR__ . '/../out.json');
+if (!defined('TEST_BODY')) define('TEST_BODY', __DIR__ . '/../body.json');
+if (!defined('TEST_LOG')) define('TEST_LOG', __DIR__ . '/../app.log');
+`;
+
+/** PBX stub: returns canned data for every PbxClient call the endpoints make. */
+const PBX_STUB = `<?php
+declare(strict_types=1);
+/**
+ * Test double for includes/PbxClient.php.
+ *
+ * It mirrors the REAL public surface (method names and signatures are copied
+ * from includes/PbxClient.php) and answers each call from
+ * tests/.tmp/pbx/<method>.json when that file exists, otherwise from a safe
+ * default. Every call is recorded, so tests can assert what the endpoints
+ * asked the PBX for. If an endpoint starts calling a method this stub does not
+ * define, the test fails loudly — that is deliberate.
+ */
+final class PbxClient
+{
+    private const TMP = TEST_TMP;
+    /** @var list<string> */
+    public static array $calls = [];
+
+    public function __construct(private string $token = '') {}
+
+    public static function reset(): void { self::$calls = []; }
+
+    private function canned(string $method, mixed $fallback): mixed
+    {
+        self::$calls[] = $method;
+        $file = self::TMP . '/pbx/' . $method . '.json';
+        if (is_file($file)) {
+            $data = json_decode((string)file_get_contents($file), true);
+            if (is_array($data)) return $data;
+        }
+        return $fallback;
+    }
+
+    private function record(string $call): void { self::$calls[] = $call; }
+
+    public function users(string $domain): array { return (array)$this->canned('users', []); }
+    public function callqueues(string $domain): array { return (array)$this->canned('callqueues', []); }
+    public function callqueueAgents(string $domain, string $queue): array { return (array)$this->canned('callqueueAgents', []); }
+    public function phonenumbers(string $domain): array { return (array)$this->canned('phonenumbers', []); }
+    public function cdrs(string $domain, string $start, string $end): array { return (array)$this->canned('cdrs', []); }
+    public function aaReport(string $domain, string $start, string $end): array { return (array)$this->canned('aaReport', []); }
+    public function autoAttendantList(string $domain): array { return (array)$this->canned('autoAttendantList', []); }
+    public function autoAttendants(string $domain, string $extension, ?string $prompt = null): array { return (array)$this->canned('autoAttendants', []); }
+    public function autoAttendantsBatch(array $extensions, int $concurrency = 6): array {
+        $rows = (array)$this->canned('autoAttendantsBatch', []);
+        if ($rows !== []) return $rows;
+        $out = [];
+        foreach ($extensions as $ext) $out[(string)$ext] = [];
+        return $out;
+    }
+    public function cradle(string $origCallId, string $termCallId, string $start10, string $end10): array { return (array)$this->canned('cradle', []); }
+    public function recording(string $domain, string $ext, string $callId): array { return (array)$this->canned('recording', []); }
+
+    public function fetchCdrs(
+        string $domain,
+        string $start,
+        string $end,
+        int $startOffset = 0,
+        array $existing = [],
+        ?callable $onPage = null
+    ): array {
+        $rows = (array)$this->canned('fetchCdrs', []);
+        if (is_callable($onPage)) {
+            $onPage($rows, count($rows), true);
+        }
+        return ['records' => $rows, 'complete' => true, 'nextOffset' => count($rows)];
+    }
+
+    public function sipflowCradle(
+        string $startTime,
+        string $endTime,
+        string $callids,
+        string $servers = '',
+        string $traceApi = ''
+    ): array {
+        $this->record('sipflowCradle:' . $traceApi);
+        return (array)$this->canned('sipflowCradle', []);
+    }
+
+    public function download(string $url): array
+    {
+        $this->record('download:' . $url);
+        $file = self::TMP . '/pbx/download.json';
+        if (is_file($file)) {
+            $data = json_decode((string)file_get_contents($file), true);
+            if (is_array($data)) return $data;
+        }
+        return ['ok' => false, 'status' => 200, 'contentType' => 'audio/mpeg', 'body' => 'STUB'];
+    }
+}
+`;
+export class PhpHarness {
+  constructor() {
+    this.php = new PhpNode();
+    this.out = [];
+    this.php.addEventListener('output', e => this.out.push(String(e.detail)));
+  }
+
+  /** php-wasm's mkdir is not recursive (and throws EEXIST), so walk the path. */
+  async mkdirp(dir) {
+    const parts = dir.split('/').filter(Boolean);
+    let acc = '';
+    for (const part of parts) {
+      acc += '/' + part;
+      try { await this.php.mkdir(acc); } catch { /* exists */ }
+    }
+  }
+
+  async boot() {
+    rmSync(TMP, { recursive: true, force: true });
+    mkdirSync(TMP, { recursive: true });
+    for (const dir of ['includes', 'api', 'pbx', 'cache', 'logs']) {
+      mkdirSync(path.join(TMP, dir), { recursive: true });
+      await this.mkdirp(path.join(TMP, dir));
+    }
+    await this.mkdirp(TMP);
+
+    await this.write('includes/config.php', readFileSync(path.join(ROOT, 'includes/config.php'), 'utf8'));
+    await this.write('includes/bootstrap.php', BOOTSTRAP_STUB);
+    await this.write('includes/PbxClient.php', PBX_STUB);
+    for (const name of readdirSync(path.join(ROOT, 'includes'))) {
+      if (!name.endsWith('.php') || ['config.php', 'bootstrap.php', 'PbxClient.php'].includes(name)) continue;
+      const source = readFileSync(path.join(ROOT, 'includes', name), 'utf8');
+      await this.write(`includes/${name}`, source);
+    }
+    for (const name of readdirSync(path.join(ROOT, 'api'))) {
+      if (!name.endsWith('.php')) continue;
+      await this.write(`api/${name}`, readFileSync(path.join(ROOT, 'api', name), 'utf8'));
+    }
+    this.includes = this.relativeIncludes();
+    return this;
+  }
+
+  /** The real api/*.php files require ../includes/... — mirror that under .tmp. */
+  relativeIncludes() {
+    return true;
+  }
+
+  async write(rel, data) {
+    const full = path.join(TMP, rel);
+    mkdirSync(path.dirname(full), { recursive: true });
+    await this.mkdirp(path.dirname(full));
+    await this.php.writeFile(full, data);
+  }
+
+  async seedPbx(name, rows) {
+    await this.write(`pbx/${name}.json`, JSON.stringify(rows));
+  }
+
+  /**
+   * Run one endpoint request.
+   * @param {string} endpoint  e.g. 'report.php'
+   * @param {object} options   {method, body, query, user, rawBody}
+   * @returns {{status:number, body:object, log:string}}
+   */
+  async request(endpoint, options = {}) {
+    const {
+      method = 'POST',
+      body = null,
+      rawBody = body === null ? '' : JSON.stringify(body),
+      query = {},
+      user = null
+    } = options;
+
+    await this.write('body.json', rawBody);
+    await this.write('input.json', JSON.stringify({ method, query, user }));
+    try { await this.php.unlink(path.join(TMP, 'out.json')); } catch { /* absent */ }
+    try { await this.php.unlink(path.join(TMP, 'app.log')); } catch { /* absent */ }
+
+    const code = [
+      '<?php',
+      "error_reporting(E_ALL & ~E_DEPRECATED & ~E_WARNING & ~E_NOTICE);",
+      `$cfg = json_decode((string)file_get_contents('${TMP}/input.json'), true);`,
+      "$_SERVER['REQUEST_METHOD'] = $cfg['method'];",
+      "$_SERVER['REMOTE_ADDR'] = '127.0.0.1';",
+      "$_SERVER['HTTPS'] = 'on';",
+      "$_GET = $cfg['query'] ?? [];",
+      "$_REQUEST = $_GET;",
+      "$_POST = [];",
+      "$_SESSION = [];",
+      "if ($cfg['user']) {",
+      "    $_SESSION['user'] = $cfg['user'];",
+      "    $_SESSION['last_activity'] = time();",
+      "    $_SESSION['token'] = 'test-token';",
+      "    $_SESSION['refresh_token'] = 'test-refresh';",
+      "    $_SESSION['token_expires_at'] = time() + 3600;",
+      "}",
+      "try {",
+      `    require '${TMP}/api/${endpoint}';`,
+      `    file_put_contents('${TMP}/out.json', json_encode(['status' => 200, 'body' => ['note' => 'endpoint returned']]));`,
+      "} catch (Throwable $e) {",
+      `    file_put_contents('${TMP}/out.json', json_encode(['status' => 599, 'body' => ['fatal' => get_class($e) . ': ' . $e->getMessage(), 'file' => $e->getFile(), 'line' => $e->getLine()]]));`,
+      "}"
+    ].join('\n');
+
+    /* jsonResponse() exits the previous request; reset the interpreter. */
+    try { await this.php.refresh(); } catch { /* first run */ }
+    this.out.length = 0;
+    await this.php.run(code);
+
+    let payload = { status: 0, body: { error: 'no response' } };
+    let log = '';
+    try {
+      payload = JSON.parse(await this.php.readFile(path.join(TMP, 'out.json'), { encoding: 'utf8' }));
+    } catch { /* endpoint produced nothing */ }
+    try {
+      log = await this.php.readFile(path.join(TMP, 'app.log'), { encoding: 'utf8' });
+    } catch { /* no log */ }
+    return { status: payload.status, body: payload.body, log, phpOutput: this.out.join('') };
+  }
+}
+
+export const USERS = {
+  office_manager: { username: 'om', role: 'office_manager', domain: 'test.example', extension: '1000', department: '', site: '', displayName: 'OM' },
+  supervisor: { username: 'sup', role: 'supervisor', domain: 'test.example', extension: '1100', department: 'Sales', site: '', displayName: 'Sup' },
+  agent: { username: 'ag', role: 'agent', domain: 'test.example', extension: '6080', department: 'Sales', site: '', displayName: 'Agent' }
+};

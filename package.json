@@ -1,0 +1,28 @@
+{
+  "name": "callscope-reporting",
+  "version": "2.0.0",
+  "private": true,
+  "description": "CallScope reporting dashboard (PHP endpoints + React front end). package.json is DEV-ONLY: it builds assets/js/app.js and assets/css/app.css from the sources under assets/*/src and runs the test harness. The deployed application is still plain PHP + static assets.",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "build:js": "node tools/build.mjs --js",
+    "build:css": "node tools/build.mjs --css",
+    "test": "node tests/run.mjs",
+    "test:js": "node tests/run.mjs js",
+    "test:php": "node tests/run.mjs php",
+    "lint:php": "node tools/php-lint.mjs"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.14",
+    "esbuild": "^0.25.10",
+    "jsdom": "^27.0.0",
+    "php-parser": "^3.2.5",
+    "php-wasm": "^0.2.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "tailwindcss": "^4.1.14"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
