@@ -49,7 +49,7 @@ const inbound = extra => Object.assign({
 
 const CDRS = [
   /* answered in the queue, 120 s of talk */
-  inbound({ id: 'c1', 'call-answer-datetime': at('10:00:05'), 'call-talking-duration-seconds': 120, 'call-term-user': '6080', 'call-through-user': '700' }),
+  inbound({ id: 'c1', 'call-answer-datetime': at('10:00:05'), 'call-talking-duration-seconds': 120, 'call-term-user': '6080', 'call-through-user': '700', 'call-term-call-id': 'c1-term' }),
   /* queue abandon, batch leg present */
   inbound({ id: 'c2', 'call-start-datetime': at('10:10'), 'call-batch-start-datetime': at('10:10:02'), 'call-term-user': '6080', 'call-through-user': '700' }),
   /* queue abandon, no batch fields — the aggregate-only CDR shape */
@@ -65,11 +65,11 @@ const CDRS = [
   /* voicemail by direction 2 */
   inbound({ id: 'c8', 'call-direction': 2, 'call-start-datetime': at('11:10'), 'call-term-user': '6080' }),
   /* outbound */
-  { id: 'c9', 'call-direction': 0, 'call-start-datetime': at('11:20'), 'call-orig-user': '6081', 'call-term-user': '8454259810', dialed: '8454259810', 'call-talking-duration-seconds': 30, 'call-total-duration-seconds': 40 },
+  { id: 'c9', 'call-direction': 0, 'call-start-datetime': at('11:20'), 'call-orig-user': '6081', 'call-term-user': '8454259810', dialed: '8454259810', 'call-talking-duration-seconds': 30, 'call-total-duration-seconds': 40, 'call-orig-call-id': 'c9-orig' },
   /* answered with zero talking seconds */
   inbound({ id: 'c10', 'call-start-datetime': at('11:30'), 'call-answer-datetime': at('11:30:03'), 'call-term-user': '6080', 'call-through-user': '700' }),
   /* auto attendant -> agent, answered */
-  inbound({ id: 'c11', 'call-start-datetime': at('11:40'), 'call-answer-datetime': at('11:40:06'), 'call-talking-duration-seconds': 45, 'call-term-user': '6081', 'call-through-user': '900' }),
+  inbound({ id: 'c11', 'call-start-datetime': at('11:40'), 'call-answer-datetime': at('11:40:06'), 'call-talking-duration-seconds': 45, 'call-term-user': '6081', 'call-through-user': '900', 'prefilled-trace-api': '/ns-api/v2/sipflow?call=c11&amp;leg=1' }),
 ];
 
 /* Buckets known by hand — the single source of truth every endpoint is compared
@@ -302,6 +302,64 @@ check('metric missed_no_abandon = 3 (the Agents Missed column)',
 check('metric missed_no_abandon + abandoned = missed',
   metricCounts.missed_no_abandon + metricCounts.abandoned === metricCounts.missed, metricCounts);
 
+/*
+ * ---------------------------------------------------------------------------
+ * The list behind ONE clicked item.
+ *
+ * Every figure in the UI opens a call list; the list is only honest if its
+ * filters are the ones the figure was computed with. These checks pin the
+ * three ways that used to drift: a row opened "its type" instead of itself,
+ * a queue metric counted calls that never reached a queue, and an interval
+ * opened the whole hour.
+ * ---------------------------------------------------------------------------
+ */
+console.log('\n== api/calls.php (one call) ==');
+const byId = (await request('calls.php', { callId: 'c1' })).body;
+check('callId returns exactly that call',
+  count(byId) === 1 && String(byId.data?.[0]?.id) === 'c1', byId?.data?.map(r => r.id));
+const byLegId = (await request('calls.php', { callId: 'c1-term' })).body;
+check('callId matches a leg id (term) as well as the row id',
+  count(byLegId) === 1 && String(byLegId.data?.[0]?.id) === 'c1', byLegId?.data?.map(r => r.id));
+const byOrigId = (await request('calls.php', { callId: 'c9-orig' })).body;
+check('callId matches a leg id (orig) for an outbound call',
+  count(byOrigId) === 1 && String(byOrigId.data?.[0]?.id) === 'c9', byOrigId?.data?.map(r => r.id));
+check('an unknown callId returns nothing, not everything',
+  count((await request('calls.php', { callId: 'nope' })).body) === 0);
+
+const row1 = byId.data?.[0] || {};
+const ATTACH_FIELDS = ['id', 'hasRecordingHint', 'hasFlowHint', 'recordingCallId', 'recordingUser', 'traceApi', 'servers', 'disconnectedAt'];
+check('a drill-down row carries the identity + attachment fields the columns read',
+  ATTACH_FIELDS.every(k => Object.prototype.hasOwnProperty.call(row1, k)),
+  ATTACH_FIELDS.filter(k => !Object.prototype.hasOwnProperty.call(row1, k)));
+check('the recording hint points at the term leg of an inbound call',
+  row1.hasRecordingHint === true && row1.recordingCallId === 'c1-term' && row1.recordingUser === '6080', row1);
+const allRows = (await request('calls.php', { metric: 'total' })).body?.data || [];
+const row9 = allRows.find(r => String(r.id) === 'c9') || {};
+check('the recording hint points at the orig leg of an outbound call',
+  row9.recordingCallId === 'c9-orig' && row9.recordingUser === '6081', row9);
+check('a call with no recording leg says so',
+  row9.hasRecordingHint === true && (allRows.find(r => String(r.id) === 'c5') || {}).hasRecordingHint === false,
+  allRows.map(r => [r.id, r.hasRecordingHint]));
+const row11 = allRows.find(r => String(r.id) === 'c11') || {};
+check('the flow hint comes from the prefilled trace url, entities decoded',
+  row11.hasFlowHint === true && row11.traceApi === '/ns-api/v2/sipflow?call=c11&leg=1', row11.traceApi);
+
+console.log('\n== api/calls.php (the window inside an hour) ==');
+const hour10 = (await request('calls.php', { metric: 'incoming', hour: 10 })).body?.data || [];
+const window10 = (await request('calls.php', { metric: 'incoming', hour: 10, timeFrom: '10:00', timeTo: '10:15' })).body?.data || [];
+check('the 10:00 hour holds 6 inbound calls', hour10.length === 6, hour10.map(r => r.id));
+check('the 10:00–10:15 window holds only the 2 that started in it',
+  window10.map(r => String(r.id)).sort().join(',') === 'c1,c2', window10.map(r => [r.id, r.time]));
+check('the window is a strict subset of the hour', window10.length < hour10.length);
+check('every returned call starts inside the window',
+  window10.every(r => ['10:00 AM', '10:10 AM'].includes(r.time)), window10.map(r => r.time));
+check('a window with an unparseable end is ignored, not emptied',
+  count((await request('calls.php', { timeFrom: 'abc', timeTo: '10:15' })).body) === EXPECT.total);
+check('a zero-length window is ignored, not emptied',
+  count((await request('calls.php', { timeFrom: '10:00', timeTo: '10:00' })).body) === EXPECT.total);
+check('a window that wraps past midnight is accepted',
+  count((await request('calls.php', { timeFrom: '23:50', timeTo: '00:10' })).body) === 0);
+
 console.log('\n== api/queue.php (Queues nav) ==');
 const queueData = (await request('queue.php')).body?.data || {};
 const qOutcomes = queueData.outcomes || {};
@@ -323,6 +381,24 @@ check('queue abandoned = calls.php queue-scoped abandoned',
 check('queue offered = calls.php queue-scoped offered',
   (qOutcomes.answered + qOutcomes.abandoned) === queueScopedOffered,
   [qOutcomes.answered + qOutcomes.abandoned, queueScopedOffered]);
+
+/*
+ * queue_abandoned / queue_offered are QUEUE metrics: they are counted over the
+ * calls that reached a queue, so the same metric without an explicit queue
+ * still has to mean the same thing. Before this, asking for them unscoped fell
+ * back to the dashboard rule and picked up the auto-attendant abandon too,
+ * which is not a queue call and is not in the Queues nav's totals.
+ */
+const queueStagedAbandon = count((await request('calls.php', { metric: 'queue_abandoned' })).body);
+const queueStagedOffered = count((await request('calls.php', { metric: 'queue_offered' })).body);
+check('queue_abandoned without a queue = the Queues nav abandoned figure',
+  queueStagedAbandon === qOutcomes.abandoned, [queueStagedAbandon, qOutcomes.abandoned]);
+check('queue_offered without a queue = answered + abandoned',
+  queueStagedOffered === qOutcomes.answered + qOutcomes.abandoned,
+  [queueStagedOffered, qOutcomes.answered, qOutcomes.abandoned]);
+check('a queue metric does not absorb the auto-attendant abandon',
+  metricCounts.abandoned === EXPECT.abandon && queueStagedAbandon === EXPECT.abandon - 1,
+  [metricCounts.abandoned, queueStagedAbandon]);
 
 console.log('\n== api/aa.php (Auto Attendants nav) ==');
 const aaCalls = (await request('aa.php')).body?.data?.calls || [];
@@ -387,11 +463,51 @@ check('TN number card total = inbound + missed',
 
 /* The Simultaneous Calls tab of the same nav derives its volume from the same
  * classifier, so its inbound/missed must match the Dashboard too. */
-const simSummary = (await request('simultaneous_calls.php')).body?.data?.summary || {};
+const simData = (await request('simultaneous_calls.php')).body?.data || {};
+const simSummary = simData.summary || {};
 check('simultaneous calls missed matches counts.missed',
   simSummary.missed === counts.missed, simSummary);
 check('simultaneous calls total = inbound + missed',
   simSummary.totalCalls === EXPECT.offered, simSummary);
+
+/*
+ * An interval row is a window, and its drill-down has to be that window: the
+ * bucket's own `started` count is the number of inbound/missed calls that
+ * began inside it, so the call list for the same window must match it exactly
+ * (this is what the modal now sends as timeFrom/timeTo).
+ */
+const simIntervals = Array.isArray(simData.intervals) ? simData.intervals : [];
+const busiestInterval = simIntervals.slice().sort((a, b) => Number(b.started || 0) - Number(a.started || 0))[0] || null;
+const intervalCalls = busiestInterval
+  ? (await request('calls.php', {
+      metric: 'incoming',
+      timeFrom: busiestInterval.time,
+      timeTo: busiestInterval.endTime
+    })).body?.data || []
+  : [];
+check('the busiest interval has calls in it', !!busiestInterval && Number(busiestInterval.started) > 0, busiestInterval);
+check('an interval drill opens exactly the calls that started in that interval',
+  !!busiestInterval && intervalCalls.length === Number(busiestInterval.started),
+  { interval: busiestInterval, opened: intervalCalls.map(r => r.time) });
+check('an interval drill keeps every call inside the interval',
+  !!busiestInterval && intervalCalls.every(r => {
+    const minute = String(r.time || '').match(/^(\d{1,2}):(\d{2})/);
+    if (!minute) return false;
+    const m = (Number(minute[1]) % 12 + (/PM/.test(r.time) ? 12 : 0)) * 60 + Number(minute[2]);
+    const from = busiestInterval.time.split(':').reduce((n, v) => n * 60 + Number(v), 0);
+    const to = busiestInterval.endTime.split(':').reduce((n, v) => n * 60 + Number(v), 0);
+    return m >= from && m < to;
+  }),
+  intervalCalls.map(r => r.time));
+
+/*
+ * The DID card figures are inbound + missed calls to that number, so the
+ * number's own drill-down list has to be that many rows.
+ */
+const tnDrill = (await request('calls.php', { phoneNumber: String(tnNumber.number || ''), metric: 'incoming' })).body?.data || [];
+check('a DID drill opens exactly the number card total',
+  tnDrill.length === Number(tnNumber.calls?.total || 0),
+  { opened: tnDrill.length, card: tnNumber.calls });
 
 /* --------------------------------------- 3. no second copy of the rules */
 

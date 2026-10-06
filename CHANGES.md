@@ -1,3 +1,125 @@
+# CHANGES — drill-down filters that match the clicked item, plus recording and SIP-flow columns (P7)
+
+**Scope:** the call-details modal. Two problems, both about trust in a number:
+
+1. **A drill-down did not always open the calls behind the figure that was
+   clicked.** Rows that stand for one call opened *every* call of their type;
+   the Agents KPI cards inherited whatever agent the sidebar was showing; a
+   queue-scoped metric also counted abandons that never reached a queue; and a
+   15-minute Simultaneous interval opened the whole hour.
+2. **The modal could not tell you that a call has a recording or a trace**, so
+   finding either meant leaving for Call history.
+
+**Files:** `api/calls.php`, `api/call_history.php`,
+`includes/reporting/cdr_fields.php`, `includes/reporting/support.php`,
+`assets/js/src/components/call-modal.js`,
+`assets/js/src/components/call-flow-dialog.js` (new, extracted),
+`assets/js/src/components/recording-player.js` (new, extracted),
+`assets/js/src/components/{call-history,app-shell,agents,queue,simultaneous,telephone-numbers}.js`,
+`assets/js/src/lib/react.js`, `assets/css/src/custom.css`,
+`tests/php/{outcomes,export,endpoints}.mjs`, `tests/js/{harness,smoke}.mjs`,
+`tools/ui-audit.mjs`, rebuilt `assets/js/app.js` + `assets/css/app.css`.
+
+## The filters a drill-down must carry
+
+| clicked item | before | now |
+| --- | --- | --- |
+| Agents table cell (Missed, Abandoned, …) | metric + that agent, whole page range | unchanged (already correct) |
+| Agents **KPI card** (Total calls / Missed calls) | inherited the Overview agent selection, so the list disagreed with the card | `agents: []` — the card totals the table the user is looking at, and department / site / range still apply |
+| Agents **Overview → recent calls** row | `metric: 'total'` + agent — "every call of that type for this agent" | `callId` of the row, so the list is that call |
+| **Agent compare** "· calls" links | page date range | the compare screen's own range + metric |
+| **Queues** hour bar | hour, queue scope, page range | unchanged, and now also carries the `slaSeconds` the chart was drawn with |
+| **Queues** KPI / row | metric + queue | unchanged; a queue metric is now also scoped to queue calls server-side (below) |
+| **Telephone Numbers** KPI (Total / Missed calls) | `incoming` / `missed` | unchanged |
+| **Telephone Numbers** DID row & graphs bar | `inbound` (answered inbound only) | `incoming` — the figure is inbound + missed |
+| **Telephone Numbers → Top numbers** bars | the panel was an empty canvas; nothing was clickable | real bars, each opening that DID's calls |
+| **Telephone Numbers → Simultaneous** interval row / volume chart / Peak KPI | that day + hour | that day + hour + the exact `timeFrom`–`timeTo` window of the interval |
+| **Dashboard** KPI card / mix row / rate row / hour / day | metric, hour or day + page filters | unchanged (the hour and day charts count every call, matching `metric: total`) |
+
+Two API additions make those filters real:
+
+* **`callId`** — exact call lookup. Matches any id the CDR carries for the call
+  (`id`, `call-id`, `call-parent-cdr-id`, `call-orig-call-id`,
+  `call-term-call-id`), so a row picked from one screen resolves on another.
+* **`timeFrom` / `timeTo`** — a half-open Eastern wall-clock window
+  (`'10:15'`–`'10:30'`), wrapping past midnight. Both ends must parse; a
+  malformed or zero-length window is ignored rather than emptying the list, so a
+  half-typed filter can never show "no calls".
+
+Queue metrics are now **queue-stage scoped**: `queue_abandoned` / `queue_offered`
+count only calls that reached a queue (`cdrQueueMatch($call, $queueIdsAll)`),
+which is the population `api/queue.php` counts. Previously, asking for
+`queue_abandoned` *without* a queue id fell back to the dashboard rule and
+included auto-attendant abandons that the Queues screen never counts.
+
+## Recording and SIP flow, in the modal
+
+* **Rec column** — `hasRecordingHint`, decided server-side by
+  `callHasRecordingHint()` (a leg id on the right side + a user to file it
+  under). `▶` opens the recording in a tray under the table; `—` is a disabled
+  button. Nothing is resolved until the button is clicked: resolving costs a PBX
+  walk, and the table only needs the boolean.
+* **SIP flow column** — `hasFlowHint` (`callRecordingCallId() !== '' ||
+  callTraceApi() !== ''`). `Flow` opens the same cradle-to-grave dialog Call
+  history uses, now shared as `components/call-flow-dialog.js`.
+* **Recording player** — moved out of `call-history.js` verbatim into
+  `components/recording-player.js` (246 lines) and reused by the modal; the
+  modal passes no pre-resolved URL, so the player resolves its own.
+* **Escape unwinds layers from the inside out** — flow dialog, then the
+  recording tray, then the modal. `useEscape` now also honours
+  `event.defaultPrevented`, because `stopPropagation()` does not stop a sibling
+  listener on `document`: two layers can be open at once and one Escape used to
+  close both.
+* **CSV** — the export streams the same rows and gained `recording` and
+  `sip_flow` (`yes` / `no`) columns; it also respects `callId` and the window,
+  which is asserted in `tests/php/export.mjs`.
+
+New row fields from `callsRow()`: `id`, `disconnectedAt`, `origCallId`,
+`termCallId`, `origUser`, `termUser`, `recordingCallId`, `recordingUser`,
+`servers`, `traceApi`, `hasRecordingHint`, `hasFlowHint`.
+
+## Two bugs found on the way
+
+1. **`tools/ui-audit.mjs` scanned comments as code.** Its balanced-paren walk was
+   quote-aware but not comment-aware, so an apostrophe inside a comment ("the
+   table's rows") opened a string that never closed and the audit reported
+   findings against whatever element it landed on next. Comments are now blanked
+   (indices preserved) before scanning, which cleared two phantom findings that
+   had been mis-attributed to `AgentPerformanceTable` / `AgentCompare`.
+2. **`tests/php/endpoints.mjs` seeded the PBX stub with the wrong case**
+   (`phoneNumbers` vs the `phonenumbers` the stub reads), so the DID endpoint
+   was silently exercised against an empty inventory.
+
+## Verification
+
+`npm test` — 13 suites, all green:
+
+```
+php lint · css coverage · ui audit · module budget · dead code · build · js smoke
+api matrix (86/86) · url policy · csv exports (16) · cdr store · cdr cache · outcome parity
+```
+
+* `tests/php/outcomes.mjs` — **160 checks** (was 137). New: the `callId` filter
+  returns exactly one call and matches leg ids (term *and* orig); the window is a
+  strict subset of its hour and ignores malformed/zero-length values; queue-stage
+  scoping does not absorb the auto-attendant abandon; the Simultaneous tab's
+  busiest interval drill opens exactly `started` calls; a DID drill opens exactly
+  the number card's total.
+* `tests/js/smoke.mjs` — the modal is opened from the dashboard and the Rec /
+  SIP-flow **formatters are run** over a fixture row with attachments and one
+  without (`▶`/`Flow` enabled vs `—` disabled); the tray opens and asks only for
+  the clicked recording; the flow dialog opens and calls `call_flow`; Escape
+  closes flow → tray → modal, one layer at a time. Five drill-down paths are
+  driven through the real UI (queue hour chart, interval row, DID bar,
+  recent-call row, compare link) and their request bodies are asserted.
+* `tests/js/harness.mjs` — the calls fixture now carries the full row shape, the
+  Tabulator stub records the options it was built with, and the Chart stub keeps
+  its instances so click handlers can be invoked.
+
+**Known gap, stated plainly:** this sandbox has no `pdo_sqlite`, so the SQLite
+CDR cache path is still verified by the store/cache suites only (as in P5); no
+part of P7 touches that path.
+
 # CHANGES — one definition of missed and abandoned, shared by every report nav (P6)
 
 **Scope:** how the reports decide that a call was missed or abandoned. Each nav

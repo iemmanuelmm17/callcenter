@@ -63,30 +63,16 @@ function histRow(array $c, array $directory, array $queueIds): array
         'termCallId' => (string)($c['call-term-call-id'] ?? ''),
         'termUser' => $term,
         'origUser' => $orig,
-        'recordingCallId' => (static function (array $row, string $type, string $origId, string $termId): string {
-            if ($type === 'outbound' || $type === 'onnet') {
-                return $origId !== '' ? $origId : $termId;
-            }
-            return $termId !== '' ? $termId : $origId;
-        })($c, callType($c), (string)($c['call-orig-call-id'] ?? ''), (string)($c['call-term-call-id'] ?? '')),
-        'recordingUser' => (static function (string $type, string $origU, string $termU): string {
-            if ($type === 'outbound' || $type === 'onnet') {
-                return $origU !== '' ? $origU : $termU;
-            }
-            return $termU !== '' ? $termU : $origU;
-        })(callType($c), $orig, $term),
+        /* Shared with the drill-down modal (includes/reporting/cdr_fields.php)
+         * so a row can never be summarised here and resolved differently
+         * there. */
+        'recordingCallId' => callRecordingCallId($c),
+        'recordingUser' => callRecordingUser($c),
         'throughUser' => (string)($c['call-through-user'] ?? ''),
         'servers' => implode(',', $hosts),
-        'traceApi' => html_entity_decode(
-            (string)($c['prefilled-trace-api'] ?? $c['prefilled_trace_api'] ?? ''),
-            ENT_QUOTES | ENT_HTML5,
-            'UTF-8'
-        ),
-        'hasRecordingHint' => (
-            (callType($c) === 'outbound' || callType($c) === 'onnet')
-                ? trim((string)($c['call-orig-call-id'] ?? '')) !== ''
-                : trim((string)($c['call-term-call-id'] ?? '')) !== ''
-        ) && ($term !== '' || $orig !== ''),
+        'traceApi' => callTraceApi($c),
+        'hasRecordingHint' => callHasRecordingHint($c),
+        'hasFlowHint' => callHasFlowHint($c),
     ];
 }
 

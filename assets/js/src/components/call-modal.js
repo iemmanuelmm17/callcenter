@@ -4,21 +4,53 @@
  * tools/split-js-file.mjs. The body below is byte-identical to the
  * original source — the move is verified by declaration hash. */
 
+import { CallFlowDialog, loadCallFlow } from './call-flow-dialog.js';
+import { RecordingPlayer } from './recording-player.js';
 import { api, apiDownload } from '../lib/api.js';
 import { fmt, formatPhoneNumber } from '../lib/format.js';
 import { ensureTabulator, h, useEffect, useEscape, useRef, useState } from '../lib/react.js';
 import { slaRingHtml } from '../lib/sla.js';
 import { formatCallDate, formatCallTime } from '../lib/time.js';
 
-function CallModal({metric,hour,agent,phoneNumber,callerNumber,queue,queuesOnly,filters,callTypes,slaSeconds,onClose}) {
-  useEscape(true, onClose);
-
+function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerNumber,queue,queuesOnly,filters,callTypes,slaSeconds,onClose}) {
     const ref = useRef(null);
     const table = useRef(null);
 
     const [records, setRecords] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+
+    /*
+     * Two overlays live inside this dialog: the recording tray and the sip-flow
+     * dialog. Escape unwinds them from the inside out — the flow closes first,
+     * then the player, and only then the dialog itself.
+     */
+    const [playing, setPlaying] = useState(null);
+    const [flow, setFlow] = useState(null);
+    /* Read by the Rec formatter so the playing row can be marked. */
+    const playingRef = useRef('');
+    playingRef.current = playing ? String(playing.id || playing.origCallId || '') : '';
+
+    useEscape(true, () => {
+        if (flow) { setFlow(null); return; }
+        if (playing) { setPlaying(null); return; }
+        onClose();
+    });
+
+    /* The flow dialog is per-row; the tray plays one row at a time. */
+    const openFlow = async row => {
+        setFlow({ loading: true, row, steps: [] });
+        try {
+            setFlow({ loading: false, row, steps: await loadCallFlow(row) });
+        } catch (e) {
+            setFlow({
+                loading: false,
+                row,
+                steps: [],
+                error: e && e.message ? e.message : 'Unable to load call flow.'
+            });
+        }
+    };
 
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(25);
@@ -39,7 +71,10 @@ function CallModal({metric,hour,agent,phoneNumber,callerNumber,queue,queuesOnly,
 
     useEffect(() => {
         setPage(1);
-    }, [metric, hour, agent, phoneNumber, callerNumber, queue, queuesOnly, filters, callTypes, pageSize]);
+        /* A new scope is a new result set: keep nothing from the old one. */
+        setPlaying(null);
+        setFlow(null);
+    }, [metric, hour, timeFrom, timeTo, agent, callId, phoneNumber, callerNumber, queue, queuesOnly, filters, callTypes, pageSize]);
 
     useEffect(() => {
 
@@ -58,7 +93,10 @@ function CallModal({metric,hour,agent,phoneNumber,callerNumber,queue,queuesOnly,
             callTypes,
             metric,
             hour,
+            timeFrom,
+            timeTo,
             agent,
+            callId,
             phoneNumber,
             callerNumber,
             queue,
@@ -95,7 +133,7 @@ function CallModal({metric,hour,agent,phoneNumber,callerNumber,queue,queuesOnly,
             }
         };
 
-    }, [metric, hour, agent, phoneNumber, callerNumber, queue, queuesOnly, slaSeconds, filters, callTypes, page, pageSize]);
+    }, [metric, hour, timeFrom, timeTo, agent, callId, phoneNumber, callerNumber, queue, queuesOnly, slaSeconds, filters, callTypes, page, pageSize]);
 
     const startIndex = totalRecords === 0 ? 0 : (page - 1) * pageSize;
     const endIndex = Math.min(startIndex + records.length, totalRecords);
@@ -400,6 +438,101 @@ function CallModal({metric,hour,agent,phoneNumber,callerNumber,queue,queuesOnly,
                                     fmt(
                                         cell.getValue()
                                     )
+                        },
+
+
+                        /*
+                         * RECORDING
+                         *
+                         * The cell knows only whether the CDR points at a
+                         * recording (hasRecordingHint, decided server-side by
+                         * callHasRecordingHint()). Clicking resolves it —
+                         * api/recording.php walks every PBX server, so the
+                         * table never pays for that unless asked — and the
+                         * player opens in the tray under the table.
+                         */
+
+                        {
+                            title:
+                                'Rec',
+
+                            field:
+                                'hasRecordingHint',
+
+                            minWidth:
+                                58,
+
+                            hozAlign:
+                                'center',
+
+                            headerHozAlign:
+                                'center',
+
+                            formatter: cell => {
+                                const row = cell.getRow().getData() || {};
+                                const has = !!row.hasRecordingHint;
+                                const id = String(row.id || row.origCallId || '');
+                                const btn = document.createElement('button');
+                                btn.type = 'button';
+                                btn.className = 'cm-attach-btn' +
+                                    (has ? '' : ' is-off') +
+                                    (has && playingRef.current === id ? ' is-on' : '');
+                                btn.disabled = !has;
+                                btn.title = has
+                                    ? 'Play the recording of this call'
+                                    : 'No recording was stored for this call';
+                                btn.setAttribute('aria-label', has ? 'Play recording' : 'No recording available');
+                                btn.textContent = has ? '▶' : '—';
+                                btn.addEventListener('click', ev => {
+                                    ev.stopPropagation();
+                                    if (has) setPlaying(row);
+                                });
+                                return btn;
+                            }
+                        },
+
+
+                        /*
+                         * SIP FLOW
+                         *
+                         * Opens the same cradle-to-grave dialog Call history
+                         * uses (components/call-flow-dialog.js) for this call.
+                         */
+
+                        {
+                            title:
+                                'SIP flow',
+
+                            field:
+                                'hasFlowHint',
+
+                            minWidth:
+                                72,
+
+                            hozAlign:
+                                'center',
+
+                            headerHozAlign:
+                                'center',
+
+                            formatter: cell => {
+                                const row = cell.getRow().getData() || {};
+                                const has = !!row.hasFlowHint;
+                                const btn = document.createElement('button');
+                                btn.type = 'button';
+                                btn.className = 'cm-attach-btn' + (has ? '' : ' is-off');
+                                btn.disabled = !has;
+                                btn.title = has
+                                    ? 'Open the cradle-to-grave SIP flow for this call'
+                                    : 'No SIP trace was recorded for this call';
+                                btn.setAttribute('aria-label', has ? 'Open SIP flow' : 'No SIP flow available');
+                                btn.textContent = has ? 'Flow' : '—';
+                                btn.addEventListener('click', ev => {
+                                    ev.stopPropagation();
+                                    if (has) openFlow(row);
+                                });
+                                return btn;
+                            }
                         }
                     ]
                 }
@@ -429,6 +562,16 @@ function CallModal({metric,hour,agent,phoneNumber,callerNumber,queue,queuesOnly,
         tableReady,
         slaSeconds
     ]);
+
+    /*
+     * Tabulator renders its own DOM, so the "this row is playing" mark is
+     * re-applied by redrawing when the selection changes — a formatter is not
+     * re-run by React state on its own.
+     */
+    useEffect(() => {
+        if (!table.current || typeof table.current.redraw !== 'function') return;
+        try { table.current.redraw(); } catch (e) {}
+    }, [playing]);
 
 
     /*
@@ -647,6 +790,7 @@ function CallModal({metric,hour,agent,phoneNumber,callerNumber,queue,queuesOnly,
                 metric,
                 hour,
                 agent,
+                callId,
                 phoneNumber,
                 callerNumber,
                 queue,
@@ -662,31 +806,10 @@ function CallModal({metric,hour,agent,phoneNumber,callerNumber,queue,queuesOnly,
     };
 
     /*
-     * =========================================================
-     * TITLE
-     * =========================================================
+     * Readable names for the metric ids the nav and the tables pass in.
+     * Declared before the title uses it (a const is in the temporal dead
+     * zone until its own line runs).
      */
-
-    const title =
-        `${
-            metric === 'total'
-                ? 'All'
-                : (metric === 'incoming' || metric === 'offered')
-                    ? 'Inbound + missed'
-                    : metric === 'sla_missed'
-                    ? 'SLA missed (ring over target)'
-                    : metric === 'sla'
-                    ? 'Answered within SLA'
-                    : metric
-        } call details`;
-
-
-    /*
-     * =========================================================
-     * CONTEXT LINES
-     * =========================================================
-     */
-
     const metricLabels = {
         total: 'All calls', incoming: 'Inbound + missed', offered: 'Offered',
         inbound: 'Inbound', outbound: 'Outbound', missed: 'Missed', onnet: 'On-net',
@@ -698,6 +821,36 @@ function CallModal({metric,hour,agent,phoneNumber,callerNumber,queue,queuesOnly,
         missed_voicemail: 'Missed — voicemail', missed_no_abandon: 'Missed (not abandoned)',
         queue_abandoned: 'Abandoned in queue', queue_offered: 'Offered to queue'
     };
+
+    /*
+     * =========================================================
+     * TITLE
+     * =========================================================
+     */
+
+    const title =
+        callId
+            /* One specific call (an agent's recent-call row, say). */
+            ? 'Call ' + callId + ' details'
+            : `${
+                metric === 'total'
+                    ? 'All'
+                    : (metric === 'incoming' || metric === 'offered')
+                        ? 'Inbound + missed'
+                        : metric === 'sla_missed'
+                        ? 'SLA missed (ring over target)'
+                        : metric === 'sla'
+                        ? 'Answered within SLA'
+                        : (metricLabels[metric] || metric)
+            } call details`;
+
+
+    /*
+     * =========================================================
+     * CONTEXT LINES
+     * =========================================================
+     */
+
     const filterChips = [];
     const f = filters || {};
     if (f.start && f.end) {
@@ -715,6 +868,7 @@ function CallModal({metric,hour,agent,phoneNumber,callerNumber,queue,queuesOnly,
     if (metric) {
         filterChips.push({ k: 'View', v: metricLabels[metric] || String(metric) });
     }
+    if (callId) filterChips.push({ k: 'Call', v: callId });
     if (phoneNumber) filterChips.push({ k: 'Number', v: formatPhoneNumber(phoneNumber) });
     if (callerNumber) filterChips.push({ k: 'Caller', v: formatPhoneNumber(callerNumber) });
     if (agent) filterChips.push({ k: 'Agent', v: String(agent) });
@@ -723,6 +877,10 @@ function CallModal({metric,hour,agent,phoneNumber,callerNumber,queue,queuesOnly,
     if (hour !== null && hour !== undefined) {
         const hh = String(hour).padStart(2, '0');
         filterChips.push({ k: 'Hour', v: hh + ':00–' + hh + ':59' });
+    }
+    /* The exact interval, when one was clicked (Simultaneous rows). */
+    if (timeFrom && timeTo) {
+        filterChips.push({ k: 'Window', v: timeFrom + '–' + timeTo });
     }
     if (slaSeconds && (metric === 'sla' || metric === 'sla_missed')) {
         filterChips.push({ k: 'SLA ring', v: slaSeconds + 's' });
@@ -757,6 +915,10 @@ return h(
     h(
         'div',
         {
+            role: 'dialog',
+            'aria-modal': 'true',
+            'aria-label': title,
+
             className:
             'call-modal ' +
             'flex w-full max-w-[1400px] ' +
@@ -981,6 +1143,42 @@ return h(
                         }
                     )
         ),
+
+        /*
+         * =================================================
+         * RECORDING TRAY
+         * =================================================
+         *
+         * One row at a time. The player resolves its own URL when it is
+         * mounted without one, so opening a row costs exactly one
+         * api/recording.php call and closing it stops the audio.
+         */
+
+        playing
+            ? h(
+                'div',
+                { className: 'cm-tray' },
+                h(
+                    'div',
+                    { className: 'cm-tray-head' },
+                    h('span', { className: 'cm-tray-title' }, 'Recording'),
+                    h(
+                        'span',
+                        { className: 'cm-tray-sub' },
+                        [
+                            playing.startedAt ? formatCallDate(playing.startedAt) + ' ' + formatCallTime(playing.startedAt) : '',
+                            [playing.from || playing.fromNumber, playing.to || playing.dialed].filter(Boolean).join(' → ')
+                        ].filter(Boolean).join(' · ')
+                    )
+                ),
+                h(RecordingPlayer, {
+                    row: playing,
+                    preresolved: null,
+                    onClose: () => setPlaying(null)
+                })
+            )
+            : null,
+
 
         /*
          * =================================================
@@ -1250,7 +1448,21 @@ return h(
             )
 
             : null
-    )
+    ),
+
+    /*
+     * Sip flow, above everything else. Same dialog Call history opens; the
+     * request (loadCallFlow) is the one this modal's rows are shaped for.
+     */
+    flow
+        ? h(CallFlowDialog, {
+            row: flow.row,
+            steps: flow.steps,
+            loading: flow.loading,
+            error: flow.error,
+            onClose: () => setFlow(null)
+        })
+        : null
 );
 }
 

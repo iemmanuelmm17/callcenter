@@ -71,23 +71,64 @@ const shell = readFileSync(SHELL, 'utf8');
 /* ------------------------------------------------------------------ helpers */
 
 /**
+ * Blank out comments, keeping every index and newline exactly where it was.
+ *
+ * The scanners below are quote aware but were comment blind, so a comment
+ * holding an apostrophe ("the table's rows") opened a string that never
+ * closed: the balanced-paren walk ran past the end of the call and the audit
+ * reported findings against the wrong element. Blanking first — with the same
+ * quote awareness — keeps indices stable for line reporting while never
+ * letting a comment decide where a call ends.
+ */
+function blankComments(src) {
+  const out = src.split('');
+  let i = 0;
+  let quote = null;
+  const blank = at => { if (src[at] !== '\n') out[at] = ' '; };
+  while (i < src.length) {
+    const ch = src[i];
+    if (quote) {
+      if (ch === '\\') { i += 2; continue; }
+      if (ch === quote) quote = null;
+      i++;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') { quote = ch; i++; continue; }
+    if (ch === '/' && src[i + 1] === '/') {
+      while (i < src.length && src[i] !== '\n') { blank(i); i++; }
+      continue;
+    }
+    if (ch === '/' && src[i + 1] === '*') {
+      blank(i); blank(i + 1); i += 2;
+      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) { blank(i); i++; }
+      if (i < src.length) { blank(i); blank(i + 1); i += 2; }
+      continue;
+    }
+    i++;
+  }
+  return out.join('');
+}
+
+/**
  * Walk `h(` call sites and return {tag, props, startIndex, line}.
  * Balanced-paren scanning that respects strings, template literals and
  * comments, which is all this file needs.
  */
 function findElements(src, lineOf) {
   const out = [];
+  /* Scan the comment-free mirror, slice the real text (same indices). */
+  const scan = blankComments(src);
   const re = /(?<![\w.$])h\(\s*(?:'([a-zA-Z][\w-]*)'|([A-Za-z_$][\w$]*))/g;
   let match;
-  while ((match = re.exec(src)) !== null) {
+  while ((match = re.exec(scan)) !== null) {
     const tag = match[1] || match[2];
     /* Grab the argument list: from the '(' after h. */
-    const open = src.indexOf('(', match.index + 1);
+    const open = scan.indexOf('(', match.index + 1);
     let depth = 0;
     let i = open;
     let quote = null;
-    for (; i < src.length; i++) {
-      const ch = src[i];
+    for (; i < scan.length; i++) {
+      const ch = scan[i];
       if (quote) {
         if (ch === '\\') { i++; continue; }
         if (ch === quote) quote = null;
@@ -115,10 +156,11 @@ function findElements(src, lineOf) {
  * String, template and bracket aware so a comma inside a value cannot split us.
  */
 function afterFirstArgument(args) {
+  const scan = blankComments(args);
   let depth = 0;
   let quote = null;
-  for (let i = 0; i < args.length; i++) {
-    const ch = args[i];
+  for (let i = 0; i < scan.length; i++) {
+    const ch = scan[i];
     if (quote) {
       if (ch === '\\') { i++; continue; }
       if (ch === quote) quote = null;
@@ -134,10 +176,11 @@ function afterFirstArgument(args) {
 
 /** End offset of the leading object literal inside an argument list. */
 function findPropsEnd(args) {
+  const scan = blankComments(args);
   let depth = 0;
   let quote = null;
-  for (let i = 0; i < args.length; i++) {
-    const ch = args[i];
+  for (let i = 0; i < scan.length; i++) {
+    const ch = scan[i];
     if (quote) {
       if (ch === '\\') { i++; continue; }
       if (ch === quote) quote = null;

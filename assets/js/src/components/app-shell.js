@@ -242,12 +242,20 @@ const agentPerformanceTable = h(AgentPerformanceTable, {
         setAgentSub('overview');
     },
     onMetricClick: (metric, extension) => {
+        /*
+         * The KPI cards total every row of THIS table — the performance
+         * tab loads the whole roster (loadAgentReport gets agents: []), so
+         * an agentless click must not inherit the sidebar's Overview
+         * selection. Doing that made the call list disagree with the
+         * figure that was clicked. A cell click names its agent and the
+         * list is scoped to that agent, keeping department/site/range.
+         */
         setModal({
             metric: metric || 'total',
             agent: extension || null,
             filters: {
                 ...filters,
-                agents: extension ? [extension] : (Array.isArray(selectedAgents) ? selectedAgents : [])
+                agents: extension ? [extension] : []
             }
         });
     }
@@ -532,11 +540,25 @@ if (route === 'agents') {
                 ? h(AgentCompare, {
                     filters,
                     callTypes,
-                    onAgentClick: extension => setModal({
-                        metric: 'total',
-                        agent: extension,
-                        filters: { ...filters, agents: [extension] }
-                    })
+                    /*
+                     * AgentCompare's "· calls" links count the COMPARE
+                     * range, which the screen can set independently of the
+                     * page filter. The payload carries that range (and its
+                     * metric) so the list adds up to the number clicked.
+                     */
+                    onAgentClick: payload => {
+                        const extension = typeof payload === 'string'
+                            ? payload
+                            : String((payload && payload.extension) || '');
+                        if (!extension) return;
+                        const start = (payload && payload.start) || filters.start;
+                        const end = (payload && payload.end) || filters.end;
+                        setModal({
+                            metric: (payload && payload.metric) || 'total',
+                            agent: extension,
+                            filters: { ...filters, start, end, agents: [extension] }
+                        });
+                    }
                 })
                 : agentSub === 'overview'
                     ? h(AgentOverview, {
@@ -545,10 +567,17 @@ if (route === 'agents') {
                         filters,
                         callTypes,
                         selectedAgents,
+                        /*
+                         * A recent-call row stands for ONE call, and the row
+                         * carries its id. Dropping it here opened "every call
+                         * of that type for that agent" instead — the figure
+                         * clicked and the list no longer matched.
+                         */
                         onCallClick: payload => setModal({
                             metric: payload.metric || 'total',
                             hour: payload.hour,
-                            agent: payload.agent || null
+                            agent: payload.agent || null,
+                            callId: payload.callId || null
                         })
                     })
                 : agentPerformanceTable
@@ -643,9 +672,10 @@ if (route === 'agents') {
             const callerNumber = typeof payload === 'object' ? (payload?.callerNumber || null) : null;
             /*
              * The Simultaneous tab drills into the calls behind one
-             * interval: it passes that bucket's day and hour (a specific
-             * bucket narrows the date range to its own date, an hour-of-day
-             * bar keeps the shared range). Everything else behaves as before.
+             * interval: it passes that bucket's day, hour AND the exact
+             * [timeFrom, timeTo) window (a specific bucket narrows the date
+             * range to its own date, an hour-of-day bar keeps the shared
+             * range and has no window). Everything else behaves as before.
              */
             const hour = typeof payload === 'object' && payload?.hour !== undefined && payload?.hour !== null
                 ? Number(payload.hour)
@@ -653,11 +683,23 @@ if (route === 'agents') {
             const dayFilters = typeof payload === 'object' && typeof payload?.date === 'string' && payload.date
                 ? { ...filters, start: payload.date, end: payload.date }
                 : null;
+            const timeFrom = typeof payload === 'object' && typeof payload?.timeFrom === 'string' ? payload.timeFrom : '';
+            const timeTo = typeof payload === 'object' && typeof payload?.timeTo === 'string' ? payload.timeTo : '';
             setModal({
-                metric: (typeof payload === 'object' && payload?.metric) || (callerNumber ? 'total' : 'inbound'),
+                /*
+                 * A payload that names its own view wins; otherwise a caller
+                 * number means "everything this caller did" and a plain DID
+                 * drill means the inbound + missed volume those DID figures
+                 * count. (The old fallback here was 'inbound', answered
+                 * inbound only, which dropped every missed call from a
+                 * per-number list.)
+                 */
+                metric: (typeof payload === 'object' && payload?.metric) || (callerNumber ? 'total' : 'incoming'),
                 phoneNumber: phoneNumber || null,
                 callerNumber,
                 hour: hour !== null && Number.isFinite(hour) ? hour : null,
+                timeFrom: timeFrom || null,
+                timeTo: timeTo || null,
                 ...(dayFilters ? { filters: dayFilters } : {})
             });
         }
@@ -833,14 +875,22 @@ return h('div', { className: 'min-h-screen' },
         ? h(CallModal, {
             metric: modal.metric || 'total',
             hour: modal.hour !== undefined ? modal.hour : null,
+            callId: modal.callId || null,
             agent: modal.agent || null,
             phoneNumber: modal.phoneNumber || null,
             callerNumber: modal.callerNumber || null,
             queue: modal.queue || null,
             queuesOnly: !!modal.queuesOnly,
+            timeFrom: modal.timeFrom || null,
+            timeTo: modal.timeTo || null,
             filters: modal.filters || filters,
             callTypes: modal.callTypes || callTypes,
-            slaSeconds,
+            /*
+             * The SLA the modal colours rings with is the screen's, unless the
+             * drill named its own (Queues passes the value its chart was drawn
+             * with). Either way the modal and the figure it came from agree.
+             */
+            slaSeconds: modal.slaSeconds != null ? modal.slaSeconds : slaSeconds,
             onClose: () => setModal(null)
         })
         : null

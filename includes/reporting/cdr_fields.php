@@ -232,6 +232,87 @@ function callType(array $row): string {
     return classifyCdrType($row, []);
 }
 
+/**
+ * The call id a recording is looked up by: the leg that carries the media.
+ * Outbound and on-net calls record on the origination leg, everything else on
+ * the terminating leg. Was inlined (twice, differently) in call_history.php and
+ * the call modal — one definition now.
+ */
+function callRecordingCallId(array $row): string
+{
+    $type = callType($row);
+    $origId = trim((string)($row['call-orig-call-id'] ?? ''));
+    $termId = trim((string)($row['call-term-call-id'] ?? ''));
+    if ($type === 'outbound' || $type === 'onnet') {
+        return $origId !== '' ? $origId : $termId;
+    }
+    return $termId !== '' ? $termId : $origId;
+}
+
+/** The extension a recording is filed under, chosen the same way as the id. */
+function callRecordingUser(array $row): string
+{
+    $type = callType($row);
+    $orig = trim((string)($row['call-orig-user'] ?? ''));
+    $term = trim((string)($row['call-term-user'] ?? ''));
+    if ($type === 'outbound' || $type === 'onnet') {
+        return $orig !== '' ? $orig : $term;
+    }
+    return $term !== '' ? $term : $orig;
+}
+
+/**
+ * Cheap "a recording might exist" hint — a call id on the right leg and a user
+ * to file it under. Resolving for real costs a PBX walk per candidate (see
+ * api/recording.php), so callers use this before asking.
+ */
+function callHasRecordingHint(array $row): bool
+{
+    if (callRecordingCallId($row) === '') {
+        return false;
+    }
+    return trim((string)($row['call-term-user'] ?? '')) !== ''
+        || trim((string)($row['call-orig-user'] ?? '')) !== '';
+}
+
+/**
+ * The PBX prefills a trace URL for a call; it is the preferred way to ask for
+ * the sip flow (it carries the search window the PBX itself used).
+ */
+function callTraceApi(array $row): string
+{
+    return html_entity_decode(
+        trim((string)($row['prefilled-trace-api'] ?? $row['prefilled_trace_api'] ?? '')),
+        ENT_QUOTES | ENT_HTML5,
+        'UTF-8'
+    );
+}
+
+/** Can a sip flow be requested for this call at all? */
+function callHasFlowHint(array $row): bool
+{
+    return callRecordingCallId($row) !== '' || callTraceApi($row) !== '';
+}
+
+/** Every id that identifies this call, for an exact call lookup. */
+function callCallIds(array $row): array
+{
+    $ids = [];
+    foreach ([
+        'id',
+        'call-id',
+        'call-parent-cdr-id',
+        'call-orig-call-id',
+        'call-term-call-id',
+    ] as $field) {
+        $value = trim((string)($row[$field] ?? ''));
+        if ($value !== '') {
+            $ids[$value] = true;
+        }
+    }
+    return array_keys($ids);
+}
+
 function callAgent(array $row): string { return (string)($row['_agent'] ?? $row['call-term-user'] ?? $row['call-orig-user'] ?? $row['call-through-user'] ?? ''); }
 
 function callDepartment(array $row): string { return (string)($row['_department'] ?? $row['call-term-department'] ?? $row['call-orig-department'] ?? $row['call-through-department'] ?? ''); }

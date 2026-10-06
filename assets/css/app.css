@@ -17,6 +17,7 @@
     --color-cyan-300: oklch(86.5% 0.127 207.078);
     --color-cyan-400: oklch(78.9% 0.154 211.53);
     --color-cyan-500: oklch(71.5% 0.143 215.221);
+    --color-cyan-600: oklch(60.9% 0.126 221.723);
     --color-cyan-950: oklch(30.2% 0.056 229.695);
     --color-sky-300: oklch(82.8% 0.111 230.318);
     --color-sky-400: oklch(74.6% 0.16 232.661);
@@ -709,6 +710,12 @@
     background-color: color-mix(in srgb, oklch(71.5% 0.143 215.221) 15%, transparent);
     @supports (color: color-mix(in lab, red, red)) {
       background-color: color-mix(in oklab, var(--color-cyan-500) 15%, transparent);
+    }
+  }
+  .bg-cyan-600\/70 {
+    background-color: color-mix(in srgb, oklch(60.9% 0.126 221.723) 70%, transparent);
+    @supports (color: color-mix(in lab, red, red)) {
+      background-color: color-mix(in oklab, var(--color-cyan-600) 70%, transparent);
     }
   }
   .bg-cyan-950\/70 {
@@ -5890,6 +5897,70 @@ html[data-theme="light"] .ops-rank-tab.is-on {
 }
 .toast-x:hover {
   color: var(--color-slate-200, #e2e8f0);
+}
+.cm-attach-btn {
+  border: 1px solid var(--color-slate-700, #334155);
+  background: transparent;
+  color: var(--color-slate-200, #e2e8f0);
+  border-radius: 999px;
+  min-width: 30px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.cm-attach-btn:hover:not(:disabled) {
+  border-color: var(--color-cyan-400, #22d3ee);
+  color: var(--color-cyan-300, #67e8f9);
+}
+.cm-attach-btn.is-off {
+  opacity: .35;
+  cursor: not-allowed;
+  border-style: dashed;
+}
+.cm-attach-btn.is-on {
+  border-color: var(--color-cyan-400, #22d3ee);
+  color: var(--color-cyan-300, #67e8f9);
+  background: color-mix(in srgb, oklch(78.9% 0.154 211.53) 14%, transparent);
+  @supports (color: color-mix(in lab, red, red)) {
+    background: color-mix(in srgb, var(--color-cyan-400, #22d3ee) 14%, transparent);
+  }
+}
+.cm-tray {
+  flex-shrink: 0;
+  border-top: 1px solid var(--color-slate-700, #334155);
+  background: var(--color-slate-950, #020617);
+}
+.cm-tray-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 12px 0;
+  min-width: 0;
+}
+.cm-tray-title {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--color-slate-400, #94a3b8);
+}
+.cm-tray-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--color-slate-500, #64748b);
+}
+.cm-tray .rec-panel {
+  padding: 8px 12px 12px;
 }
 @property --tw-rotate-x {
   syntax: "*";

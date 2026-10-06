@@ -184,3 +184,24 @@ function appExceptionLog(string $context, Throwable $e): void
 }
 
 function seconds(array $row, string $field): int { return max(0, (int)($row[$field] ?? 0)); }
+
+/**
+ * 'H:MM' / 'HH:MM' (24-hour wall clock) to minutes past midnight, or null when
+ * the value is not a clock time at all.
+ *
+ * The drill-down window filter uses it so a 15-minute interval stays a
+ * 15-minute list; anything unparseable means "no window", never "no calls".
+ */
+function parseClockMinutes(?string $value): ?int
+{
+    $raw = trim((string)$value);
+    if (!preg_match('/^([0-9]{1,2}):([0-9]{2})$/', $raw, $m)) {
+        return null;
+    }
+    $hour = (int)$m[1];
+    $minute = (int)$m[2];
+    if ($hour > 23 || $minute > 59) {
+        return null;
+    }
+    return ($hour * 60) + $minute;
+}

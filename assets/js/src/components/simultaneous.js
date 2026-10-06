@@ -168,7 +168,7 @@ function SimultaneousCallsPanel({filters, onCallClick}) {
         onClick: (event, elements) => {
           if (!elements || !elements.length) return;
           const row = intervals[elements[0].index];
-          if (row) drill({ date: row.date, hour: row.hour, metric: 'incoming' });
+          if (row) drill({ date: row.date, hour: row.hour, timeFrom: row.time, timeTo: row.endTime, metric: 'incoming' });
         }
       }
     });
@@ -427,7 +427,14 @@ function SimultaneousCallsPanel({filters, onCallClick}) {
           : 'No calls in range',
         'fa-solid fa-users', peakValue > 0 ? 'warn' : null,
         'Most inbound calls in flight at the same moment. Click for the calls behind it.',
-        () => drill({ date: summary.peakDate, hour: Number(String(summary.peakTime || '0').slice(0, 2)) || 0, metric: 'incoming' })),
+        /* The peak is one interval of one day — open exactly that window. */
+        () => drill({
+          date: summary.peakDate,
+          hour: Number(String(summary.peakTime || '0').slice(0, 2)) || 0,
+          timeFrom: summary.peakTime || '',
+          timeTo: summary.peakEndTime || '',
+          metric: 'incoming'
+        })),
       kpi('Average simultaneous', Number(summary.average || 0).toFixed(2), intervalText + ' in ' + String(summary.timezone || APP_TZ),
         'fa-solid fa-wave-square', null,
         'Call-seconds in flight ÷ seconds in range: the average line load, all day and night included.'),
@@ -540,10 +547,15 @@ function SimultaneousCallsPanel({filters, onCallClick}) {
                   return h('tr', {
                     key: [row.date, row.time, startIndex + index].join('-'),
                     tabIndex: 0,
-                    onKeyDown: keyActivate(() => drill({ date: row.date, hour: row.hour, metric: 'incoming' })),
+                    /*
+                     * The clicked item is one interval, not the whole hour:
+                     * the exact window travels with it so the list is the
+                     * calls inside '10:15 – 10:30', not '10:00 – 10:59'.
+                     */
+                    onKeyDown: keyActivate(() => drill({ date: row.date, hour: row.hour, timeFrom: row.time, timeTo: row.endTime, metric: 'incoming' })),
                     className: 'cursor-pointer ' + peakRowClass(row),
                     title: 'Open the calls behind this interval',
-                    onClick: () => drill({ date: row.date, hour: row.hour, metric: 'incoming' })
+                    onClick: () => drill({ date: row.date, hour: row.hour, timeFrom: row.time, timeTo: row.endTime, metric: 'incoming' })
                   },
                     h('td', { className: 'hist-day-label' }, histDayLabel(row.date)),
                     h('td', { className: 'hist-time' },

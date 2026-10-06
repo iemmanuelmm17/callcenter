@@ -52,7 +52,12 @@ const useEscape = (open, onClose) => {
     useEffect(() => {
       if (!open) return undefined;
       const onKey = event => {
-        if (event.key === 'Escape') {
+        /* defaultPrevented, because two listeners can be on `document` at the
+         * same time (a dialog inside a dialog, a player inside a dialog) and
+         * stopPropagation() does not stop a sibling listener on the same
+         * target. The innermost layer wins; one Escape never closes two. */
+        if (event.key === 'Escape' && !event.defaultPrevented) {
+          event.preventDefault();
           event.stopPropagation();
           closeRef.current();
         }
