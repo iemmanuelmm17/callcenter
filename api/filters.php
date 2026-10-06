@@ -9,4 +9,12 @@ if ($user['role'] === 'office_manager') {
         if ($department !== '') $departments[$department] = true;
     }
 } elseif ($user['department'] !== '') $departments[$user['department']] = true;
-jsonResponse(['departments' => array_keys($departments)]);
+/*
+ * The metric catalog rides along: the filter bar is the only call every role
+ * makes on every load, so it is the cheapest place to hand the drill-down its
+ * vocabulary (QA-8). Keys are metric ids, values carry label/title.
+ */
+jsonResponse([
+    'departments' => array_keys($departments),
+    'metrics' => callMetricCatalog(),
+]);

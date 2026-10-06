@@ -194,9 +194,26 @@ try {
      */
     $slaSeconds = resolveSlaSeconds($requested, $user);
 
+    /*
+     * QA-8: the metric is validated against the catalog
+     * (includes/reporting/metrics.php) instead of silently matching nothing.
+     * An empty value keeps its old meaning — no metric filter — so existing
+     * callers that omit it are unaffected.
+     */
     $metric = trim(
         (string)($requested['metric'] ?? 'total')
     );
+
+    if ($metric === '') {
+        $metric = 'total';
+    }
+
+    if (!isKnownCallMetric($metric)) {
+        jsonResponse(
+            ['error' => 'Unknown call metric.'],
+            422
+        );
+    }
 
     $hour = $requested['hour'] ?? null;
 

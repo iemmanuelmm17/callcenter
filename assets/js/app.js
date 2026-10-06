@@ -7239,6 +7239,38 @@
     );
   }
 
+  // assets/js/src/lib/metrics.js
+  var cached = null;
+  var inFlight = null;
+  var loadMetricCatalog = () => {
+    if (cached) return Promise.resolve(cached);
+    if (!inFlight) {
+      inFlight = api("filters").then((r) => {
+        const metrics = r && typeof r.metrics === "object" && r.metrics ? r.metrics : {};
+        if (Object.keys(metrics).length) cached = metrics;
+        return metrics;
+      }).catch(() => ({})).finally(() => {
+        inFlight = null;
+      });
+    }
+    return inFlight;
+  };
+  var useMetricCatalog = () => {
+    const [catalog, setCatalog] = useState(cached || {});
+    useEffect(() => {
+      let active = true;
+      if (!cached) {
+        loadMetricCatalog().then((metrics) => {
+          if (active && metrics && Object.keys(metrics).length) setCatalog(metrics);
+        });
+      }
+      return () => {
+        active = false;
+      };
+    }, []);
+    return catalog;
+  };
+
   // assets/js/src/components/call-modal.js
   var asText = (value) => document.createTextNode(
     String(
@@ -7246,6 +7278,10 @@
     )
   );
   function CallModal({ metric, hour, timeFrom, timeTo, agent, callId, phoneNumber, callerNumber, queue, queuesOnly, filters, callTypes, slaSeconds, onClose }) {
+    const catalog = useMetricCatalog();
+    const metricMeta = catalog[metric] || null;
+    const metricLabel = metricMeta ? metricMeta.label || metricMeta.title || metric : metric;
+    const metricWording = metricMeta ? metricMeta.title || metricMeta.label || metric : metric;
     const ref = useRef(null);
     const table = useRef(null);
     const [records, setRecords] = useState([]);
@@ -7730,30 +7766,7 @@
         setExporting(false);
       }
     };
-    const metricLabels = {
-      total: "All calls",
-      incoming: "Inbound + missed",
-      offered: "Offered",
-      inbound: "Inbound",
-      outbound: "Outbound",
-      missed: "Missed",
-      onnet: "On-net",
-      answered: "Answered",
-      abandoned: "Abandoned",
-      sla: "Within SLA",
-      sla_missed: "SLA missed",
-      handled: "Handled",
-      voicemail: "Voicemail",
-      /* The missed breakdown and the queue scopes used to show their raw
-       * metric id ("missed_noanswer") in the title and the View chip. */
-      missed_abandon: "Abandoned",
-      missed_noanswer: "Missed \u2014 no answer",
-      missed_voicemail: "Missed \u2014 voicemail",
-      missed_no_abandon: "Missed (not abandoned)",
-      queue_abandoned: "Abandoned in queue",
-      queue_offered: "Offered to queue"
-    };
-    const title = callId ? "Call " + callId + " details" : `${metric === "total" ? "All" : metric === "incoming" || metric === "offered" ? "Inbound + missed" : metric === "sla_missed" ? "SLA missed (ring over target)" : metric === "sla" ? "Answered within SLA" : metricLabels[metric] || metric} call details`;
+    const title = callId ? "Call " + callId + " details" : metricWording + " call details";
     const filterChips = [];
     const f = filters || {};
     if (f.start && f.end) {
@@ -7769,7 +7782,7 @@
       filterChips.push({ k: "Types", v: on.length === keys.length ? "All" : on.length ? on.join(", ") : "None" });
     }
     if (metric) {
-      filterChips.push({ k: "View", v: metricLabels[metric] || String(metric) });
+      filterChips.push({ k: "View", v: metricLabel });
     }
     if (callId) filterChips.push({ k: "Call", v: callId });
     if (phoneNumber) filterChips.push({ k: "Number", v: formatPhoneNumber(phoneNumber) });

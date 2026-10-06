@@ -8,6 +8,7 @@ import { CallFlowDialog, loadCallFlow } from './call-flow-dialog.js';
 import { RecordingPlayer } from './recording-player.js';
 import { api, apiDownload } from '../lib/api.js';
 import { fmt, formatPhoneNumber } from '../lib/format.js';
+import { useMetricCatalog } from '../lib/metrics.js';
 import { ensureTabulator, h, useEffect, useEscape, useRef, useState } from '../lib/react.js';
 import { slaRingHtml } from '../lib/sla.js';
 import { formatCallDate, formatCallTime } from '../lib/time.js';
@@ -28,6 +29,17 @@ const asText = value =>
     );
 
 function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerNumber,queue,queuesOnly,filters,callTypes,slaSeconds,onClose}) {
+    /*
+     * Metric wording comes from the server catalog (api/filters.php /
+     * includes/reporting/metrics.php). Declared before the title uses it —
+     * a const is in the temporal dead zone until its own line runs.
+     */
+    const catalog = useMetricCatalog();
+    const metricMeta = catalog[metric] || null;
+    /* Chip wording is the label; the dialog title prefers its own wording. */
+    const metricLabel = metricMeta ? (metricMeta.label || metricMeta.title || metric) : metric;
+    const metricWording = metricMeta ? (metricMeta.title || metricMeta.label || metric) : metric;
+
     const ref = useRef(null);
     const table = useRef(null);
 
@@ -839,43 +851,20 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
     };
 
     /*
-     * Readable names for the metric ids the nav and the tables pass in.
-     * Declared before the title uses it (a const is in the temporal dead
-     * zone until its own line runs).
-     */
-    const metricLabels = {
-        total: 'All calls', incoming: 'Inbound + missed', offered: 'Offered',
-        inbound: 'Inbound', outbound: 'Outbound', missed: 'Missed', onnet: 'On-net',
-        answered: 'Answered', abandoned: 'Abandoned', sla: 'Within SLA',
-        sla_missed: 'SLA missed', handled: 'Handled', voicemail: 'Voicemail',
-        /* The missed breakdown and the queue scopes used to show their raw
-         * metric id ("missed_noanswer") in the title and the View chip. */
-        missed_abandon: 'Abandoned', missed_noanswer: 'Missed — no answer',
-        missed_voicemail: 'Missed — voicemail', missed_no_abandon: 'Missed (not abandoned)',
-        queue_abandoned: 'Abandoned in queue', queue_offered: 'Offered to queue'
-    };
-
-    /*
      * =========================================================
      * TITLE
      * =========================================================
      */
 
+    /*
+     * No hard-coded metric wording here: `metricWording` is the server's title
+     * (or label), and the raw id is the fallback until the catalog lands.
+     */
     const title =
         callId
             /* One specific call (an agent's recent-call row, say). */
             ? 'Call ' + callId + ' details'
-            : `${
-                metric === 'total'
-                    ? 'All'
-                    : (metric === 'incoming' || metric === 'offered')
-                        ? 'Inbound + missed'
-                        : metric === 'sla_missed'
-                        ? 'SLA missed (ring over target)'
-                        : metric === 'sla'
-                        ? 'Answered within SLA'
-                        : (metricLabels[metric] || metric)
-            } call details`;
+            : metricWording + ' call details';
 
 
     /*
@@ -899,7 +888,7 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
         filterChips.push({ k: 'Types', v: on.length === keys.length ? 'All' : (on.length ? on.join(', ') : 'None') });
     }
     if (metric) {
-        filterChips.push({ k: 'View', v: metricLabels[metric] || String(metric) });
+        filterChips.push({ k: 'View', v: metricLabel });
     }
     if (callId) filterChips.push({ k: 'Call', v: callId });
     if (phoneNumber) filterChips.push({ k: 'Number', v: formatPhoneNumber(phoneNumber) });

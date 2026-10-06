@@ -362,6 +362,17 @@ console.log('\n== call modal: recording + sip flow (P7) ==');
   if (kpiButton) await click(kpiButton);
   await flush(12);
 
+  /*
+   * QA-8: the dialog's wording is the server's (api/filters.php), not a
+   * map compiled into the bundle. FIXTURES.filters.metrics.total carries a
+   * sentinel title; the fallback would have printed the raw id.
+   */
+  const modalText = root().textContent;
+  check('the dialog title uses the server-served metric title (QA-8)',
+    modalText.includes('All calls (served by api/filters.php) call details') &&
+      !modalText.includes('total call details'),
+    modalText.slice(0, 160));
+
   const modalTable = [...tables].reverse().find(t => (t.options?.columns || []).some(c => c.title === 'Rec'));
   check('the drill-down table is built with a Rec column', !!modalTable,
     tables.map(t => (t.options?.columns || []).map(c => c.title).join('|')).slice(-3));

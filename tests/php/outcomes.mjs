@@ -303,6 +303,34 @@ check('metric missed_no_abandon + abandoned = missed',
   metricCounts.missed_no_abandon + metricCounts.abandoned === metricCounts.missed, metricCounts);
 
 /*
+ * QA-8: the metric vocabulary is declared once (includes/reporting/metrics.php)
+ * and served to the client; an unknown id is a bad request, not an empty list.
+ */
+console.log('\n== api/calls.php (metric vocabulary) ==');
+const catalog = (await request('filters.php')).body?.metrics || {};
+check('api/filters.php serves the metric catalog',
+  Object.keys(catalog).length >= 15 && catalog.total?.label === 'All calls',
+  Object.keys(catalog));
+check('every metric the dialog titles come from carries label + title',
+  Object.entries(catalog).every(([, m]) => typeof m?.label === 'string' && m.label !== '' && typeof m?.title === 'string' && m.title !== ''),
+  Object.entries(catalog).filter(([, m]) => !m?.label || !m?.title));
+const rejectedMetrics = [];
+for (const id of Object.keys(catalog)) {
+  const res = await request('calls.php', { metric: id });
+  if (res.status !== 200) rejectedMetrics.push(id + ':' + res.status);
+}
+check('every catalog metric is accepted by api/calls.php', rejectedMetrics.length === 0, rejectedMetrics);
+const unknownMetric = await request('calls.php', { metric: 'not_a_metric' });
+check('an unknown metric is rejected with 422 (was: a plausible empty list)',
+  unknownMetric.status === 422, {status: unknownMetric.status, body: unknownMetric.body});
+check('the dead metric names handled/voicemail are gone',
+  (await request('calls.php', { metric: 'handled' })).status === 422 &&
+    (await request('calls.php', { metric: 'voicemail' })).status === 422);
+check('omitting the metric still means every call',
+  count((await request('calls.php', {})).body) === EXPECT.total,
+  count((await request('calls.php', {})).body));
+
+/*
  * ---------------------------------------------------------------------------
  * The list behind ONE clicked item.
  *
