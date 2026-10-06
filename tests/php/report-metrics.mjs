@@ -1509,6 +1509,139 @@ if (packRes.status === 200) {
     Object.values(Q).map(r => [r.callqueue, r.offered]));
 }
 
+
+/* ====== 12. the pack's trust blocks: quality, staffing, 4-week baseline */
+
+console.log('\n== the appendix: data quality, staffing estimate, weekday baseline ==');
+
+/*
+ * The same 2026-08-25 day (17 calls: the 16 arrivals plus the one outbound leg
+ * added above), asked for with baseline=1.
+ *
+ *   QUALITY    the four F7 checks over those 17 rows. The fixture carries an
+ *              answer moment and talking seconds on every call it answers, and
+ *              no leg twice - so three counts must be 0 - but it carries no
+ *              disconnect reasons, and the appendix must say 17 of 17 rather
+ *              than quietly show nothing.
+ *
+ *   STAFFING   offered = answered + missed per hour, and agents = offered x AHT
+ *              / 3600 / 0.85. At 09:00: q1 + q2 answered (60 s + 30 s -> AHT
+ *              45) and q3 + q4 missed = 4 offered; 4 x 45 = 180 work-seconds;
+ *              180 / (3600 x 0.85) = 0.0588 -> 0.06 agents. The check that
+ *              matters is not the tiny number but that the assumption rides
+ *              WITH it (85 %, 60-minute intervals) and that the total is the
+ *              same formula over every hour.
+ *
+ *   BASELINE   structural checks here, arithmetic on a self-contained fixture
+ *              below: every weekday is published, a weekday's average is its
+ *              total over its weeks (never diluted by weeks it did not appear
+ *              in), and a day is indexed against its own weekday's baseline
+ *              where one exists and carries null where it does not.
+ */
+const packDeep = await harness.request('report.php', {
+  body: { start: '2026-08-25', end: '2026-08-25', hours: 'all', skipPrevious: true, baseline: 1 },
+  user: USERS.office_manager
+});
+check('a pack request with baseline=1 answers', packDeep.status === 200, packDeep.log ?? packDeep.status);
+
+if (packDeep.status === 200) {
+  const Q = packDeep.body.pack || {};
+  const qual = Q.quality || {};
+  check('the appendix counts the calls it audited (16 arrivals + 1 outbound leg)', qual.calls === 17, qual.calls);
+  check('every quality count carries the base it was taken over',
+    qual.missingAnswerTime?.base === 17 && qual.zeroTalkAnswered?.base === qual.answered
+      && qual.missingDisconnectReason?.base === 17 && qual.duplicateLegs?.base === 17, qual);
+  check("the fixture's answered calls all have an answer moment (no false 'missing' flag)",
+    qual.missingAnswerTime?.count === 0, qual.missingAnswerTime);
+  check('no answered call in the fixture has zero talk time',
+    qual.zeroTalkAnswered?.count === 0, qual.zeroTalkAnswered);
+  check('the fixture carries no duplicate legs', qual.duplicateLegs?.count === 0, qual.duplicateLegs);
+  check('missing disconnect reasons are counted, not glossed (17 of 17 = 100 %)',
+    qual.missingDisconnectReason?.count === 17 && qual.missingDisconnectReason?.pct === 100,
+    qual.missingDisconnectReason);
+
+  const staff = Q.staffing || {};
+  check('the staffing estimate states the occupancy it assumed',
+    staff.occupancyPct === 85 && staff.intervalMinutes === 60, [staff.occupancyPct, staff.intervalMinutes]);
+  check('the estimate says it is a baseline and why it is not occupancy',
+    staff.label === 'baseline, not a forecast' && /no roster/i.test(String(staff.basis)), staff);
+  const nine = (staff.hours || []).find(h => h.hour === 9);
+  check('09:00: 4 offered at AHT 45 -> 180 work-seconds -> 0.06 agents at 85 %',
+    nine && nine.offered === 4 && nine.aht === 45 && nine.workSeconds === 180 && nine.agents === 0.06, nine);
+  check('a row with no offered calls asks for no agents rather than dividing by zero',
+    (staff.hours || []).every(h => h.offered > 0 || h.agents === 0), (staff.hours || []).filter(h => h.agents));
+  check('the total agent-hours are the same formula over the whole period',
+    Math.abs(staff.totalAgentHours - (staff.hours || []).reduce((a, h) => a + h.workSeconds, 0) / 3600 / 0.85) < 0.02,
+    [staff.totalAgentHours, (staff.hours || []).reduce((a, h) => a + h.workSeconds, 0) / 3600 / 0.85]);
+
+  const base = Q.baseline || {};
+  check('the baseline names its four-week window and the days inside it that had data',
+    /prior weeks/i.test(String(base.label))
+      && base.windowFrom === '2026-07-28' && base.windowTo === '2026-08-24'
+      && base.from >= base.windowFrom && base.to <= base.windowTo,
+    [base.label, base.windowFrom, base.windowTo, base.from, base.to]);
+  check('all seven weekdays are published even with no data',
+    (base.byWeekday || []).length === 7, (base.byWeekday || []).length);
+  check("a weekday's average is its total over the weeks it appeared in",
+    (base.byWeekday || []).every(d => d.weeks > 0 ? d.avg === Math.round((d.total / d.weeks) * 10) / 10 : d.avg === 0),
+    base.byWeekday);
+  check('a day is indexed against its weekday where a baseline exists, and null where none does',
+    (base.days || []).every(d => {
+      const wd = (base.byWeekday || []).find(w => w.weekday === d.weekday) || { weeks: 0 };
+      if (wd.weeks === 0) return d.baseline === null && d.index === null;
+      return d.baseline === wd.avg && d.index === Math.round((d.volume / wd.avg) * 1000) / 10;
+    }), base.days);
+  check('the period days carry the arrival volume (inbound + missed, no outbound)',
+    (base.days || []).length === 1 && base.days[0].date === '2026-08-25'
+      && base.days[0].volume === packDeep.body.summary.counts.inbound + packDeep.body.summary.counts.missed,
+    base.days);
+}
+
+/*
+ * The baseline arithmetic on a fixture nothing else owns: Monday 2026-06-01
+ * carries four arrivals; the period Monday 2026-06-15 carries six. So the
+ * Monday baseline is 4.0 over one week and the 15th is indexed at 150 %.
+ * Neither June day appears anywhere else in this suite.
+ */
+await harness.seedPbx('fetchCdrs', [
+  { id: 'x1', 'call-direction': 1, 'call-start-datetime': '2026-06-01T09:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-06-01T09:00:05Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'x2', 'call-direction': 1, 'call-start-datetime': '2026-06-01T10:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-06-01T10:00:05Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'x3', 'call-direction': 1, 'call-start-datetime': '2026-06-01T11:00:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-06-01T11:00:20Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'x4', 'call-direction': 1, 'call-start-datetime': '2026-06-01T12:00:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-06-01T12:00:20Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'y1', 'call-direction': 1, 'call-start-datetime': '2026-06-15T09:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-06-15T09:00:05Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'y2', 'call-direction': 1, 'call-start-datetime': '2026-06-15T10:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-06-15T10:00:05Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'y3', 'call-direction': 1, 'call-start-datetime': '2026-06-15T11:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-06-15T11:00:05Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'y4', 'call-direction': 1, 'call-start-datetime': '2026-06-15T12:00:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-06-15T12:00:20Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'y5', 'call-direction': 1, 'call-start-datetime': '2026-06-15T13:00:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-06-15T13:00:20Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'y6', 'call-direction': 1, 'call-start-datetime': '2026-06-15T14:00:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-06-15T14:00:20Z[US/Eastern]', 'call-term-user': '6080' }
+]);
+const baseRes = await harness.request('report.php', {
+  body: { start: '2026-06-15', end: '2026-06-15', hours: 'all', skipPrevious: true, baseline: 1 },
+  user: USERS.office_manager
+});
+check('the baseline request for 15 June answers', baseRes.status === 200, baseRes.log ?? baseRes.status);
+if (baseRes.status === 200) {
+  const base = baseRes.body.pack?.baseline || {};
+  const byWd = Object.fromEntries((base.byWeekday || []).map(d => [d.weekday, d]));
+  check('the four June 1st arrivals are the Monday baseline (1 week, avg 4.0)',
+    byWd[1]?.weeks === 1 && byWd[1]?.total === 4 && byWd[1]?.avg === 4, byWd[1]);
+  check('weekdays with no prior traffic are published with zero weeks, not invented averages',
+    byWd[3]?.weeks === 0 && byWd[3]?.total === 0 && byWd[3]?.avg === 0, byWd[3]);
+  const day = (base.days || [])[0];
+  check('the period Monday carries its own volume and is indexed against its weekday baseline (6 / 4 = 150 %)',
+    day && day.date === '2026-06-15' && day.volume === 6 && day.baseline === 4 && day.index === 150, day);
+}
+
 console.log('');
 if (failures.length) {
   console.log(`FAILED: ${failures.length} check(s)`);

@@ -515,7 +515,36 @@ $current['topAgents'] = $topAgents;
     $packRows = [
         'queues' => packQueueRows($calls, $directory, $queueIds, $settings, $queueLabels),
         'numbers' => packNumberRows($calls, $directory, $queueIds, array_keys($knownNumbers)),
+        /* F7: trust the month before quoting it. Computed over the same scoped
+         * rows as every figure above, so the appendix describes the data behind
+         * these numbers and not another month's. */
+        'quality' => packQuality($calls),
+        /* The staffing estimate, with the occupancy assumption it used printed
+         * inside it (there is no roster in this system, so it is an assumption,
+         * not a measurement). */
+        'staffing' => packStaffing($current['hourly'] ?? []),
     ];
+
+    /*
+     * The 4-week same-weekday baseline. It is a SECOND fetch (the prior 28
+     * days) and the review asked for it only on the pack, so it is computed when
+     * the caller asks for it (`baseline=1`) rather than on every dashboard load.
+     * Same scope as the period: a baseline built without the site/hours filters
+     * would compare two different businesses.
+     */
+    if (!empty($requested['baseline'])) {
+        $baselineEnd = date('Y-m-d', strtotime((string)$filters['start'] . ' 12:00:00 -1 day'));
+        $baselineStart = date('Y-m-d', strtotime($baselineEnd . ' 12:00:00 -27 days'));
+        $baselineFilters = $filters;
+        $baselineFilters['start'] = $baselineStart;
+        $baselineFilters['end'] = $baselineEnd;
+        $baselineCalls = filterCallsByLocalDate(
+            reportingCdrRows($user, $baselineFilters, $directory, $callTypes),
+            $baselineStart,
+            $baselineEnd
+        );
+        $packRows['baseline'] = packBaseline($calls, $baselineCalls, $baselineStart, $baselineEnd);
+    }
 
     /*
      * Audit and return.

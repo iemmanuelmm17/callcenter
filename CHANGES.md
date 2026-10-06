@@ -1,3 +1,67 @@
+# CHANGES — Sprint C, phase 7: the trust blocks (quality, staffing, baseline)
+
+**What this phase is about.** Three of the month-end pack's lines need data the
+dashboard never published: whether the month can be trusted (F7), what staffing
+the observed volume implies, and how each day compares with the same weekday in
+the prior weeks. All three are computed here, server-side, so the printed page
+prints figures rather than doing arithmetic in the browser.
+
+## Data quality (F7)
+
+`packQuality()` counts the four ways a CDR set lies — calls that connected with
+no answer moment (their wait is unknown, so they are absent from every ring
+figure), answered calls with zero talking seconds, legs with no disconnect
+reason, and the same leg appearing twice in the day file (the codebase's own
+`cdrLegFingerprint`). **Every count carries the base it was taken over**, because
+a quality percentage without a denominator is the kind of number this review was
+written about.
+
+## Staffing estimate
+
+`packStaffing()` is the review's formula — offered × AHT ÷ interval ÷ target
+occupancy — and it travels with its assumption as *fields*, not as a comment:
+the occupancy percent (85), the interval (60 minutes), the formula, and an
+explicit `label: "baseline, not a forecast"`. There is no roster in this system,
+so this is not occupancy and the `basis` text says why; the estimate uses the AHT
+the calls actually showed, and cost every offered call at that AHT (a missed call
+is demand that would have taken work had it been answered). A row with no offered
+calls asks for no agents instead of dividing by zero.
+
+## 4-week same-weekday baseline
+
+`packDays()` counts arrivals per calendar day (inbound + missed — the heatmap's
+own definition, so an outbound leg is never a "call that came in").
+`packBaseline()` averages each weekday over the prior four weeks and indexes each
+day of the period against its own weekday. It publishes the **window it was
+asked for** (`windowFrom`/`windowTo`) and the days **inside it that had data**
+(`from`/`to`), because "the PBX had no data that week" must not read as "zero
+calls". A weekday with no prior data gives a `null` baseline and a `null` index
+rather than 0 %, which would read as a catastrophic day.
+
+The lookback is a **second fetch** (the prior 28 days), so it runs only when the
+caller asks (`baseline=1`) — the dashboard never pays for it — and it carries the
+same scope as the period (hours, department, site, call types); a baseline built
+without them would compare two different businesses.
+
+## Evidence
+
+`tests/php/report-metrics.mjs` §12 (22 checks). The quality checks count the
+fixture's 17 rows and prove the zero cases are real zeroes (no false "missing
+answer moment" flags); staffing is checked by hand at 09:00 (4 offered, AHT 45 →
+180 work-seconds → 0.06 agents at 85 %) and against its own total; the baseline
+is checked structurally against its own published window, then arithmetically on
+a fixture nothing else owns (four arrivals on Mon 2026-06-01 → the Monday
+baseline is 4.0 over one week; six on Mon 2026-06-15 → index 150 %). `npm test` =
+25 suites green; `dead code --strict` clean.
+
+**Behaviour change to disclose:** a `report.php` request carrying `baseline=1`
+now performs a second CDR fetch (the prior 28 days) and returns
+`pack.quality`, `pack.staffing` and `pack.baseline`; requests without the flag
+are unchanged in cost and payload except for the two cheap blocks. No published
+figure moves.
+
+---
+
 # CHANGES — Sprint C, phase 6: the pack's row sets, and one DID definition
 
 **What this phase is about.** The printable month-end report (the next phase) needs

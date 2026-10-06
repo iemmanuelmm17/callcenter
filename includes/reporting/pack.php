@@ -233,3 +233,224 @@ function packNumberRows(array $calls, array $directory, array $queueIds = [], ar
     usort($out, static fn(array $a, array $b): int => $b['calls'] <=> $a['calls']);
     return $out;
 }
+
+/**
+ * F7: the data-quality appendix. The month-end page has to let a reader decide
+ * whether to trust the month, so this counts the four ways a CDR set lies:
+ *
+ *   missingAnswerTime   the call connected (there are talking seconds) but the
+ *                       PBX wrote no answer moment - its wait is unknown, so it
+ *                       is absent from every ring/ASA figure;
+ *   zeroTalkAnswered    an answered call with no talking seconds at all: either
+ *                       a genuine zero-length pickup or a lost duration;
+ *   missingDisconnectReason  no disconnect reason on the leg - it cannot be
+ *                       classified for a "why did callers leave" review;
+ *   duplicateLegs       the same leg twice in the day file (the codebase's own
+ *                       cdrLegFingerprint), which inflates call counts.
+ *
+ * Every count travels with the base it was taken over, because a quality
+ * percentage with no denominator is exactly the kind of number this review was
+ * written about.
+ */
+function packQuality(array $calls): array
+{
+    $total = 0;
+    $answered = 0;
+    $missingAnswerTime = 0;
+    $zeroTalkAnswered = 0;
+    $missingDisconnectReason = 0;
+    $seen = [];
+    $duplicateLegs = 0;
+
+    foreach ($calls as $call) {
+        if (!is_array($call)) {
+            continue;
+        }
+        $total++;
+        $isAnswered = callAnswered($call);
+        $talk = seconds($call, 'call-talking-duration-seconds');
+        if ($isAnswered) {
+            $answered++;
+            if ($talk <= 0) {
+                $zeroTalkAnswered++;
+            }
+        }
+        if ($talk > 0 && !callHasAnswerTimestamp($call)) {
+            $missingAnswerTime++;
+        }
+        if (callDisconnectReason($call) === '') {
+            $missingDisconnectReason++;
+        }
+        $fingerprint = cdrLegFingerprint($call);
+        if (isset($seen[$fingerprint])) {
+            $duplicateLegs++;
+        } else {
+            $seen[$fingerprint] = true;
+        }
+    }
+
+    $rate = static fn(int $count, int $base): float => $base > 0 ? round(($count / $base) * 100, 1) : 0.0;
+
+    return [
+        'calls' => $total,
+        'answered' => $answered,
+        'missingAnswerTime' => ['count' => $missingAnswerTime, 'base' => $total, 'pct' => $rate($missingAnswerTime, $total)],
+        'zeroTalkAnswered' => ['count' => $zeroTalkAnswered, 'base' => $answered, 'pct' => $rate($zeroTalkAnswered, $answered)],
+        'missingDisconnectReason' => ['count' => $missingDisconnectReason, 'base' => $total, 'pct' => $rate($missingDisconnectReason, $total)],
+        'duplicateLegs' => ['count' => $duplicateLegs, 'base' => $total, 'pct' => $rate($duplicateLegs, $total)],
+    ];
+}
+
+/**
+ * The staffing estimate, with its assumption attached.
+ *
+ * There is no roster and no after-call-work data in this system, so this is NOT
+ * occupancy and the payload says so: it is "how many agents does the offered
+ * volume take at the AHT we actually saw, if they are busy TARGET_OCCUPANCY of
+ * the hour". The assumption is a published field rather than a comment so the
+ * printed page can state it beside the number, and the estimate is labelled a
+ * baseline, not a forecast.
+ */
+const PACK_TARGET_OCCUPANCY_PCT = 85.0;
+const PACK_STAFFING_INTERVAL_MINUTES = 60;
+
+function packStaffing(array $hourly, float $occupancyPct = PACK_TARGET_OCCUPANCY_PCT): array
+{
+    $occupancyPct = max(1.0, min(100.0, $occupancyPct));
+    $intervalSeconds = PACK_STAFFING_INTERVAL_MINUTES * 60;
+    $hours = [];
+    $workSeconds = 0;
+    foreach ($hourly as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $offered = (int)($row['answered'] ?? 0) + (int)($row['missed'] ?? 0);
+        $aht = (int)($row['aht'] ?? 0);
+        $work = $offered * $aht;
+        $workSeconds += $work;
+        $hours[] = [
+            'hour' => (int)($row['hour'] ?? 0),
+            'offered' => $offered,
+            'aht' => $aht,
+            'workSeconds' => $work,
+            /* Volume x AHT / interval / occupancy, the review's own formula. */
+            'agents' => $work > 0 ? round($work / ($intervalSeconds * ($occupancyPct / 100)), 2) : 0.0,
+        ];
+    }
+    return [
+        'occupancyPct' => $occupancyPct,
+        'intervalMinutes' => PACK_STAFFING_INTERVAL_MINUTES,
+        'formula' => 'offered x AHT / interval / occupancy',
+        'label' => 'baseline, not a forecast',
+        'basis' => 'Talk time is the only work content the CDRs carry; after-call work, breaks and meetings are not in this estimate, and there is no roster to compute real occupancy from.',
+        'totalWorkHours' => round($workSeconds / 3600, 2),
+        'totalAgentHours' => $workSeconds > 0 ? round($workSeconds / 3600 / ($occupancyPct / 100), 2) : 0.0,
+        'hours' => $hours,
+    ];
+}
+
+/**
+ * Arrival volume per calendar day, using the heatmap's own definition
+ * (inbound + missed; an outbound leg is not an arrival). The baseline next to
+ * it is the same measure over the same weekday in the prior weeks.
+ */
+function packDays(array $calls): array
+{
+    $byDate = [];
+    foreach ($calls as $call) {
+        if (!is_array($call)) {
+            continue;
+        }
+        $type = callType($call);
+        if ($type !== 'inbound' && $type !== 'missed') {
+            continue;
+        }
+        $at = parseEasternDateTime((string)(
+            $call['call-start-datetime']
+            ?? $call['call-batch-start-datetime']
+            ?? ''
+        ));
+        if (!$at instanceof DateTimeImmutable) {
+            continue;
+        }
+        $date = $at->format('Y-m-d');
+        $byDate[$date] = ($byDate[$date] ?? 0) + 1;
+    }
+    ksort($byDate);
+    $out = [];
+    foreach ($byDate as $date => $volume) {
+        $at = parseEasternDateTime($date . 'T12:00:00Z[US/Eastern]');
+        $out[] = [
+            'date' => $date,
+            /* PHP date('w'): 0 = Sunday, the same index the heatmap uses. */
+            'weekday' => $at instanceof DateTimeImmutable ? (int)$at->format('w') : 0,
+            'volume' => $volume,
+        ];
+    }
+    return $out;
+}
+
+/**
+ * The 4-week same-weekday baseline: for each weekday, the average arrival volume
+ * over the prior weeks that had that weekday, then each day of the period
+ * indexed against it. A day with no prior data is published with a null
+ * baseline rather than a zero, so "no baseline" never reads as "terrible day".
+ */
+function packBaseline(array $periodCalls, array $priorCalls, string $windowFrom = '', string $windowTo = ''): array
+{
+    $labels = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    $totals = array_fill(0, 7, 0);
+    $days = array_fill(0, 7, 0);
+    $from = '';
+    $to = '';
+
+    foreach (packDays($priorCalls) as $day) {
+        $weekday = (int)$day['weekday'];
+        $totals[$weekday] += (int)$day['volume'];
+        $days[$weekday]++;
+        if ($from === '' || $day['date'] < $from) {
+            $from = $day['date'];
+        }
+        if ($to === '' || $day['date'] > $to) {
+            $to = $day['date'];
+        }
+    }
+
+    $byWeekday = [];
+    for ($i = 0; $i < 7; $i++) {
+        $byWeekday[] = [
+            'weekday' => $i,
+            'label' => $labels[$i],
+            'weeks' => $days[$i],
+            'total' => $totals[$i],
+            'avg' => $days[$i] > 0 ? round($totals[$i] / $days[$i], 1) : 0.0,
+        ];
+    }
+
+    $period = [];
+    foreach (packDays($periodCalls) as $day) {
+        $weekday = (int)$day['weekday'];
+        $avg = $days[$weekday] > 0 ? $totals[$weekday] / $days[$weekday] : null;
+        $period[] = [
+            'date' => $day['date'],
+            'weekday' => $weekday,
+            'volume' => (int)$day['volume'],
+            'baseline' => $avg === null ? null : round($avg, 1),
+            'index' => $avg === null || $avg <= 0 ? null : round(((int)$day['volume'] / $avg) * 100, 1),
+        ];
+    }
+
+    return [
+        'label' => 'baseline over the same weekday in the prior weeks',
+        /* The four-week window the caller asked for, and the days inside it that
+         * actually carried data - two different facts, and the page prints both
+         * so "no data that week" cannot masquerade as "zero calls". */
+        'windowFrom' => $windowFrom,
+        'windowTo' => $windowTo,
+        'weeks' => max(array_values($days) ?: [0]),
+        'from' => $from,
+        'to' => $to,
+        'byWeekday' => $byWeekday,
+        'days' => $period,
+    ];
+}
