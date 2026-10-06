@@ -56,14 +56,17 @@ function readCdrDayCache(string $file): ?array
         return [
             'complete' => !empty($data['complete']),
             'nextOffset' => (int)($data['nextOffset'] ?? 0),
-            'records' => $data['records'],
+            /* Day files written before the trim existed hold every PBX field;
+             * trimming here is what keeps a legacy cache from costing the old
+             * (fatal) amount of memory. It is idempotent. */
+            'records' => cdrTrimRecords($data['records']),
         ];
     }
     if ($data === [] || isset($data[0])) {
         return [
             'complete' => true,
             'nextOffset' => 0,
-            'records' => $data,
+            'records' => cdrTrimRecords($data),
         ];
     }
     return null;
@@ -117,7 +120,7 @@ function readNodeDayJsonl(string $date): ?array
             }
             $row = json_decode($line, true);
             if (is_array($row)) {
-                $rows[] = $row;
+                $rows[] = cdrTrimRecord($row);
             }
         }
     } finally {
@@ -201,6 +204,17 @@ function loadRawCdrs(array $user, array $filters): array {
     $merged = [];
     $tzName = defined('DEFAULT_TIMEZONE') ? DEFAULT_TIMEZONE : 'America/New_York';
     $driver = cdrCacheDriver();
+
+    /*
+     * How many calls this range is about to hold, and whether that can fit.
+     * A range that provably cannot fit is refused here with a message naming
+     * the range and the limit, rather than left to exhaust PHP's memory_limit
+     * halfway through (the production fatal this guards against).
+     */
+    $dayCounts = reportingRangeGuard($user, $filters);
+    $baselineBytes = memory_get_usage(true);
+    $processedDays = 0;
+    $remainingDays = reportingDateList((string)$filters['start'], (string)$filters['end']);
 
     for (
         $day = new DateTimeImmutable($filters['start']);
@@ -297,6 +311,21 @@ function loadRawCdrs(array $user, array $filters): array {
                 continue;
             }
             $merged[cdrCacheKey($record, count($merged))] = $record;
+        }
+
+        /*
+         * The day is in $merged now; the day's own array is the biggest
+         * temporary in the loop, so let it go before the next one is loaded.
+         */
+        $records = [];
+        unset($cached, $fromNode);
+        $processedDays++;
+        if ($remainingDays !== [] && $remainingDays[0] === $date) {
+            array_shift($remainingDays);
+        }
+        $overflow = reportingProjectedOverflow(count($merged), $baselineBytes, $processedDays, $dayCounts, $remainingDays);
+        if ($overflow !== null) {
+            throw new ReportingLimitException($overflow);
         }
     }
 

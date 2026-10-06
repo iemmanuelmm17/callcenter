@@ -3,6 +3,10 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/bootstrap.php';
 
+/* Trimming raw CDRs to the fields the app reads happens here, at the edge
+ * where they arrive, so the wide PBX shape never accumulates in memory. */
+require_once __DIR__ . '/reporting/cdr_trim.php';
+
 final class PbxClient
 {
 
@@ -458,6 +462,19 @@ final class PbxClient
     /**
      * Page CDRs with retry. Does not discard pages already fetched.
      *
+     * $onPage is called once per page with ONLY the rows that page added -
+     * not with the whole accumulated list. It used to be handed
+     * array_values($serverRows) every page, which is O(n) per page (O(n^2)
+     * for a day) and doubles the peak: on a wide window that copy, on top of
+     * the day cache's own merge, is what exhausted PHP's memory_limit in
+     * production. Callers that append to a store get the new rows, which is
+     * what they want anyway; a caller that needs the running total keeps
+     * accumulating the return value.
+     *
+     * Each row is trimmed to the fields the application can read
+     * (includes/reporting/cdr_trim.php) as it arrives, so the wide PBX shape
+     * never accumulates.
+     *
      * @param list<array> $existing
      * @return array{records: list<array>, complete: bool, nextOffset: int}
      */
@@ -499,6 +516,10 @@ final class PbxClient
             $offset = max(0, $startOffset);
             $complete = false;
             $stopAt = null;
+            /* Rows this page added, and rows of this batch that the callback
+             * has not been handed yet - see the $onPage contract above. */
+            $pageRows = [];
+            $unpublished = [];
 
             try {
 
@@ -593,10 +614,21 @@ final class PbxClient
                             if (!is_array($row)) {
                                 continue;
                             }
+                            $row = cdrTrimRecord($row);
                             $row['_server'] = $server;
-                            $serverRows[
-                                $this->cdrKey($row, $server . ':' . $pageOffset)
-                            ] = $row;
+                            $key = $this->cdrKey($row, $server . ':' . $pageOffset);
+                            /* Only rows this page actually added go to the
+                             * callback: a duplicate already seen on another
+                             * server (or an earlier page) is not new. */
+                            if (!array_key_exists($key, $serverRows)) {
+                                $pageRows[$key] = $row;
+                            }
+                            $serverRows[$key] = $row;
+                        }
+                        $batchRows = array_values($pageRows);
+                        $pageRows = [];
+                        foreach ($batchRows as $batchIndex => $batchRow) {
+                            $unpublished[$batchIndex] = $batchRow;
                         }
 
                         $got = count($records);
@@ -611,8 +643,9 @@ final class PbxClient
                     if ($failedOffset !== null) {
                         $offset = $failedOffset;
                         if ($serverRows !== []) {
-                            if (is_callable($onPage)) {
-                                $onPage(array_values($serverRows), $offset, false);
+                            if (is_callable($onPage) && $unpublished !== []) {
+                                $onPage(array_values($unpublished), $offset, false);
+                                $unpublished = [];
                             }
                             return [
                                 'records' => array_values($serverRows),
@@ -627,12 +660,13 @@ final class PbxClient
                         $offset = $launch;
                     }
 
-                    if (is_callable($onPage)) {
+                    if (is_callable($onPage) && $unpublished !== []) {
                         $onPage(
-                            array_values($serverRows),
+                            array_values($unpublished),
                             $stopAt ?? $offset,
                             $complete
                         );
+                        $unpublished = [];
                     }
 
                     if ($complete) {
@@ -640,8 +674,9 @@ final class PbxClient
                     }
                 }
 
-                if (is_callable($onPage)) {
-                    $onPage(array_values($serverRows), $offset, $complete);
+                if (is_callable($onPage) && $unpublished !== []) {
+                    $onPage(array_values($unpublished), $offset, $complete);
+                    $unpublished = [];
                 }
 
                 if ($complete || $serverRows !== []) {
@@ -660,8 +695,9 @@ final class PbxClient
                     $e->getMessage()
                 );
 
-                if (is_callable($onPage) && $serverRows !== []) {
-                    $onPage(array_values($serverRows), $offset, false);
+                if (is_callable($onPage) && $unpublished !== []) {
+                    $onPage(array_values($unpublished), $offset, false);
+                    $unpublished = [];
                 }
 
                 if ($serverRows !== []) {

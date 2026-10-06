@@ -252,5 +252,5 @@ try {
     ]);
 } catch (Throwable $e) {
     appExceptionLog('Call history', $e);
-    jsonResponse(['error' => 'Unable to load call history.'], 502);
+    jsonResponseThrowable($e, 'Unable to load call history.');
 }

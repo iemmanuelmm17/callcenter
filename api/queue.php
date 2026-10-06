@@ -823,5 +823,5 @@ try {
     ]);
 } catch (Throwable $e) {
     appExceptionLog('Queues', $e);
-    jsonResponse(['error' => 'Unable to load queue data.'], 502);
+    jsonResponseThrowable($e, 'Unable to load queue data.');
 }

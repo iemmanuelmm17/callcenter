@@ -952,11 +952,5 @@ try {
 
     appExceptionLog('Calls', $e);
 
-    jsonResponse(
-        [
-            'error' =>
-                'Unable to load call details.'
-        ],
-        502
-    );
+    jsonResponseThrowable($e, 'Unable to load call details.');
 }
