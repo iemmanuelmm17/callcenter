@@ -254,6 +254,14 @@ try {
     $servers = trim((string)($requested['servers'] ?? ''));
     $trace = trim((string)($requested['traceApi'] ?? $requested['prefilled-trace-api'] ?? ''));
 
+    /* SEC-3: the trace URL is only a source of query values. Reject anything
+     * that is not the PBX sipflow endpoint on a configured host, and never
+     * let it choose the request path (PbxClient::sipflowCradle re-validates). */
+    if (!pbxTraceApiIsAcceptable($trace)) {
+        appLog('CallFlow refused traceApi: ' . substr($trace, 0, 200));
+        jsonResponse(['error' => 'Invalid trace API URL.'], 400);
+    }
+
     appLog('CallFlow request orig=' . $orig . ' term=' . $term . ' trace=' . substr($trace, 0, 160));
 
     $raw = $client->sipflowCradle($start, $end, $callids, $servers, $trace);

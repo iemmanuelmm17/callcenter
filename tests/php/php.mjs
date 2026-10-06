@@ -30,6 +30,7 @@ declare(strict_types=1);
  * one terminates the request.
  */
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/security.php';
 date_default_timezone_set(DEFAULT_TIMEZONE);
 foreach ([CACHE_DIR, LOG_DIR] as $directory) {
     if (!is_dir($directory) && !@mkdir($directory, 0770, true) && !is_dir($directory)) {}
@@ -52,7 +53,7 @@ function readJsonBody(?string $raw = null): array {
     if (!is_array($data)) jsonResponse(['error' => 'Invalid JSON body.'], 422);
     return $data;
 }
-if (!defined('TEST_TMP')) define('TEST_TMP', dirname(__DIR__) . '/.tmp');
+if (!defined('TEST_TMP')) define('TEST_TMP', __DIR__ . '/..');
 if (!defined('TEST_OUT')) define('TEST_OUT', __DIR__ . '/../out.json');
 if (!defined('TEST_BODY')) define('TEST_BODY', __DIR__ . '/../body.json');
 if (!defined('TEST_LOG')) define('TEST_LOG', __DIR__ . '/../app.log');
@@ -83,7 +84,7 @@ final class PbxClient
 
     private function canned(string $method, mixed $fallback): mixed
     {
-        self::$calls[] = $method;
+        $this->record($method);
         $file = self::TMP . '/pbx/' . $method . '.json';
         if (is_file($file)) {
             $data = json_decode((string)file_get_contents($file), true);
@@ -92,7 +93,13 @@ final class PbxClient
         return $fallback;
     }
 
-    private function record(string $call): void { self::$calls[] = $call; }
+    private function record(string $call): void
+    {
+        self::$calls[] = $call;
+        /* Endpoints exit inside jsonResponse(), so the call log has to leave
+         * the process to be assertable. */
+        @file_put_contents(self::TMP . '/pbx-calls.jsonl', json_encode($call) . "\n", FILE_APPEND | LOCK_EX);
+    }
 
     public function users(string $domain): array { return (array)$this->canned('users', []); }
     public function callqueues(string $domain): array { return (array)$this->canned('callqueues', []); }
@@ -138,15 +145,38 @@ final class PbxClient
         return (array)$this->canned('sipflowCradle', []);
     }
 
+    /** Mirrors the real client: a URL outside the PBX allowlist is refused. */
     public function download(string $url): array
     {
-        $this->record('download:' . $url);
+        $candidate = html_entity_decode(trim($url), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $this->record('download:' . $candidate);
+        if (pbxRecordingUrl($candidate) === null) {
+            $this->record('download-refused');
+            return ['ok' => false, 'status' => 0, 'contentType' => '', 'body' => ''];
+        }
+        return $this->payload();
+    }
+
+    /** CDN fallback: never carries the token, public hosts only. */
+    public function downloadPublic(string $url): array
+    {
+        $candidate = html_entity_decode(trim($url), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $this->record('downloadPublic:' . $candidate);
+        if (pbxPublicRecordingUrl($candidate) === null) {
+            $this->record('downloadPublic-refused');
+            return ['ok' => false, 'status' => 0, 'contentType' => '', 'body' => ''];
+        }
+        return $this->payload();
+    }
+
+    private function payload(): array
+    {
         $file = self::TMP . '/pbx/download.json';
         if (is_file($file)) {
             $data = json_decode((string)file_get_contents($file), true);
             if (is_array($data)) return $data;
         }
-        return ['ok' => false, 'status' => 200, 'contentType' => 'audio/mpeg', 'body' => 'STUB'];
+        return ['ok' => true, 'status' => 200, 'contentType' => 'audio/mpeg', 'body' => 'STUB-AUDIO'];
     }
 }
 `;
@@ -170,13 +200,25 @@ export class PhpHarness {
   async boot() {
     rmSync(TMP, { recursive: true, force: true });
     mkdirSync(TMP, { recursive: true });
-    for (const dir of ['includes', 'api', 'pbx', 'cache', 'logs']) {
+    for (const dir of ['includes', 'api', 'pbx', 'cache', 'logs', 'scripts']) {
       mkdirSync(path.join(TMP, dir), { recursive: true });
       await this.mkdirp(path.join(TMP, dir));
     }
     await this.mkdirp(TMP);
 
     await this.write('includes/config.php', readFileSync(path.join(ROOT, 'includes/config.php'), 'utf8'));
+    /* The harness deployment uses includes/config.local.php, which is also how
+     * a real server overrides the committed defaults (the file is git-ignored). */
+    await this.write('includes/config.local.php', `<?php
+declare(strict_types=1);
+/*
+ * Harness deployment. Keeping this file also proves config.php loads
+ * includes/config.local.php and that a local value wins over the default.
+ * PBX credentials stay empty on purpose: php-wasm has no curl extension, so
+ * login.php is exercised up to (and including) its "not configured" branch.
+ */
+define('PBX_SERVERS', ['nms1' => 'https://pbx.example']);
+`);
     await this.write('includes/bootstrap.php', BOOTSTRAP_STUB);
     await this.write('includes/PbxClient.php', PBX_STUB);
     for (const name of readdirSync(path.join(ROOT, 'includes'))) {
@@ -209,6 +251,44 @@ export class PhpHarness {
   }
 
   /**
+   * Run an arbitrary PHP snippet with the harness bootstrap loaded and return
+   * everything it echoed. Used for pure-function tests (the URL policy).
+   */
+  /**
+   * PBX method calls the stub recorded during the last request.
+   *
+   * NOTE: php-wasm runs on an in-memory filesystem — files written by the
+   * harness (and by PHP) live inside the interpreter, not in the repository,
+   * so this has to be read back through the interpreter too. A side effect is
+   * welcome: nothing under tests/.tmp/ can ever be committed by accident.
+   */
+  async pbxCalls() {
+    let raw = '';
+    try {
+      raw = await this.php.readFile(path.join(TMP, 'pbx-calls.jsonl'), { encoding: 'utf8' });
+    } catch { return []; }
+    return String(raw).split('\n').filter(Boolean).map(line => {
+      try { return JSON.parse(line); } catch { return line; }
+    });
+  }
+
+  async script(body) {
+    if (body.trimStart().startsWith('<?php')) {
+      body = body.trimStart().slice(5).replace(/^\s*declare\(strict_types=1\);/, '');
+    }
+    const code = [
+      '<?php',
+      'error_reporting(E_ALL & ~E_DEPRECATED & ~E_WARNING & ~E_NOTICE);',
+      `require '${TMP}/includes/bootstrap.php';`,
+      body
+    ].join('\n');
+    try { await this.php.refresh(); } catch { /* first run */ }
+    this.out.length = 0;
+    await this.php.run(code);
+    return this.out.join('');
+  }
+
+  /**
    * Run one endpoint request.
    * @param {string} endpoint  e.g. 'report.php'
    * @param {object} options   {method, body, query, user, rawBody}
@@ -227,6 +307,7 @@ export class PhpHarness {
     await this.write('input.json', JSON.stringify({ method, query, user }));
     try { await this.php.unlink(path.join(TMP, 'out.json')); } catch { /* absent */ }
     try { await this.php.unlink(path.join(TMP, 'app.log')); } catch { /* absent */ }
+    try { await this.php.unlink(path.join(TMP, 'pbx-calls.jsonl')); } catch { /* absent */ }
 
     const code = [
       '<?php',
@@ -267,7 +348,13 @@ export class PhpHarness {
     try {
       log = await this.php.readFile(path.join(TMP, 'app.log'), { encoding: 'utf8' });
     } catch { /* no log */ }
-    return { status: payload.status, body: payload.body, log, phpOutput: this.out.join('') };
+    return {
+      status: payload.status,
+      body: payload.body,
+      log,
+      phpOutput: this.out.join(''),
+      pbxCalls: await this.pbxCalls()
+    };
   }
 }
 

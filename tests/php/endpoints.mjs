@@ -117,6 +117,101 @@ for (const entry of MATRIX) {
   }
 }
 
+/* ---------------------------------------------------------------------------
+ * SEC-2 / SEC-3 regression tests: the endpoint-level attacks the review found.
+ * The PBX stub mirrors the real client, so a hostile URL must never reach it.
+ * ------------------------------------------------------------------------- */
+console.log('\n== SEC-2 recording URL policy ==');
+const HOSTILE_SRC = [
+  ['https://evil.example/ns-api/recording.mp3', 'foreign host'],
+  ['https://pbx.example.evil.example/ns-api/x.mp3', 'superstring host'],
+  ['http://169.254.169.254/ns-api/latest/meta-data', 'cloud metadata address'],
+  ['https://pbx.example/notnsapi/x.mp3', 'path outside /ns-api/'],
+  ['javascript:alert(1)//ns-api/', 'javascript scheme'],
+  ['file:///etc/passwd', 'file scheme'],
+  ['https://pbx.example/ns-api/../../includes/config.php', 'path traversal'],
+  ['https://pbx.example/ns-api/x.mp3\r\nX-Test: 1', 'CRLF injection']
+];
+for (const [src, why] of HOSTILE_SRC) {
+  const res = await harness.request('recording.php', {
+    method: 'POST',
+    body: { src, callId: 'cdr1', extension: '6080' },
+    user: USERS.office_manager
+  });
+  const fetched = res.pbxCalls.filter(call => String(call).startsWith('download'));
+  check(`recording.php refuses ${why} (400, nothing fetched)`, res.status === 400 && fetched.length === 0,
+    { status: res.status, fetched });
+}
+
+{
+  const legit = 'https://pbx.example/ns-api/v2/domains/test.example/recordings/cdr1.mp3';
+
+  /* POST only resolves the URL for the player... */
+  const res = await harness.request('recording.php', {
+    method: 'POST',
+    body: { src: legit, callId: 'cdr1', extension: '6080' },
+    user: USERS.office_manager
+  });
+  check('recording.php returns a PBX-hosted recording URL',
+    res.status === 200 && res.body?.data?.url === legit,
+    { status: res.status, body: res.body });
+
+  /* ...the audio itself is streamed by the GET path. */
+  const stream = await harness.request('recording.php', {
+    method: 'GET',
+    query: { stream: '1', src: legit, callId: 'cdr1' },
+    user: USERS.office_manager
+  });
+  const fetched = stream.pbxCalls.filter(call => String(call).startsWith('download:'));
+  check('recording.php streams it from the PBX with the token',
+    fetched.length === 1 && fetched[0] === 'download:' + legit && stream.phpOutput.includes('STUB-AUDIO'),
+    { fetched, output: stream.phpOutput.slice(0, 80) });
+}
+
+{
+  const res = await harness.request('recording.php', {
+    method: 'GET',
+    query: { stream: '1', src: 'https://evil.example/ns-api/x.mp3', callId: 'cdr1', stream_: '1' },
+    user: USERS.office_manager
+  });
+  const fetched = res.pbxCalls.filter(call => String(call).startsWith('download'));
+  check('recording.php stream refuses a foreign src',
+    res.phpOutput.includes('Invalid recording URL') && fetched.length === 0,
+    { output: res.phpOutput.slice(0, 120), fetched });
+}
+
+console.log('\n== SEC-3 call-flow trace policy ==');
+for (const [trace, why] of [
+  ['https://evil.example/ns-api/v2/sipflow?callids=a1', 'foreign host'],
+  ['/ns-api/v2/domains/test.example/recordings?callids=a1', 'another PBX endpoint'],
+  ['/ns-api/v2/sipflow?callids=a1\r\nHost: evil.example', 'CRLF injection']
+]) {
+  const res = await harness.request('call_flow.php', {
+    method: 'POST',
+    body: { origCallId: 'o1', startTime: '2026-08-02 10:00:00', traceApi: trace },
+    user: USERS.office_manager
+  });
+  const sipflow = res.pbxCalls.filter(call => String(call).startsWith('sipflowCradle'));
+  check(`call_flow.php refuses trace from ${why}`, res.status === 400 && sipflow.length === 0,
+    { status: res.status, sipflow });
+}
+
+{
+  const res = await harness.request('call_flow.php', {
+    method: 'POST',
+    body: {
+      origCallId: 'o1',
+      startTime: '2026-08-02 10:00:00',
+      endTime: '2026-08-02 10:05:00',
+      traceApi: '/ns-api/v2/sipflow?callids=o1&type=cradle_to_grave'
+    },
+    user: USERS.office_manager
+  });
+  const sipflow = res.pbxCalls.filter(call => String(call).startsWith('sipflowCradle:'));
+  check('call_flow.php accepts a canonical PBX trace', res.status === 200 && sipflow.length === 1,
+    { status: res.status, sipflow, body: res.body });
+}
+
 console.log(`\n${results.filter(r => r.ok).length}/${results.length} checks passed`);
 if (failures.length) {
   console.log('FAILURES:\n - ' + failures.join('\n - '));

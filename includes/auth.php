@@ -154,7 +154,9 @@ function refreshPbxToken(): bool
             ?? (defined('PBX_CLIENT_ID') ? PBX_CLIENT_ID : '')
             ?? ''
         ));
-        $clientSecret = (string)(defined('PBX_CLIENT_SECRET') ? PBX_CLIENT_SECRET : '');
+        $clientSecret = trim((string)(
+            getenv('PBX_CLIENT_SECRET') ?: (defined('PBX_CLIENT_SECRET') ? PBX_CLIENT_SECRET : '')
+        ));
         $base = '';
         if (defined('PBX_SERVERS') && is_array(PBX_SERVERS) && isset(PBX_SERVERS['nms1'])) {
             $base = rtrim((string)PBX_SERVERS['nms1'], '/');

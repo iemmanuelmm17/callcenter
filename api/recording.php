@@ -98,19 +98,45 @@ try {
     $src = html_entity_decode(trim((string)($requested['src'] ?? '')), ENT_QUOTES | ENT_HTML5, 'UTF-8');
     $info = [];
     $url = '';
+    $publicUrl = false;
+
     if ($src !== '') {
-        $host = strtolower((string)(parse_url($src, PHP_URL_HOST) ?? ''));
-        $okHost = $host !== '' && (
-            str_contains($host, 'birns.net')
-            || str_contains($src, '/ns-api')
-        );
-        if ($okHost) {
-            $url = $src;
+        /* SEC-2: the caller may point us at a recording, but only on a
+         * configured PBX host — anything else is refused outright instead of
+         * being fetched with the bearer token. */
+        $validated = pbxRecordingUrl($src);
+        if ($validated === null) {
+            appLog('Recording refused src: ' . substr($src, 0, 200));
+            if ($isStream) {
+                http_response_code(400);
+                header('Content-Type: text/plain; charset=utf-8');
+                echo 'Invalid recording URL';
+                exit;
+            }
+            jsonResponse(['error' => 'Invalid recording URL.'], 400);
         }
+        $url = $validated;
     }
+
     if ($url === '') {
         $info = recordingLookup($client, $domain, $extensions, $callIds);
-        $url = is_array($info) ? trim((string)($info['file-access-url'] ?? '')) : '';
+        $candidate = is_array($info) ? trim((string)($info['file-access-url'] ?? '')) : '';
+        if ($candidate !== '') {
+            $validated = pbxRecordingUrl($candidate);
+            if ($validated !== null) {
+                $url = $validated;
+            } else {
+                /* The PBX may hand out a CDN/object-storage URL: allowed, but
+                 * fetched without the token and only when it is public. */
+                $validated = pbxPublicRecordingUrl($candidate);
+                if ($validated !== null) {
+                    $url = $validated;
+                    $publicUrl = true;
+                } else {
+                    appLog('Recording refused PBX-supplied URL: ' . substr($candidate, 0, 200));
+                }
+            }
+        }
     }
 
     if ($isStream) {
@@ -120,7 +146,7 @@ try {
             echo 'No recording';
             exit;
         }
-        $file = $client->download($url);
+        $file = $publicUrl ? $client->downloadPublic($url) : $client->download($url);
         if (!$file['ok']) {
             http_response_code($file['status'] > 0 ? $file['status'] : 502);
             header('Content-Type: text/plain; charset=utf-8');

@@ -26,7 +26,10 @@ const SUITES = {
     { name: 'build', cmd: ['node', 'tools/build.mjs'] },
     { name: 'js smoke', cmd: ['node', 'tests/js/smoke.mjs'] }
   ],
-  php: [{ name: 'api matrix', cmd: ['node', 'tests/php/endpoints.mjs'] }]
+  php: [
+    { name: 'api matrix', cmd: ['node', 'tests/php/endpoints.mjs'] },
+    { name: 'url policy', cmd: ['node', 'tests/php/security.mjs'] }
+  ]
 };
 
 let selected;

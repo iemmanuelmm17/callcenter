@@ -1399,83 +1399,132 @@ final class PbxClient
      *
      * @return array{ok:bool,status:int,contentType:string,body:string}
      */
+    /**
+     * SEC-2: fetch a recording only from a configured PBX host, and only
+     * follow redirects to hosts that pass the same policy (see
+     * includes/security.php). The bearer token is attached exclusively to
+     * allowlisted hosts, so a tampered `src` can no longer send it to a third
+     * party.
+     */
     public function download(string $url): array
     {
-        $url = html_entity_decode(trim($url), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        if ($url === '') {
+        $candidate = html_entity_decode(trim($url), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        if ($candidate === '') {
             return ['ok' => false, 'status' => 0, 'contentType' => '', 'body' => ''];
         }
-        if (!preg_match('#^https?://#i', $url)) {
-            $base = '';
+        if (preg_match('#^[a-z][a-z0-9+.\-]*://#i', $candidate) !== 1) {
+            /* A relative URL is resolved against the configured PBX base, never
+             * against anything the caller supplied. */
             foreach (array_keys(PBX_SERVERS) as $server) {
                 $base = rtrim((string)PBX_SERVERS[$server], '/');
+                if ($base !== '') {
+                    $candidate = $base . '/' . ltrim($candidate, '/');
+                }
                 break;
             }
-            $url = $base . '/' . ltrim($url, '/');
         }
 
-        $token = $this->bearerToken();
-        $curl = curl_init($url);
-        if ($curl === false) {
+        $validated = pbxRecordingUrl($candidate);
+        if ($validated === null) {
+            appLog('Recording download refused (not an allowed PBX URL): ' . substr($candidate, 0, 200));
             return ['ok' => false, 'status' => 0, 'contentType' => '', 'body' => ''];
         }
-        curl_setopt_array($curl, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_CONNECTTIMEOUT => 5,
-            CURLOPT_TIMEOUT => 60,
-            CURLOPT_HTTPHEADER => [
-                'Accept: */*',
-                'Authorization: Bearer ' . $token,
-            ],
-            CURLOPT_ENCODING => '',
-        ]);
-        $body = curl_exec($curl);
-        $status = (int)curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
-        $type = (string)curl_getinfo($curl, CURLINFO_CONTENT_TYPE);
-        curl_close($curl);
-        $ok = is_string($body) && $body !== '' && $status >= 200 && $status < 400;
-        return [
-            'ok' => $ok,
-            'status' => $status,
-            'contentType' => $type !== '' ? $type : 'audio/mpeg',
-            'body' => is_string($body) ? $body : '',
-        ];
+
+        return $this->fetchUrl($validated, true);
     }
 
-    private function sipTime(string $raw): string
+    /**
+     * Fallback for a URL the PBX handed us that is NOT on the PBX allowlist
+     * (object storage / CDN). The token is never attached, the host has to
+     * resolve to public addresses only, and https is required.
+     */
+    public function downloadPublic(string $url): array
     {
-        $raw = html_entity_decode(trim($raw), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $raw = str_replace('T', ' ', $raw);
-        if (preg_match('/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/', $raw, $m)) {
-            return $m[1];
+        $candidate = html_entity_decode(trim($url), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $validated = pbxPublicRecordingUrl($candidate);
+        if ($validated === null) {
+            appLog('Recording download refused (not a public URL): ' . substr($candidate, 0, 200));
+            return ['ok' => false, 'status' => 0, 'contentType' => '', 'body' => ''];
         }
-        return $raw;
+
+        return $this->fetchUrl($validated, false);
     }
 
-    private function sipHostname(string $raw): string
+    /**
+     * GET a validated URL, following at most three redirects. Each hop is
+     * re-validated; the token is dropped the moment a hop leaves the allowlist
+     * and the request is refused outright if the hop is neither a PBX host nor
+     * a public one.
+     *
+     * @return array{ok: bool, status: int, contentType: string, body: string}
+     */
+    private function fetchUrl(string $url, bool $allowToken): array
     {
-        $raw = html_entity_decode(trim($raw), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $raw = preg_replace('/\[([^\]]+)\]\([^)]+\)/', '$1', $raw) ?? $raw;
-        $raw = preg_replace('#^https?://#i', '', $raw) ?? $raw;
-        $raw = explode('/', $raw)[0];
-        $raw = explode(',', $raw)[0];
-        return trim($raw);
-    }
+        $token = $allowToken ? $this->bearerToken() : '';
 
-    private function sipCallids(string $raw): string
-    {
-        $raw = html_entity_decode(trim($raw), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $raw = preg_replace('/^callids=/i', '', $raw) ?? $raw;
-        $raw = trim($raw);
-        if ($raw === '') {
-            return '';
+        for ($hop = 0; $hop < 3; $hop++) {
+            $curl = curl_init($url);
+            if ($curl === false) {
+                return ['ok' => false, 'status' => 0, 'contentType' => '', 'body' => ''];
+            }
+            $headers = ['Accept: */*'];
+            if ($token !== '') {
+                $headers[] = 'Authorization: Bearer ' . $token;
+            }
+            curl_setopt_array($curl, [
+                CURLOPT_RETURNTRANSFER => true,
+                /* Redirects are handled here so every hop is validated. */
+                CURLOPT_FOLLOWLOCATION => false,
+                CURLOPT_CONNECTTIMEOUT => 5,
+                CURLOPT_TIMEOUT => 60,
+                CURLOPT_HTTPHEADER => $headers,
+                CURLOPT_ENCODING => '',
+            ]);
+            $body = curl_exec($curl);
+            $status = (int)curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+            $type = (string)curl_getinfo($curl, CURLINFO_CONTENT_TYPE);
+            $location = (string)curl_getinfo($curl, CURLINFO_REDIRECT_URL);
+            curl_close($curl);
+
+            $ok = is_string($body) && $body !== '' && $status >= 200 && $status < 400;
+            if (!$ok && $status >= 300 && $status < 400 && $location !== '') {
+                $next = pbxResolveUrl($url, $location);
+                $pbxNext = $next === '' ? null : pbxRecordingUrl($next);
+                if ($pbxNext !== null) {
+                    $url = $pbxNext;
+                    continue;
+                }
+                $publicNext = $next === '' ? null : pbxPublicRecordingUrl($next);
+                if ($publicNext !== null) {
+                    $url = $publicNext;
+                    $token = '';
+                    continue;
+                }
+                appLog('Recording redirect refused: ' . substr($next, 0, 200));
+                return ['ok' => false, 'status' => $status, 'contentType' => $type, 'body' => ''];
+            }
+
+            return [
+                'ok' => $ok,
+                'status' => $status,
+                'contentType' => $type !== '' ? $type : 'audio/mpeg',
+                'body' => is_string($body) ? $body : '',
+            ];
         }
-        return 'callids=' . $raw;
+
+        appLog('Recording download aborted: too many redirects');
+        return ['ok' => false, 'status' => 0, 'contentType' => '', 'body' => ''];
     }
 
     /**
      * GET prefilled-trace-api as stored, plus type=cradle_to_grave.
+     */
+    /**
+     * GET the SIP flow for a call. The caller can hand us the trace URL the
+     * PBX stored on the CDR, but only its QUERY is reused and only for the
+     * parameters this application issues (SEC-3): the path is always the
+     * canonical /ns-api/v2/sipflow, so a caller cannot steer the request at
+     * another PBX endpoint.
      */
     public function sipflowCradle(
         string $startTime,
@@ -1484,42 +1533,13 @@ final class PbxClient
         string $servers = '',
         string $traceApi = ''
     ): array {
-        $pathAndQuery = html_entity_decode(trim($traceApi), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $pathAndQuery = str_replace('&amp;', '&', $pathAndQuery);
-        $pathAndQuery = preg_replace('/#.*$/', '', $pathAndQuery) ?? $pathAndQuery;
-
-        if ($pathAndQuery !== '' && preg_match('#https?://[^/]+(/.*)$#i', $pathAndQuery, $m)) {
-            $pathAndQuery = $m[1];
-        }
-
-        if ($pathAndQuery === '' || !str_contains($pathAndQuery, 'sipflow')) {
-            $startTime = $this->sipTime($startTime);
-            $endTime = $this->sipTime($endTime !== '' ? $endTime : $startTime);
-            $callids = html_entity_decode(trim($callids), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-            $servers = $this->sipHostname($servers);
-            $q = [
-                'start_time' => $startTime,
-                'end_time' => $endTime,
-                'callids' => $callids,
-                'type' => 'cradle_to_grave',
-            ];
-            if ($servers !== '') {
-                $q['servers'] = $servers;
-            }
-            $pathAndQuery = '/ns-api/v2/sipflow?' . http_build_query($q, '', '&', PHP_QUERY_RFC3986);
-        } else {
-            if (!str_starts_with($pathAndQuery, '/')) {
-                $pathAndQuery = '/ns-api/v2/' . ltrim($pathAndQuery, '/');
-            }
-            if (!str_contains($pathAndQuery, 'type=')) {
-                $pathAndQuery .= (str_contains($pathAndQuery, '?') ? '&' : '?') . 'type=cradle_to_grave';
-            }
-            $pathAndQuery = str_replace(' ', '%20', $pathAndQuery);
-        }
+        $pathAndQuery = pbxSipflowPath($traceApi, $startTime, $endTime, $callids, $servers);
 
         appLog('SIPFlow GET ' . $pathAndQuery);
 
-        $sipToken = '';
+        /* PBX_SIP_TOKEN is only sent when a deployment configures it; an empty
+         * value keeps the historical request unchanged. */
+        $sipToken = defined('PBX_SIP_TOKEN') ? trim((string)PBX_SIP_TOKEN) : '';
 
         foreach (array_keys(PBX_SERVERS) as $server) {
             try {
