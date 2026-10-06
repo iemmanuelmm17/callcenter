@@ -92,6 +92,9 @@ if (
      */
     if (!empty($requested['previousOnly'])) {
         $slaSeconds = resolveSlaSeconds($requested, $user);
+        /* Per-queue targets apply to the comparison period too, otherwise the
+         * two halves of the dashboard would be judged by different rules. */
+        $settings = loadDomainSettings((string)($user['domain'] ?? ''));
         $previousFilters = previousFilters($filters);
 
         $previousCalls = filterCallsByLocalDate(
@@ -100,7 +103,7 @@ if (
             (string)$previousFilters['end']
         );
 
-        $previous = summary($previousCalls, $slaSeconds, $directory, $queueIds);
+        $previous = summary($previousCalls, $slaSeconds, $directory, $queueIds, $settings);
 
         jsonResponse([
             'comparison' => [
@@ -154,8 +157,9 @@ if (
      * settings default, clamped 1..120) — same as calls/queue/cradle.
      */
     $slaSeconds = resolveSlaSeconds($requested, $user);
+    $settings = loadDomainSettings((string)($user['domain'] ?? ''));
 
-    $current = summary($calls, $slaSeconds, $directory, $queueIds);
+    $current = summary($calls, $slaSeconds, $directory, $queueIds, $settings);
 
     /*
      * Previous period.
@@ -199,7 +203,8 @@ if (
             $previousCalls,
             $slaSeconds,
             $directory,
-            $queueIds
+            $queueIds,
+            $settings
         );
     }
 

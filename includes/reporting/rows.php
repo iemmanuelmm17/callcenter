@@ -122,14 +122,32 @@ function reportingInventory(array $user, array $directory, array $calls): array
 }
 
 function scopedCdrs(array $raw, array $filters, array $directory = []): array {
-    $start = (string)($filters['start'] ?? '');
-    $end = (string)($filters['end'] ?? '');
-    return array_values(array_filter($raw, static function(array $row) use ($filters, $directory): bool {
+    /*
+     * Opening-hours scoping lives here, in the one function every reporting
+     * endpoint already funnels through (report rows, calls, call history, the
+     * queue and cradle screens, the exports). That is deliberate: a filter that
+     * only applied to one endpoint is how a dashboard and its own drill-down
+     * come to disagree.
+     */
+    $hours = (string)($filters['hours'] ?? 'all');
+    $settings = null;
+    if ($hours !== 'all') {
+        $settings = loadDomainSettings((string)($filters['domain'] ?? ''));
+        if (!businessHoursConfigured($settings)) {
+            $hours = 'all';
+        }
+    }
+    return array_values(array_filter($raw, static function(array $row) use ($filters, $directory, $hours, $settings): bool {
         $agent = callAgent($row); $directoryEntry = $directory[$agent] ?? [];
         $department = callDepartment($row) ?: (string)($directoryEntry['department'] ?? '');
         $site = callSite($row) ?: (string)($directoryEntry['site'] ?? '');
         if ($filters['department'] !== '' && $department !== $filters['department']) return false;
         if (($filters['site'] ?? '') !== '' && $site !== $filters['site']) return false;
+        if ($hours !== 'all' && $settings !== null) {
+            $inside = callWithinBusinessHours($row, $settings);
+            if ($hours === 'business' && !$inside) return false;
+            if ($hours === 'after' && $inside) return false;
+        }
         return !$filters['agents'] || in_array(callAgent($row), $filters['agents'], true);
     }));
 }
@@ -160,10 +178,24 @@ function resolveSlaSeconds($requested, array $user): int {
     return max(1, min(120, $sla));
 }
 
-function summary(array $calls, int $slaSeconds = 20, array $directory = [], array $queueIds = []): array {
+/**
+ * The period totals every screen reads.
+ *
+ * $settings is optional and, when given, turns on per-queue SLA: each inbound
+ * call is judged against its own queue's target (with the request's target as
+ * the fallback and the domain default behind that). Without it the behaviour is
+ * exactly what it always was - one target for everything.
+ */
+function summary(array $calls, int $slaSeconds = 20, array $directory = [], array $queueIds = [], ?array $settings = null): array {
     if ($slaSeconds < 1) {
         $slaSeconds = 20;
     }
+    if ($settings !== null) {
+        /* The report's requested target beats the stored default, but a queue's
+         * own override still beats both. */
+        $settings = array_merge($settings, ['slaSeconds' => $slaSeconds]);
+    }
+    $perQueueSla = $settings !== null && !empty($settings['queueSla']);
     $sets = ['inbound'=>[], 'outbound'=>[]];
     $counts = ['total'=>0,'inbound'=>0,'outbound'=>0,'missed'=>0,'onnet'=>0];
     $hours = array_fill(0, 24, 0);
@@ -171,6 +203,21 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
     $missedBreakdown = ['noanswer'=>0,'voicemail'=>0,'abandon'=>0];
     $inboundRings = [];
     $answeredInSla = 0;
+    $slaTargetSum = 0;
+    $slaTargets = [];
+    /*
+     * Wait buckets, in the two shapes the review asks for: answered calls banded
+     * at the SLA-style thresholds (30/60/120s) so the coaching list is "who
+     * waited over two minutes", and unanswered calls banded at 5/30s, where the
+     * <5s bucket is overwhelmingly misdials and the >30s bucket is a real
+     * staffing failure. Both use waitSeconds() - the same number as the average
+     * beside them.
+     */
+    $waitBuckets = ['0-30'=>0,'31-60'=>0,'61-120'=>0,'120+'=>0];
+    $missedWaitBuckets = ['lt5'=>0,'5-30'=>0,'gt30'=>0];
+    $abandonWaitBuckets = ['lt5'=>0,'5-30'=>0,'gt30'=>0];
+    $holdTotal = 0;
+    $holdCalls = 0;
 
     foreach ($calls as $call) {
         $type = callType($call);
@@ -183,14 +230,39 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
             $sets[$type][] = $call;
         }
 
+        $hold = holdSeconds($call);
+        if ($hold > 0) {
+            $holdTotal += $hold;
+            $holdCalls++;
+        }
+
         if ($type === 'missed') {
-            $missedBreakdown[callMissedBucket($call, $directory, $queueIds)]++;
+            $bucket = callMissedBucket($call, $directory, $queueIds);
+            $missedBreakdown[$bucket]++;
+            $waited = waitSeconds($call);
+            $band = $waited < 5 ? 'lt5' : ($waited <= 30 ? '5-30' : 'gt30');
+            $missedWaitBuckets[$band]++;
+            if ($bucket === 'abandon') {
+                $abandonWaitBuckets[$band]++;
+            }
         }
 
         if ($type === 'inbound') {
             $ring = ringSeconds($call);
             $inboundRings[] = $ring;
-            if ($ring <= $slaSeconds) {
+            if ($ring <= 30) { $waitBuckets['0-30']++; }
+            elseif ($ring <= 60) { $waitBuckets['31-60']++; }
+            elseif ($ring <= 120) { $waitBuckets['61-120']++; }
+            else { $waitBuckets['120+']++; }
+            /* The target this call is actually judged against: its queue's
+             * override when one is configured, otherwise the report's target. */
+            $target = $slaSeconds;
+            if ($perQueueSla) {
+                $target = resolveQueueSlaSeconds($settings, cdrQueueMatch($call, $queueIds));
+            }
+            $slaTargetSum += $target;
+            $slaTargets[$target] = true;
+            if ($ring <= $target) {
                 $answeredInSla++;
             }
         }
@@ -218,6 +290,10 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
     $serviceLevel = [
         'p50Ring' => percentileInt($inboundRings, 50),
         'p90Ring' => percentileInt($inboundRings, 90),
+        /* Same numbers, named for the wait the caller felt: on the dashboard
+         * "wait" is the word a manager uses for an answered call's ring. */
+        'p50Wait' => percentileInt($inboundRings, 50),
+        'p90Wait' => percentileInt($inboundRings, 90),
         'answeredInSla' => $answeredInSla,
         'answeredIn20' => $answeredInSla,
         'answered' => $answeredInbound,
@@ -225,6 +301,16 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
         'slaSeconds' => $slaSeconds,
         'sla' => $answeredInbound > 0 ? round(($answeredInSla / $answeredInbound) * 100, 1) : 0.0,
         'sla20' => $answeredInbound > 0 ? round(($answeredInSla / $answeredInbound) * 100, 1) : 0.0,
+        /*
+         * Per-queue targets: when several targets were in play for one period,
+         * a single "answered within X" label would be a half-truth, so the
+         * payload carries the mean target actually applied and how many
+         * distinct targets were used. The UI prints "within 24s (avg, per
+         * queue)" instead of naming one number that only half the calls faced.
+         */
+        'perQueue' => $perQueueSla,
+        'avgTargetSeconds' => $answeredInbound > 0 ? (int)round($slaTargetSum / $answeredInbound) : $slaSeconds,
+        'targetsUsed' => count($slaTargets),
     ];
 
     $panel = static function(array $group, string $kind): array {
@@ -248,6 +334,14 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
         'days' => $days,
         'missedBreakdown' => $missedBreakdown,
         'serviceLevel' => $serviceLevel,
+        'waitBuckets' => $waitBuckets,
+        'missedWaitBuckets' => $missedWaitBuckets,
+        'abandonWaitBuckets' => $abandonWaitBuckets,
+        'hold' => [
+            'totalSeconds' => $holdTotal,
+            'calls' => $holdCalls,
+            'avgSeconds' => $holdCalls > 0 ? (int)round($holdTotal / $holdCalls) : 0,
+        ],
     ];
 }
 

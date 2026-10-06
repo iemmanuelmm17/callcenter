@@ -1,3 +1,67 @@
+# CHANGES — Sprint A, phase 1: opening hours, wait buckets, hold, service targets
+
+**The task (2026-10-06):** implement the manager review (`REPORTING-REVIEW.md`)
+in full — Sprints A, B and C — phase by phase, with every published number
+recomputed and checked independently.
+
+**Read this before you quote a number.** Three figures the app publishes have
+changed, all three because they were wrong:
+
+1. **p50 / p90 wait** (`support.php: percentileInt`). The percentile picked the
+   element at `round(p/100 × (n−1))` and published it. For an even count that is
+   not the median: over six rings of 10, 20, 45, 100, 125, 150 s it reported
+   **100 s** where the median is **72.5 s** — a 38 % overstatement of the wait
+   the desk made people endure, in the number the review says is quoted at the
+   daily huddle. It now interpolates between the two nearest values, the same
+   method as Excel/LibreOffice `PERCENTILE.INC` and R's type 7, so the exported
+   CSV can be checked in a spreadsheet. Same fixture: p50 **73 s**, p90
+   **138 s**. This affects the dashboard CSV's `p50_ring` / `p90_ring` columns
+   and the new on-screen p50/p90; nothing else used the function.
+2. **A call whose ringing and answer timestamps belong to different legs**
+   (`support.php: ringSeconds`) used to publish **0 seconds**. A transfer or a
+   re-queue can leave a row whose answer precedes this row's ringing, and the
+   old code clamped the negative difference to zero: a real wait silently
+   published as "answered instantly". It now measures this leg's own
+   start→answer gap for that case (45 s in the test). Every single-leg value is
+   byte-identical to before.
+3. **An omitted field on the Settings screen wiped fields it did not mention.**
+   `saveDomainSettings()` wrote the whole settings object, so a save that did
+   not include the calendar wrote the *default* calendar over the stored one —
+   the same class of bug the old `$pick` fix addressed for the scalar fields,
+   and worse, because a partial save would silently switch opening hours off.
+   The nested settings now start from what is stored. Test:
+   `a save that omits the calendar keeps it`.
+
+## What is new
+
+| piece | where | note |
+| --- | --- | --- |
+| Opening-hours calendar (Mon–Fri 08:00–18:00 grid, per-day open/close, holiday list) | `includes/reporting/settings.php` | `businessHours.enabled` ships **false**: switching it on changes every headline number, so it is a manager decision, not a deploy |
+| `hours=all\|business\|after` on every reporting endpoint | `includes/auth.php` (`authorizedFilters`), `includes/reporting/rows.php` (`scopedCdrs`) | the default is `business` **once a calendar is configured**, `all` while none is — an unconfigured install behaves exactly as before |
+| Per-queue service targets (queue id → extension → name → domain default) | `settings.php: resolveQueueSlaSeconds`, `rows.php: summary()` | a period judged against several targets says so and carries the mean target applied, so the UI never labels it with one queue's number |
+| Wait buckets for answered calls (≤30/≤60/≤120/>120 s) | `summary()` | one definition with the average beside it (`waitSeconds()` == `ringSeconds()`) |
+| Abandon split by how long the caller waited (<5 s misdial / 5–30 s / >30 s staffing failure) | `summary()` | the review's F5, and the "abandoned wait" figure every nav now sees |
+| Hold time (total, calls, average) | `summary()`, `support.php: holdSeconds` | the field was read inside `ringSeconds()` and thrown away |
+| Roster rows (agent, weekday, shift, team, supervisor) stored and validated | `settings.php` | the editor UI lands with Sprint C; the storage and validation are here so no later phase can half-write it |
+
+## Evidence
+
+`node tests/php/report-metrics.mjs` — 77 checks, all hand-computed in the file:
+the calendar's boundaries (open inclusive / close exclusive), a cross-midnight
+shift, holidays and closed weekdays; the ring fix; `summary()`'s buckets, hold
+and per-queue SLA arithmetic written out line by line; the Save guards; and
+`api/report.php` over a four-call day where `business + after` must equal `all`
+exactly and the drill-down must agree with the summary it was opened from.
+Registered in `tests/run.mjs`, so `npm test` (23 suites) already runs it.
+
+Two behavioural rules are **pinned, not changed**: a call with no usable
+timestamp is never hidden by the hours filter, and an unanswered call that
+reached a queue counts as an **abandon even when it ended in a mailbox** (the
+mailbox is the queue's overflow; counting it as handled voicemail would hide the
+failure). Both now have a test that says so.
+
+---
+
 # CHANGES — QA round 2: the remaining P1s, the history purge, the large modules
 
 **Scope:** the three P1 findings round 1 left for a decision (QA-3, QA-4,
