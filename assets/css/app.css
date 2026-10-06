@@ -441,9 +441,6 @@
   .w-4 {
     width: calc(var(--spacing) * 4);
   }
-  .w-7 {
-    width: calc(var(--spacing) * 7);
-  }
   .w-8 {
     width: calc(var(--spacing) * 8);
   }
@@ -494,9 +491,6 @@
   }
   .w-px {
     width: 1px;
-  }
-  .max-w-\[9rem\] {
-    max-width: 9rem;
   }
   .max-w-\[12rem\] {
     max-width: 12rem;
@@ -1089,14 +1083,6 @@
     @supports (color: color-mix(in lab, red, red)) {
       .hover\:bg-slate-800\/60:hover {
         background-color: color-mix(in oklab, var(--color-slate-800) 60%, transparent);
-      }
-    }
-    .hover\:bg-slate-800\/70:hover {
-      background-color: color-mix(in srgb, oklch(27.9% 0.041 260.031) 70%, transparent);
-    }
-    @supports (color: color-mix(in lab, red, red)) {
-      .hover\:bg-slate-800\/70:hover {
-        background-color: color-mix(in oklab, var(--color-slate-800) 70%, transparent);
       }
     }
     .hover\:text-cyan-300:hover {

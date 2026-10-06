@@ -25,16 +25,6 @@ function normalizedRole(string $scope): string {
     };
 }
 
-function routesForRole(string $role): array {
-    if ($role === 'office_manager') {
-        return ['dashboard', 'agents', 'queues', 'telephone_numbers', 'attendants', 'call_history'];
-    }
-    if ($role === 'supervisor') {
-        return ['dashboard', 'agents', 'queues', 'call_history'];
-    }
-    return ['dashboard'];
-}
-
 function requirePageRoles(array $user, array $roles): void {
     if (!in_array((string)($user['role'] ?? ''), $roles, true)) {
         jsonResponse(['error' => 'Forbidden'], 403);

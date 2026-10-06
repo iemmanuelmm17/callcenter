@@ -2,13 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../includes/reporting.php';
-$aaOptions = __DIR__ . '/../includes/aa_options.php';
-if (!is_file($aaOptions)) {
-    $aaOptions = __DIR__ . '/aa_options.php';
-}
-if (is_file($aaOptions)) {
-    require_once $aaOptions;
-}
+require_once __DIR__ . '/../includes/aa_options.php';
 
 requireMethod('POST');
 

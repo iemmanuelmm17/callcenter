@@ -61,7 +61,6 @@ function writeCdrDayCache(string $file, array $records, bool $complete, int $nex
         appLog("Could not write CDR cache {$file}");
     }
 }
-function clearCache(): int { $files = glob(CACHE_DIR . '/cdr-*.json') ?: []; $count = 0; foreach ($files as $file) if (@unlink($file)) $count++; return $count; }
 function reportingTimezone(): DateTimeZone
 {
     $name = defined('DEFAULT_TIMEZONE') ? DEFAULT_TIMEZONE : 'America/New_York';
@@ -302,53 +301,6 @@ function filterCallsByLocalDate(array $calls, string $start, string $end): array
         $out[] = $call;
     }
     return $out;
-}
-
-function logicalCallKey(array $row, int $fallback = 0): string
-{
-    foreach ([
-        'call-orig-call-id',
-        'call-parent-call-id',
-        'call-parent-cdr-id',
-    ] as $field) {
-        if (!empty($row[$field])) {
-            return (string)$row[$field];
-        }
-    }
-
-    if (!empty($row['id'])) {
-        return 'id:' . $row['id'];
-    }
-
-    return 'row:' . $fallback;
-}
-
-function pickPrimaryLeg(array $legs): array
-{
-    usort($legs, static function (array $a, array $b): int {
-        $aTalk = (int)($a['call-talking-duration-seconds'] ?? 0);
-        $bTalk = (int)($b['call-talking-duration-seconds'] ?? 0);
-        if ($aTalk !== $bTalk) {
-            return $bTalk <=> $aTalk;
-        }
-        $aAns = empty($a['call-answer-datetime']) ? 0 : 1;
-        $bAns = empty($b['call-answer-datetime']) ? 0 : 1;
-        return $bAns <=> $aAns;
-    });
-
-    return $legs[0];
-}
-
-function dedupeLogicalCalls(array $calls): array
-{
-    /*
-     * KPIs count every scoped CDR row (reportingCdrRows).
-     * Logical merge is not used for dashboard / TN / calls.
-     */
-    return array_values(array_filter(
-        $calls,
-        static fn($row): bool => is_array($row)
-    ));
 }
 
 /**
@@ -700,15 +652,6 @@ function reportingInventory(array $user, array $directory, array $calls): array
     ];
 }
 
-function cdrDisconnectText(array $row): string
-{
-    return strtolower((string)(
-        $row['call-disconnect-reason-text']
-        ?? $row['disconnectReason']
-        ?? ''
-    ));
-}
-
 function cdrLooksLikeVoicemail(array $row): bool
 {
     $hay = strtolower(implode(' ', [
@@ -724,28 +667,6 @@ function cdrLooksLikeVoicemail(array $row): bool
         '/voicemail|voice\\s*mail|to-voicemail|vmail|vmbox|\\bvm\\d|\\/vm[\\/-]/',
         $hay
     );
-}
-
-function cdrInboundMissed(array $row): bool
-{
-    if (empty($row['call-answer-datetime'])) {
-        return true;
-    }
-
-    $reason = cdrDisconnectText($row);
-    $talk = (int)($row['call-talking-duration-seconds'] ?? 0);
-
-    if (
-        $talk <= 0
-        && preg_match(
-            '/cancel|no\\s*answer|not\\s*answered|abandon|hang\\s*up|orig:\\s*bye|busy|time\\s*-?\\s*out|unavailable|unanswered/',
-            $reason
-        )
-    ) {
-        return true;
-    }
-
-    return false;
 }
 
 function cdrDigits(string $value): string
@@ -1287,208 +1208,6 @@ function cdrMatchesPhoneNumber(
 }
 
 
-function telephoneNumberCallStats(
-    array $calls,
-    string $phoneNumber
-): array {
-
-    $total = 0;
-    $inbound = 0;
-    $outbound = 0;
-    $missed = 0;
-    $onnet = 0;
-
-    $talkSeconds = 0;
-
-    $firstCall = null;
-    $lastCall = null;
-
-    /*
-     * Daily call counts.
-     *
-     * Example:
-     *
-     * [
-     *     '2026-08-24' => 5,
-     *     '2026-08-25' => 8
-     * ]
-     */
-    $days = [];
-
-    foreach ($calls as $call) {
-
-        /*
-         * Only process calls belonging
-         * to this telephone number.
-         */
-        if (
-            !cdrMatchesPhoneNumber(
-                $call,
-                $phoneNumber
-            )
-        ) {
-            continue;
-        }
-
-        /*
-         * Total calls.
-         */
-        $total++;
-
-        /*
-         * Classify call.
-         */
-        $type = callType($call);
-
-        switch ($type) {
-
-            case 'inbound':
-                $inbound++;
-                break;
-
-            case 'outbound':
-                $outbound++;
-                break;
-
-            case 'missed':
-                $missed++;
-                break;
-
-            case 'onnet':
-                $onnet++;
-                break;
-        }
-
-        /*
-         * Talking time.
-         */
-        $talkSeconds +=
-            seconds(
-                $call,
-                'call-talking-duration-seconds'
-            );
-
-        /*
-         * =====================================================
-         * DAILY TREND
-         * =====================================================
-         */
-
-        $timestamp =
-            (string)(
-                $call['call-start-datetime']
-                ?? ''
-            );
-
-        if ($timestamp !== '') {
-
-            try {
-
-                $date =
-                    new DateTimeImmutable(
-                        $timestamp
-                    );
-
-                /*
-                 * Convert to the dashboard timezone.
-                 */
-                $date =
-                    $date->setTimezone(
-                        new DateTimeZone(
-                            DEFAULT_TIMEZONE
-                        )
-                    );
-
-                $day =
-                    $date->format(
-                        'Y-m-d'
-                    );
-
-                if (
-                    !isset(
-                        $days[$day]
-                    )
-                ) {
-                    $days[$day] = 0;
-                }
-
-                $days[$day]++;
-
-            } catch (
-                Throwable $e
-            ) {
-
-                /*
-                 * Ignore malformed timestamps.
-                 */
-            }
-        }
-
-        /*
-         * =====================================================
-         * FIRST / LAST CALL
-         * =====================================================
-         */
-
-        if ($timestamp !== '') {
-
-            if (
-                $firstCall === null ||
-                $timestamp < $firstCall
-            ) {
-                $firstCall =
-                    $timestamp;
-            }
-
-            if (
-                $lastCall === null ||
-                $timestamp > $lastCall
-            ) {
-                $lastCall =
-                    $timestamp;
-            }
-        }
-    }
-
-    /*
-     * Sort daily data chronologically.
-     */
-    ksort($days);
-
-    return [
-
-        'total' =>
-            $total,
-
-        'inbound' =>
-            $inbound,
-
-        'outbound' =>
-            $outbound,
-
-        'missed' =>
-            $missed,
-
-        'onnet' =>
-            $onnet,
-
-        'talkSeconds' =>
-            $talkSeconds,
-
-        'firstCall' =>
-            $firstCall,
-
-        'lastCall' =>
-            $lastCall,
-
-        /*
-         * Used by TelephoneNumberModal
-         * for the daily call trend.
-         */
-        'days' =>
-            $days
-    ];
-}
 function userDirectory(array $user): array
 {
     $directory = [];
@@ -1634,8 +1353,6 @@ function scopedCdrs(array $raw, array $filters, array $directory = []): array {
     }));
 }
 function seconds(array $row, string $field): int { return max(0, (int)($row[$field] ?? 0)); }
-function durationLabel(int $seconds): string { return sprintf('%02d:%02d:%02d', intdiv($seconds, 3600), intdiv($seconds % 3600, 60), $seconds % 60); }
-
 /**
  * FUNC-16 / FUNC-27 FIX: single source of truth for the SLA window across
  * the reporting endpoints (calls, report, queue, cradle).

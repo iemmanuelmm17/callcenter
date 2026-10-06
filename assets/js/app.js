@@ -405,15 +405,6 @@
       { id: "attendants", label: "Auto-Attendants", icon: "attendants" },
       { id: "call_history", label: "Call History", icon: "history" }
     ];
-    function histOrdinal(n) {
-      const v = n % 100;
-      if (v >= 11 && v <= 13) return n + "th";
-      const d = n % 10;
-      if (d === 1) return n + "st";
-      if (d === 2) return n + "nd";
-      if (d === 3) return n + "rd";
-      return n + "th";
-    }
     function formatHistDate(value) {
       if (!value) return "\u2014";
       let raw = String(value).trim();
@@ -443,13 +434,6 @@
     function formatMmss(n) {
       const s = Math.max(0, Math.floor(Number(n) || 0));
       return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
-    }
-    function outcomeTone(reason) {
-      const r = String(reason || "").toLowerCase();
-      if (!r) return "info";
-      if (/ok|normal|bye|answered|success|200/.test(r)) return "ok";
-      if (/busy|fail|cancel|error|reject|timeout|abandon|no.?answer|480|486|487|603|404|500/.test(r)) return "bad";
-      return "info";
     }
     function flowFaIcon(classes) {
       const c = " " + String(classes || "").toLowerCase() + " ";
@@ -1761,9 +1745,6 @@
         )
       );
     }
-    function SkeletonBlock({ className = "" }) {
-      return h("div", { className: "skeleton-shimmer rounded " + className });
-    }
     function skel(cls) {
       return h("div", { className: "skeleton-shimmer rounded " + cls });
     }
@@ -1786,84 +1767,6 @@
         { className: "dash-card " + (extra || "") },
         skel("h-3 w-28"),
         skel("mt-3 " + (heightCls || "h-40"))
-      );
-    }
-    function Heatmap({ days, start, end, onDayClick }) {
-      const all = [];
-      const nextYmd = (ymd) => {
-        const [y, m, d] = String(ymd).split("-").map(Number);
-        const dt = new Date(Date.UTC(y, m - 1, d + 1));
-        return dt.toISOString().slice(0, 10);
-      };
-      for (let d = start; d && end && d <= end; d = nextYmd(d)) all.push(d);
-      const max = Math.max(1, ...Object.values(days || {}), 1);
-      return h(
-        "div",
-        { className: "dash-day-bars px-1 pb-1" },
-        ...all.map((d) => {
-          const n = days[d] || 0;
-          const hgt = Math.max(4, Math.round(n / max * 68));
-          return h("button", {
-            key: d,
-            type: "button",
-            title: d + ": " + n + " calls",
-            onClick: () => onDayClick && onDayClick(d),
-            className: "dash-day-bar",
-            style: { height: hgt + "px", opacity: n ? 0.45 + 0.55 * (n / max) : 0.2 }
-          });
-        })
-      );
-    }
-    function TopAgents({ agents, onAgentClick }) {
-      const rows = Array.isArray(agents) ? agents : [];
-      const rankClass = (i) => i === 0 ? "gold" : i === 1 ? "silver" : i === 2 ? "bronze" : "";
-      return h(
-        "section",
-        { className: "dash-card dash-agents" },
-        h("div", { className: "dash-label" }, "Top Agents"),
-        h(
-          "div",
-          { className: "dash-agents-list" },
-          rows.length === 0 ? h("div", { className: "px-1 py-8 text-center text-xs text-slate-500" }, "No agent data available.") : h(
-            "table",
-            { className: "w-full text-xs" },
-            h(
-              "thead",
-              null,
-              h(
-                "tr",
-                { className: "sticky top-0 z-10 border-b border-slate-800 bg-slate-900" },
-                h("th", { className: "px-1 py-1.5 text-left text-[10px] uppercase tracking-wide text-slate-500" }, ""),
-                h("th", { className: "px-1 py-1.5 text-left text-[10px] uppercase tracking-wide text-slate-500" }, "Name"),
-                h("th", { className: "px-1 py-1.5 text-right text-[10px] uppercase tracking-wide text-slate-500" }, "Calls"),
-                h("th", { className: "px-1 py-1.5 text-right text-[10px] uppercase tracking-wide text-slate-500" }, "AHT")
-              )
-            ),
-            h(
-              "tbody",
-              null,
-              ...rows.map(
-                (agent, index) => h(
-                  "tr",
-                  {
-                    key: agent.extension || index,
-                    onClick: () => onAgentClick(agent.extension),
-                    title: "Click to view calls for " + agent.name,
-                    className: "cursor-pointer border-b border-slate-800 hover:bg-slate-800/70"
-                  },
-                  h(
-                    "td",
-                    { className: "px-1 py-1.5 w-7" },
-                    h("span", { className: "rank-badge " + rankClass(index) }, String(index + 1))
-                  ),
-                  h("td", { className: "px-1 py-1.5 font-medium text-slate-200 truncate max-w-[9rem]" }, agent.name),
-                  h("td", { className: "px-1 py-1.5 text-right text-slate-300" }, agent.totalCalls ?? agent.total ?? 0),
-                  h("td", { className: "px-1 py-1.5 text-right font-mono text-cyan-300" }, fmt(agent.aht || 0))
-                )
-              )
-            )
-          )
-        )
       );
     }
     function CallModal({ metric, hour, agent, phoneNumber, callerNumber, queue, queuesOnly, filters, callTypes, slaSeconds, onClose }) {
@@ -4079,14 +3982,6 @@
           text
         )
       );
-    }
-    function formatComparisonDate(date2) {
-      const d = /* @__PURE__ */ new Date(date2 + "T00:00:00");
-      return d.toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric"
-      });
     }
     function telephoneDestinationType(application) {
       const value = String(application || "").trim().toLowerCase();
@@ -10072,18 +9967,12 @@
       const [aaError, setAaError] = useState("");
       const [aaLoading, setAaLoading] = useState(false);
       const [cacheJob, setCacheJob] = useState(null);
-      const cacheKey = String(filters.start || "") + "|" + String(filters.end || "");
       const rangeDayCount = (() => {
         if (!filters.start || !filters.end) return 0;
         const a = /* @__PURE__ */ new Date(filters.start + "T00:00:00");
         const b = /* @__PURE__ */ new Date(filters.end + "T00:00:00");
         return Math.round((b - a) / 864e5) + 1;
       })();
-      const [cacheGate, setCacheGate] = useState(() => ({
-        key: String(filters.start || "") + "|" + String(filters.end || ""),
-        ready: true
-      }));
-      const cacheReady = cacheGate.key === cacheKey ? cacheGate.ready : false;
       const [aaView, setAaView] = useState("overview");
       const [selectedAutoAttendants, setSelectedAutoAttendants] = useState([]);
       const [selectedAgents, setSelectedAgents] = useState([]);
@@ -10179,15 +10068,12 @@
         const days = rangeDayCount;
         if (days < 7) {
           setCacheJob(null);
-          setCacheGate({ key, ready: true });
           return;
         }
-        setCacheGate({ key, ready: false });
         (async () => {
           const apply = (st) => {
             if (!active || !st) return;
             setCacheJob(st.complete ? null : st);
-            if (st.complete) setCacheGate({ key, ready: true });
           };
           const tick = () => new Promise((r) => setTimeout(r, 50));
           try {
@@ -10195,7 +10081,6 @@
             if (!active) return;
             if (!st || st.complete) {
               setCacheJob(null);
-              setCacheGate({ key, ready: true });
               return;
             }
             apply(st);
@@ -10244,7 +10129,6 @@
           } finally {
             if (active) {
               setCacheJob(null);
-              setCacheGate({ key, ready: true });
             }
           }
         })();

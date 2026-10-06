@@ -1,3 +1,89 @@
+# CHANGES — Dead code removal and entry-point cleanup (2026-10-06)
+
+**Scope:** delete what nothing calls, plus the duplicate entry point. No feature
+change, no endpoint the front end uses was touched.
+**Files:** 5 endpoints deleted, `diffs/` and `portal/` removed, `index.js`
+removed, 12 PHP functions and 7 JS declarations removed, `api/aa.php`,
+`portal.php`, `tools/dead-code.mjs` (new), `tests/*`.
+
+## Evidence, not memory
+
+`tools/dead-code.mjs` (new) parses every PHP file with php-parser and counts
+whole-word references across PHP, JS, tests, tools and markdown; positions come
+from the AST, so a declaration is either referenced or it is not. It is now part
+of `npm test` in `--strict` mode, so dead code cannot creep back in.
+
+## Endpoints deleted (nothing referenced them)
+
+| file | why |
+| --- | --- |
+| `api/activity.php` | not called by the front end or any PHP file |
+| `api/audit.php` | the audit *reader*; see the note below |
+| `api/auto_attendant.php` | superseded by `api/aa.php` (SEC-6 retirement) |
+| `api/clear-cache.php` | superseded by `api/cache_job.php` |
+| `api/warm-cache.php` | superseded by `api/cache_job.php` |
+
+The front end's endpoint list was extracted from the source rather than assumed:
+`aa, agents, alerts, cache_job, call_flow, call_history, calls, cradle, filters,
+login, logout, queue, recording, report, session, settings, simultaneous_calls,
+telephone_numbers` — every one of those still exists.
+
+**Note on `api/audit.php`:** it was the only reader of the audit trail.
+`auditView()` is still called by 8 endpoints and keeps appending to
+`logs/audit-YYYY-MM-DD.jsonl`, so the trail is still recorded for forensics but
+no longer readable from the UI. If you want it back, it is one gated endpoint.
+
+## PHP functions deleted (never called)
+
+`includes/reporting.php`: `logicalCallKey`, `pickPrimaryLeg`,
+`dedupeLogicalCalls`, `cdrInboundMissed`, `durationLabel`,
+`telephoneNumberCallStats`, `cdrDisconnectText`, `clearCache` (the last one lost
+its only caller, the deleted `clear-cache.php`).
+`api/telephone_numbers.php`: `handleUpdate` (a PUT route that never existed) and
+`filterCdrsByTimezoneRange`, plus `easternCalendarDate`.
+`includes/auth.php`: `routesForRole` — the route policy that actually applies
+lives in the front end's `ROLE_ROUTES` and in each endpoint's `requirePageRoles()`.
+
+Also removed: the dead `api/aa_options.php` fallback `require` in `api/aa.php`
+(that path has never existed) and, in `PbxClient`, the now-unused `sipTime`,
+`sipHostname` and `sipCallids` helpers whose logic moved into
+`includes/security.php` in the security phase.
+
+## JS deleted (the bundled source is smaller by ~1.2 kB)
+
+`histOrdinal`, `outcomeTone`, `SkeletonBlock`, `Heatmap`, `TopAgents`,
+`formatComparisonDate` — all top-level declarations with exactly one occurrence
+(the declaration itself) — and the write-only `cacheGate`/`cacheKey`/
+`cacheReady` state in the dashboard, including its five `setCacheGate()` updates
+in the cache-warming effect. That effect still reports progress through
+`cacheJob` (which the banner renders); nothing ever read the gate.
+
+## Other cleanup
+
+* `index.js` (Tailwind v3 config at the repository root) — nothing referenced it;
+  Tailwind v4 is configured in `assets/css/src/app.css`.
+* `diffs/` — five stale `.diff` files from earlier work.
+* `portal/portal.php` — a stale duplicate shell that required a
+  `portal/includes/bootstrap.php` which does not exist, and still loaded the
+  Tailwind CDN. `index.php` → `portal.php` is the only entry point.
+* `portal.php` — dropped a dead `<link rel="stylesheet" href="https://cloudflare.com">`
+  and the Alpine.js CDN script (zero references in the bundle).
+* `api/recording.php` still uses Tabulator for one table; the CDN dependency and
+  that table are handled with the front-end work in the next phase.
+
+## Verification
+
+* `npm test` → **ALL SUITES PASSED** (php lint, CSS coverage, dead code
+  `--strict`, build, JS smoke, API matrix 87 checks, URL policy).
+* `tools/dead-code.mjs --strict` → **0 unreferenced PHP functions, 0 unreferenced
+  JS declarations, 0 orphan files**.
+* The JS smoke test caught a real mistake made while editing: the first attempt
+  removed the `cacheGate` state but left five `setCacheGate()` calls behind,
+  which threw `ReferenceError: setCacheGate is not defined` on the dashboard.
+  The gate state and its calls were removed together and re-verified.
+* Rebuilt bundles: `assets/js/app.js` 438.9 kB (was 443.7 kB at the start of
+  this phase).
+
 # CHANGES — Security: recording proxy SSRF/token leak, call-flow trace injection, configuration loading (2026-10-06)
 
 **Scope:** security fixes only. No UI change, no endpoint removed from the

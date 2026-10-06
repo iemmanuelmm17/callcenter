@@ -44,13 +44,8 @@ const MATRIX = [
   /* session.php intentionally answers 200 {user:null} when not logged in — the
    * login screen uses it to detect an existing session. */
   { endpoint: 'session.php', method: 'POST', body: null, allowed: 'office_manager', forbidden: [], allowGet: true, noSessionStatus: 200 },
-  { endpoint: 'activity.php', method: 'POST', body: null, allowed: 'office_manager', forbidden: [] },
   { endpoint: 'logout.php', method: 'POST', body: null, allowed: 'office_manager', forbidden: [], sessionOptional: true },
   { endpoint: 'login.php', method: 'POST', body: { username: 'x', password: 'y' }, allowed: null, forbidden: [], sessionOptional: true, expectStatus: [401, 422] },
-  { endpoint: 'audit.php', method: 'POST', body: null, allowed: 'office_manager', forbidden: ['agent'], allowGet: true },
-  { endpoint: 'clear-cache.php', method: 'POST', body: null, allowed: 'office_manager', forbidden: ['agent'] },
-  { endpoint: 'warm-cache.php', method: 'POST', body: { days: 1 }, allowed: 'office_manager', forbidden: ['agent'] },
-  { endpoint: 'auto_attendant.php', method: 'GET', body: null, allowed: null, forbidden: [], sessionOptional: true, expectStatus: [410] }
 ];
 
 const harness = await new PhpHarness();

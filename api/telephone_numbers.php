@@ -289,18 +289,6 @@ function handleGet(
 }
 
 
-function handleUpdate(
-    string $domain,
-    array $user
-) {
-
-    throw new RuntimeException(
-        'Telephone-number updates require a public update method in PbxClient. ' .
-        'The current PbxClient only exposes phonenumbers(), users(), and cdrs().'
-    );
-}
-
-
 /**
  * Keep only CDRs whose start time falls on an
  * America/New_York calendar date in [start, end].
@@ -308,59 +296,6 @@ function handleUpdate(
  * Naive PBX timestamps are treated as Eastern wall clock,
  * matching the dashboard date filter.
  */
-function filterCdrsByTimezoneRange(
-    array $cdrs,
-    string $start,
-    string $end,
-    string $timezone
-): array {
-
-    if ($start === '' || $end === '' || $cdrs === []) {
-        return $cdrs;
-    }
-
-    try {
-        $tz = new DateTimeZone($timezone);
-    } catch (Throwable $e) {
-        $tz = new DateTimeZone(APP_TZ);
-    }
-
-    $out = [];
-
-    foreach ($cdrs as $call) {
-
-        if (!is_array($call)) {
-            continue;
-        }
-
-        $raw = (string)(
-            $call['startedAt']
-            ?? $call['call-start-datetime']
-            ?? $call['start']
-            ?? ''
-        );
-
-        if ($raw === '') {
-            continue;
-        }
-
-        $day = easternCalendarDate($raw, $tz);
-
-        if ($day === '') {
-            continue;
-        }
-
-        if ($day < $start || $day > $end) {
-            continue;
-        }
-
-        $out[] = $call;
-    }
-
-    return $out;
-}
-
-
 function buildTelephoneCharts(
     array $cdrs,
     string $start,
@@ -503,16 +438,6 @@ function easternDateTimeParts(
         'hour' => (int)$dt->format('G'),
         'dow' => (int)$dt->format('w'),
     ];
-}
-
-
-function easternCalendarDate(
-    string $value,
-    DateTimeZone $tz
-): string {
-
-    $dt = parseEasternDateTime($value, $tz);
-    return $dt instanceof DateTimeImmutable ? $dt->format('Y-m-d') : '';
 }
 
 
