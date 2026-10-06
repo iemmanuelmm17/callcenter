@@ -9596,7 +9596,7 @@
         h(
           "div",
           { className: "mb-2 flex items-center justify-between gap-2" },
-          h("div", { className: "dash-label mb-0" }, "Recent calls", qHelp("Click a row to load the Sky cradle path (queues then answering agent). Ring is wait-to-answer.")),
+          h("div", { className: "dash-label mb-0" }, "Recent calls", qHelp("Click a row to load the Sky cradle path (queues then answering agent). Ring is wait-to-answer. Use Open to open that one call \u2014 recording and SIP flow.")),
           h("button", {
             type: "button",
             disabled: !recent.length,
@@ -9615,12 +9615,13 @@
               "tr",
               null,
               h("th", null, ""),
-              ...[["Caller", "Originating caller"], ["Agent", "call-term-user when that extension is not a queue"], ["Path", "Cradle hop"], ["Ring", "Ring / wait before answer"], ["Talk", "Talking duration"], ["Sentiment", "Ending sentiment"], ["Reason", "Disconnect reason"], ["Time", "Queue start (US/Eastern)"]].map(([lab, t]) => h("th", { key: lab }, tip(t, h("span", { className: "cursor-help border-b border-dotted border-slate-600" }, lab))))
+              ...[["Caller", "Originating caller"], ["Agent", "call-term-user when that extension is not a queue"], ["Path", "Cradle hop"], ["Ring", "Ring / wait before answer"], ["Talk", "Talking duration"], ["Sentiment", "Ending sentiment"], ["Reason", "Disconnect reason"], ["Time", "Queue start (US/Eastern)"]].map(([lab, t]) => h("th", { key: lab }, tip(t, h("span", { className: "cursor-help border-b border-dotted border-slate-600" }, lab)))),
+              h("th", { key: "open" }, tip("Open the single call", h("span", { className: "cursor-help border-b border-dotted border-slate-600" }, "Call")))
             )),
             h(
               "tbody",
               null,
-              slice.length === 0 ? h("tr", null, h("td", { colSpan: 8, className: "px-2 py-8 text-center text-slate-500" }, "No queue calls in this range.")) : slice.flatMap((c, i) => {
+              slice.length === 0 ? h("tr", null, h("td", { colSpan: 10, className: "px-2 py-8 text-center text-slate-500" }, "No queue calls in this range.")) : slice.flatMap((c, i) => {
                 const key = String(c.cradle && c.cradle.orig || c.parentId || i) + ":" + i;
                 const open = expanded === key;
                 const hops = cradleHops[key] || c.hops || [];
@@ -9664,6 +9665,21 @@
                     "td",
                     { className: "text-slate-500 whitespace-nowrap" },
                     (formatCallDate(c.startedAt) + " " + formatCallTime(c.startedAt)).trim() || "\u2014"
+                  ),
+                  h(
+                    "td",
+                    null,
+                    c.id ? h("button", {
+                      type: "button",
+                      className: "cursor-pointer rounded border border-slate-700 px-1.5 py-0.5 text-[10px] text-cyan-300 hover:border-cyan-500",
+                      title: "Open this call: recording and SIP flow",
+                      /* The row itself expands the cradle path, so this
+                       * must not also toggle it. */
+                      onClick: (e) => {
+                        if (e && e.stopPropagation) e.stopPropagation();
+                        if (typeof onCallClick === "function") onCallClick({ metric: "total", callId: String(c.id) });
+                      }
+                    }, "Open") : "\u2014"
                   )
                 )];
                 if (open) {
@@ -9673,7 +9689,7 @@
                     { key: key + "-path" },
                     h(
                       "td",
-                      { colSpan: 9, className: "q-path-cell" },
+                      { colSpan: 10, className: "q-path-cell" },
                       cradleBusy === key ? h("div", { className: "text-xs text-slate-500" }, "Loading cradle path\u2026") : h(
                         "div",
                         { className: "q-path" },
@@ -10875,6 +10891,8 @@
         onCallClick: (payload) => setModal({
           metric: payload.metric || "total",
           hour: payload.hour,
+          /* QA-6: a queue recent row stands for ONE call. */
+          callId: payload.callId,
           queue: payload.queue || null,
           queuesOnly: !!payload.queuesOnly,
           slaSeconds: payload.slaSeconds,

@@ -164,6 +164,19 @@ for (const [src, why] of HOSTILE_SRC) {
   check('recording.php streams it from the PBX with the token',
     fetched.length === 1 && fetched[0] === 'download:' + legit && stream.phpOutput.includes('STUB-AUDIO'),
     { fetched, output: stream.phpOutput.slice(0, 80) });
+
+  /*
+   * QA-10: a playback is audited, both when the player asks for the URL and
+   * when the audio is streamed.
+   */
+  const auditFile = 'logs/audit-' + new Date().toISOString().slice(0, 7) + '.jsonl';
+  const audit = await harness.readInterpreterFile(auditFile);
+  const playLines = audit.trim().split('\n').filter(line => line.includes('"resource":"recording"'));
+  const streamed = playLines.some(line => line.includes('"stream":1') && line.includes('cdr1'));
+  const resolved = playLines.some(line => line.includes('"stream":0') && line.includes('cdr1'));
+  check('the URL resolution is audited as a recording view', resolved,
+    playLines.slice(-1)[0]);
+  check('the streamed playback is audited too', streamed, playLines.slice(-1)[0]);
 }
 
 {

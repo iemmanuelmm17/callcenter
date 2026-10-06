@@ -233,6 +233,27 @@ console.log('\n== drill-down filters match the clicked item (P7) ==');
     await closeModal();
   }
 
+  /* 1b — QA-6: a queue recent row opens that single call. */
+  requested.length = 0;
+  await goTo('Queues');
+  await flush(12);
+  const qOverviewTab = byText('.aa-tab', 'Overview');
+  if (qOverviewTab) await click(qOverviewTab);
+  await flush(12);
+  const openCallBtn = [...document.querySelectorAll('button')].find(b => /^Open$/.test((b.textContent || '').trim()));
+  check('a queue recent row offers Open', !!openCallBtn);
+  if (openCallBtn) {
+    await click(openCallBtn);
+    await flush(10);
+    const call = lastCall();
+    const body = JSON.parse(bodyOf(call) || '{}');
+    check('the queue recent row drills into that call (callId)',
+      body.callId === 'c1' && body.metric === 'total',
+      JSON.stringify(body));
+    check('the call modal opens for the queue recent row', !!modalEl());
+    await closeModal();
+  }
+
   /* 2 — Telephone Numbers: the interval row carries its own window. */
   requested.length = 0;
   await goTo('Telephone Numbers');

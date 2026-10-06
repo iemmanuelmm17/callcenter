@@ -402,6 +402,20 @@ check('queue 700 missed = 0', qOutcomes.missed === 0, qOutcomes);
 check('queue outcomes add up to the 5 queue calls',
   qOutcomes.answered + qOutcomes.abandoned + qOutcomes.missed === 5, qOutcomes);
 check('queue table offered = answered + abandoned', q700.offered === (q700.handled + q700.abandoned), q700);
+
+/* QA-6: every recent row stands for one call, and its id must resolve. */
+const qRecent = Array.isArray(queueData.recent) ? queueData.recent : [];
+check('every queue recent row carries an id',
+  qRecent.length > 0 && qRecent.every(r => String(r.id || '') !== ''),
+  qRecent.map(r => r.id));
+if (qRecent.length) {
+  const firstId = String(qRecent[0].id);
+  const opened = await request('calls.php', { callId: firstId });
+  const row = (opened.body?.data || [])[0] || {};
+  check('a queue recent row opens exactly that call',
+    count(opened.body) === 1 && String(row.id) === firstId,
+    { opened: count(opened.body), ids: (opened.body?.data || []).map(r => r.id) });
+}
 check('queue table abandoned matches the KPI', q700.abandoned === qOutcomes.abandoned, [q700.abandoned, qOutcomes.abandoned]);
 check('queue abandonRate = abandoned ÷ offered = 40', Number(queueData.kpis?.abandonRate) === 40, queueData.kpis);
 check('queue abandoned = calls.php queue-scoped abandoned',

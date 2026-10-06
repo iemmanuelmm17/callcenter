@@ -160,9 +160,17 @@ try {
         header('Content-Type: ' . $type);
         header('Cache-Control: private, no-store');
         header('Content-Length: ' . (string)strlen($file['body']));
+        /*
+         * QA-10: listening to a recording is at least as sensitive as viewing
+         * a list, and it was the one action the audit trail did not see (only
+         * refusals were logged, via appLog). Audited before the bytes go out.
+         */
+        auditView($user, ['callIds' => $callIds, 'extensions' => $extensions, 'stream' => 1], 'recording');
         echo $file['body'];
         exit;
     }
+
+    auditView($user, ['callIds' => $callIds, 'extensions' => $extensions, 'stream' => 0], 'recording');
 
     jsonResponse([
         'data' => [

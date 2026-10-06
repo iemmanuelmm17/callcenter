@@ -668,6 +668,8 @@ if (route === 'agents') {
         onCallClick: payload => setModal({
             metric: payload.metric || 'total',
             hour: payload.hour,
+            /* QA-6: a queue recent row stands for ONE call. */
+            callId: payload.callId,
             queue: payload.queue || null,
             queuesOnly: !!payload.queuesOnly,
             slaSeconds: payload.slaSeconds,
