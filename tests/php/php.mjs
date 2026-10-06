@@ -208,6 +208,23 @@ final class PbxClient
     }
 }
 `;
+/*
+ * CALLCENTER_STRICT_PHP=1 turns PHP's own diagnostics ON in the interpreter and
+ * makes any output they produce a test failure.
+ *
+ * Why this exists: the harness used to run every request with
+ * error_reporting(E_ALL & ~E_DEPRECATED & ~E_WARNING & ~E_NOTICE), so a warning
+ * that a real server prints (a notice before the JSON body, which the browser
+ * reports as "Server returned invalid JSON") was invisible to all 25 suites.
+ * The strict mode is how that class of bug is found: run the suites with the
+ * variable set and every stray byte shows up.
+ */
+export const STRICT_PHP = process.env.CALLCENTER_STRICT_PHP === '1';
+
+export const PHP_ERROR_REPORTING = STRICT_PHP
+  ? "error_reporting(E_ALL); ini_set('display_errors', '1'); ini_set('log_errors', '0');"
+  : 'error_reporting(E_ALL & ~E_DEPRECATED & ~E_WARNING & ~E_NOTICE);';
+
 export class PhpHarness {
   constructor() {
     this.php = new PhpNode();
@@ -322,7 +339,7 @@ define('PBX_SERVERS', ['nms1' => 'https://pbx.example']);
     }
     const code = [
       '<?php',
-      'error_reporting(E_ALL & ~E_DEPRECATED & ~E_WARNING & ~E_NOTICE);',
+      PHP_ERROR_REPORTING,
       `require '${TMP}/includes/bootstrap.php';`,
       body
     ].join('\n');
@@ -355,7 +372,7 @@ define('PBX_SERVERS', ['nms1' => 'https://pbx.example']);
 
     const code = [
       '<?php',
-      "error_reporting(E_ALL & ~E_DEPRECATED & ~E_WARNING & ~E_NOTICE);",
+      PHP_ERROR_REPORTING,
       `$cfg = json_decode((string)file_get_contents('${TMP}/input.json'), true);`,
       "$_SERVER['REQUEST_METHOD'] = $cfg['method'];",
       "$_SERVER['REMOTE_ADDR'] = '127.0.0.1';",
@@ -392,11 +409,26 @@ define('PBX_SERVERS', ['nms1' => 'https://pbx.example']);
     try {
       log = await this.php.readFile(path.join(TMP, 'app.log'), { encoding: 'utf8' });
     } catch { /* no log */ }
+    /*
+     * php-wasm emits a bare newline per run.
+     *
+     * Strict mode fails on a PHP DIAGNOSTIC in the output stream, which is the
+     * thing that corrupts a response: a warning or notice printed before the
+     * JSON body makes the browser report "Server returned invalid JSON", and
+     * the same text in front of a CSV lands in a customer's spreadsheet. A
+     * deliberate stream (a CSV export, an audio recording) is not a diagnostic
+     * and is not this check's business.
+     */
+    const phpOutput = this.out.join('').replace(/^[\r\n]+/, '');
+    const diagnostic = phpOutput.match(/(?:^|\n)\s*(?:PHP )?(?:Warning|Notice|Deprecated|Fatal error|Parse error|Strict Standards)\b[\s\S]{0,400}/);
+    if (STRICT_PHP && diagnostic) {
+      throw new Error('PHP printed a diagnostic during ' + endpoint + ': ' + JSON.stringify(diagnostic[0].slice(0, 500)));
+    }
     return {
       status: payload.status,
       body: payload.body,
       log,
-      phpOutput: this.out.join(''),
+      phpOutput,
       pbxCalls: await this.pbxCalls()
     };
   }

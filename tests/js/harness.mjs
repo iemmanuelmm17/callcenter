@@ -282,7 +282,21 @@ export const FIXTURES = {
     ],
     summary: { totalNumbers: 2, enabledNumbers: 1, totalCalls: 942, totalInbound: 942, totalMissed: 155, totalAbandoned: 60, totalTalkSeconds: 49270 },
     charts: { hours: HOURS, days: DAYS, outcomes: { answered: 942, missed: 155, busy: 0, failed: 0 }, duration: [{ label: '0–30s', count: 40 }], heatmap: Array.from({ length: 7 }, () => HOURS) },
-    repeatCallers: [{ caller: '8454259810', calls: 3, answered: 2, missed: 1, dids: [{ number: '8457620002', calls: 3, answered: 2, missed: 1 }] }],
+    /*
+     * Repeat callers carry their call times now (the tab used to render only a
+     * count). Three calls: two answered, the newest one missed, on two DIDs.
+     */
+    repeatCallers: [{
+      caller: '8454259810', calls: 3, answered: 2, missed: 1,
+      firstCall: '2026-08-02 09:12', lastCall: '2026-08-04 16:40',
+      dids: [{ number: '8457620002', calls: 3, answered: 2, missed: 1 }],
+      times: [
+        { at: '2026-08-04 16:40', type: 'missed', number: '8457620002' },
+        { at: '2026-08-03 11:05', type: 'inbound', number: '8457620002' },
+        { at: '2026-08-02 09:12', type: 'inbound', number: '8457620002' }
+      ],
+      timesCapped: false
+    }],
     departments: ['Support', 'Sales'], sites: ['HQ', 'Branch']
   },
   simultaneous_calls: {

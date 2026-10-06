@@ -40,18 +40,20 @@ const SUITES = {
     { name: 'aa fields', cmd: ['node', 'tests/js/aa-fields.mjs'] },
     { name: 'aa model', cmd: ['node', 'tests/js/aa-model.mjs'] },
     { name: 'date range', cmd: ['node', 'tests/js/date-range.mjs'] },
-    { name: 'pagination', cmd: ['node', 'tests/js/pagination.mjs'] }
+    { name: 'pagination', cmd: ['node', 'tests/js/pagination.mjs'] },
+    /* Bug #4: the call modal 404'd because the Tabulator URL was hand-built. */
+    { name: 'vendor paths', cmd: ['node', 'tests/js/vendor-paths.mjs'] }
   ],
   php: [
-    { name: 'api matrix', cmd: ['node', 'tests/php/endpoints.mjs'] },
-    { name: 'url policy', cmd: ['node', 'tests/php/security.mjs'] },
-    { name: 'csv exports', cmd: ['node', 'tests/php/export.mjs'] },
-    { name: 'cdr store', cmd: ['node', 'tests/php/cdr-store.mjs'] },
-    { name: 'cdr cache', cmd: ['node', 'tests/php/cdr-cache.mjs'] },
-    { name: 'outcome parity', cmd: ['node', 'tests/php/outcomes.mjs'] },
-    { name: 'report metrics', cmd: ['node', 'tests/php/report-metrics.mjs'] },
-    { name: 'call links', cmd: ['node', 'tests/php/call-links.mjs'] },
-    { name: 'portal', cmd: ['node', 'tests/php/portal.mjs'] }
+    { name: 'api matrix', cmd: ['node', 'tests/php/endpoints.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
+    { name: 'url policy', cmd: ['node', 'tests/php/security.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
+    { name: 'csv exports', cmd: ['node', 'tests/php/export.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
+    { name: 'cdr store', cmd: ['node', 'tests/php/cdr-store.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
+    { name: 'cdr cache', cmd: ['node', 'tests/php/cdr-cache.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
+    { name: 'outcome parity', cmd: ['node', 'tests/php/outcomes.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
+    { name: 'report metrics', cmd: ['node', 'tests/php/report-metrics.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
+    { name: 'call links', cmd: ['node', 'tests/php/call-links.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
+    { name: 'portal', cmd: ['node', 'tests/php/portal.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } }
   ]
 };
 
@@ -63,8 +65,14 @@ else {
   process.exit(2);
 }
 
-const run = (cmd) => new Promise((resolve) => {
-  const child = spawn(cmd[0], cmd.slice(1), { cwd: ROOT, stdio: 'inherit' });
+/*
+ * Every PHP suite runs with CALLCENTER_STRICT_PHP=1, so the interpreter
+ * surfaces its own warnings and a stray diagnostic before a JSON body (the
+ * "Server returned invalid JSON" class of bug) fails the suite instead of
+ * shipping. See tests/php/php.mjs for what the flag does.
+ */
+const run = (cmd, env = {}) => new Promise((resolve) => {
+  const child = spawn(cmd[0], cmd.slice(1), { cwd: ROOT, stdio: 'inherit', env: { ...process.env, ...env } });
   child.on('exit', code => resolve(code ?? 1));
 });
 
@@ -72,7 +80,7 @@ const results = [];
 for (const suite of selected) {
   const started = Date.now();
   console.log(`\n${'='.repeat(72)}\n# ${suite.name}\n${'='.repeat(72)}`);
-  const code = await run(suite.cmd);
+  const code = await run(suite.cmd, suite.env || {});
   results.push({ ...suite, code, ms: Date.now() - started });
 }
 

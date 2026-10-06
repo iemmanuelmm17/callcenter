@@ -324,7 +324,7 @@ try {
      * id with $row, sorted by start time. Duplicates are collapsed by
      * index, and the caller additionally de-dupes via $byStamp.
      */
-    $relatedCdrs = static function (array $row) use ($raw, $rowsById, $cdrIdBag): array {
+    $relatedCdrs = static function (array $row) use ($raw, $rowsById): array {
         $hits = [];
         foreach (cdrIdBag($row) as $id) {
             if (!isset($rowsById[$id])) {

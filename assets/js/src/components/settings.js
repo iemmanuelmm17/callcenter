@@ -309,6 +309,29 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
           liveNode: h('span', { className: 'set-live is-na' },
             'Must beat both thresholds to earn a medal')
         }),
+        /*
+         * The service-desk settings (opening hours, per-queue targets, the
+         * roster) live in the SCROLLING BODY, not in the dialog footer.
+         *
+         * They used to render inside .set-foot-left - a single flex row next to
+         * "Reset to defaults" - which squashed three cards into a strip beside
+         * the buttons: the manager saw the business-hours time inputs jammed
+         * against the Save button and nothing else was legible. One Save still
+         * writes one payload (the state lives in the dialog), so moving the
+         * markup only changes where it is read.
+         */
+        h('div', { className: 'set-sec-label' }, 'Service desk · hours, targets, roster'),
+        h('p', { className: 'set-section-note' },
+          'These three apply to this domain only and are saved with the thresholds above: ',
+          'opening hours decide which calls count by default, the per-queue targets decide ',
+          'which calls meet SLA, and the roster is what makes occupancy possible.'),
+        h(ServiceSettings, {
+          value: service,
+          onChange: setService,
+          canSave,
+          agents: directory.agents,
+          queues: directory.queues
+        }),
         h('div', { className: 'set-sec-label' }, 'Appearance'),
         h('div', { className: 'set-theme-row' },
           h('div', { className: 'set-row-copy' },
@@ -322,14 +345,6 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
       ),
       h('div', { className: 'set-foot' },
         h('div', { className: 'set-foot-left' },
-      h(ServiceSettings, {
-        value: service,
-        onChange: setService,
-        canSave,
-        agents: directory.agents,
-        queues: directory.queues
-      }),
-
           canSave ? h('button', { type: 'button', className: 'set-reset', onClick: () => setForm({ ...DEFAULTS }) }, 'Reset to defaults') : null,
           h('div', { className: 'set-scope' }, 'Applies to this PBX domain only')
         ),
