@@ -110,6 +110,69 @@ console.log('\n== call modal (dashboard KPI drill-down) ==');
   if (closable) await click(closable);
 }
 
+console.log('\n== call modal footer: rows per page + paging ==');
+{
+  /*
+   * The fixture answers one page, so give it three for this check and put the
+   * fixture back afterwards. This is the only place the footer's arithmetic is
+   * exercised through the real component (lib/pagination.js has its own suite).
+   */
+  const saved = { total: FIXTURES.calls.total, last_page: FIXTURES.calls.last_page };
+  FIXTURES.calls.total = 60;
+  FIXTURES.calls.last_page = 3;
+  await goTo('Dashboard');
+  await flush(10);
+  const kpi = document.querySelector('.ops-total-n') || document.querySelector('.ops-insight-link') || document.querySelector('.kpi-card');
+  check('a drill-down KPI opens the call modal', !!kpi);
+  if (kpi) await click(kpi);
+  await flush(12);
+
+  const modal = document.querySelector('.call-modal');
+  check('the footer reports the range and the total', !!modal && modal.textContent.includes('Showing 1–2 of 60'),
+    modal && modal.textContent.slice(-140));
+  const select = modal && modal.querySelector('select');
+  check('rows per page offers the four sizes, in order',
+    !!select && [...select.options].map(o => o.textContent).join(',') === '10,25,50,100',
+    select && [...select.options].map(o => o.textContent).join(','));
+  const pageButtons = modal ? [...modal.querySelectorAll('button')].filter(b => /^[0-9]+$/.test((b.textContent || '').trim())) : [];
+  check('one button per page (3 pages, no ellipsis)', pageButtons.map(b => b.textContent.trim()).join(',') === '1,2,3',
+    pageButtons.map(b => b.textContent.trim()).join(','));
+  const active = pageButtons.find(b => /border-cyan-500/.test(b.className));
+  check('the current page is the one styled as active', !!active && active.textContent.trim() === '1',
+    active && active.textContent);
+
+  requested.length = 0;
+  const next = modal && [...modal.querySelectorAll('button')].find(b => (b.textContent || '').trim() === '›');
+  check('the next-page control exists', !!next);
+  if (next) await click(next);
+  await flush(10);
+  const pageCall = [...requested].reverse().find(r => r.endpoint === 'calls');
+  const pageBody = JSON.parse((pageCall && typeof pageCall.body === 'string' ? pageCall.body : '') || '{}');
+  check('next asks the server for page 2', pageBody.page === 2, pageBody.page);
+  check('the row count on screen is what the range reports',
+    modal.textContent.includes('Showing 26–27 of 60'), modal.textContent.slice(-140));
+
+  requested.length = 0;
+  /* Paging re-mounts the footer, so the select has to be looked up again. */
+  const sizeSelect = modal.querySelector('select');
+  check('the rows-per-page select survives a page change', !!sizeSelect);
+  if (sizeSelect) await act(async () => {
+    sizeSelect.value = '100';
+    sizeSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
+  });
+  await flush(10);
+  const sizeCall = [...requested].reverse().find(r => r.endpoint === 'calls');
+  const sizeBody = JSON.parse((sizeCall && typeof sizeCall.body === 'string' ? sizeCall.body : '') || '{}');
+  check('changing the page size sends the new size', sizeBody.size === 100, sizeBody.size);
+  check('changing the page size returns to the first page', sizeBody.page === 1, sizeBody.page);
+
+  const close = modal && (modal.querySelector('.ap-cols-btn') || containing('.call-modal button', 'Close') || containing('.call-modal button', '×'));
+  if (close) await click(close);
+  await flush(6);
+  FIXTURES.calls.total = saved.total;
+  FIXTURES.calls.last_page = saved.last_page;
+}
+
 console.log('\n== keyboard parity + dialog semantics ==');
 {
   await goTo('Call History');
