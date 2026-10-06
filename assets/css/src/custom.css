@@ -3090,3 +3090,73 @@ html[data-theme="light"] .ops-rank-tab.is-on {
   padding: 0 2px;
 }
 .toast-x:hover { color: var(--color-slate-200, #e2e8f0); }
+
+/* ---------------------------------------------------------------------------
+ * Drill-down calls modal: table buttons + recording tray.
+ *
+ * The Rec and SIP flow columns are drawn by Tabulator formatters
+ * (components/call-modal.js), which only receive a CSS class name, and the
+ * tray hosts the shared RecordingPlayer. Same reason as the block above for
+ * living here: assets/css/app.css is compiled output.
+ * --------------------------------------------------------------------------- */
+
+.cm-attach-btn {
+  border: 1px solid var(--color-slate-700, #334155);
+  background: transparent;
+  color: var(--color-slate-200, #e2e8f0);
+  border-radius: 999px;
+  min-width: 30px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.cm-attach-btn:hover:not(:disabled) {
+  border-color: var(--color-cyan-400, #22d3ee);
+  color: var(--color-cyan-300, #67e8f9);
+}
+.cm-attach-btn.is-off {
+  opacity: .35;
+  cursor: not-allowed;
+  border-style: dashed;
+}
+.cm-attach-btn.is-on {
+  border-color: var(--color-cyan-400, #22d3ee);
+  color: var(--color-cyan-300, #67e8f9);
+  background: color-mix(in srgb, var(--color-cyan-400, #22d3ee) 14%, transparent);
+}
+
+.cm-tray {
+  flex-shrink: 0;
+  border-top: 1px solid var(--color-slate-700, #334155);
+  background: var(--color-slate-950, #020617);
+}
+.cm-tray-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 12px 0;
+  min-width: 0;
+}
+.cm-tray-title {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--color-slate-400, #94a3b8);
+}
+.cm-tray-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--color-slate-500, #64748b);
+}
+.cm-tray .rec-panel { padding: 8px 12px 12px; }

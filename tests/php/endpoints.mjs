@@ -59,7 +59,10 @@ await harness.seedPbx('users', [
 ]);
 await harness.seedPbx('callqueues', [{ callqueue: '700', description: 'Sales queue', site: 'HQ', 'callqueue-dispatch-type': 'simultaneous', 'active-queued-calls-total-current': 2, 'callqueue-count-agents-available': 4, 'callqueue-count-agents-total': 6 }]);
 await harness.seedPbx('callqueueAgents', [{ user: '6080', name: 'Ada Lovelace' }]);
-await harness.seedPbx('phoneNumbers', [{ phonenumber: '8457620002', type: 'local', enabled: 'yes' }]);
+/* The PBX stub reads 'phonenumbers' (test-harness/php.mjs) — the camelCase
+ * spelling here made this seed a no-op, so the DID endpoint was being exercised
+ * against an empty inventory. */
+await harness.seedPbx('phonenumbers', [{ phonenumber: '8457620002', type: 'local', enabled: 'yes' }]);
 await harness.seedPbx('archiveCdrs', []);
 await harness.seedPbx('fetchCdrs', [{
   id: 'cdr1', 'call-direction': 1, 'call-start-datetime': '2026-08-02T10:00:00Z[US/Eastern]',

@@ -158,7 +158,28 @@ export const FIXTURES = {
     timezone: 'US/Eastern'
   },
   alerts: { data: { settings: { missedPct: 20, slaPct: 80, abandonPct: 10 }, items: [], count: 0 }, items: [], count: 0, settings: {} },
-  calls: { data: [{ id: 'c1', startedAt: '2026-08-02T14:15:00Z[US/Eastern]', fromNumber: '8454259810', from: 'Ada', dialed: '8457620002', to: 'Main line', agent: '6080', agentName: 'Ada Lovelace', outcome: 'answered', ringing: 12, talking: 180, type: 'inbound', disconnectReason: 'Orig: Bye' }], total: 1, page: 1, size: 25, last_page: 1 },
+  /*
+   * Two rows, because the Rec / SIP flow columns have to render BOTH states:
+   * c1 points at a recording and a trace, c2 at neither. The field set is the
+   * one callsRow() builds (api/calls.php).
+   */
+  calls: {
+    data: [
+      { id: 'c1', startedAt: '2026-08-02T14:15:00Z[US/Eastern]', disconnectedAt: '2026-08-02T14:18:00Z[US/Eastern]',
+        fromNumber: '8454259810', from: 'Ada', dialed: '8457620002', to: 'Main line', agent: '6080', agentName: 'Ada Lovelace',
+        outcome: 'answered', ringing: 12, talking: 180, type: 'inbound', disconnectReason: 'Orig: Bye',
+        origCallId: 'c1-orig', termCallId: 'c1-term', origUser: '8454259810', termUser: '6080',
+        recordingCallId: 'c1-term', recordingUser: '6080', traceApi: '/ns-api/v2/sipflow?call=c1', servers: 'pbx.example',
+        hasRecordingHint: true, hasFlowHint: true },
+      { id: 'c2', startedAt: '2026-08-02T14:30:00Z[US/Eastern]', disconnectedAt: '2026-08-02T14:31:00Z[US/Eastern]',
+        fromNumber: '8454259811', from: 'Bob', dialed: '8457620002', to: 'Main line', agent: '6080', agentName: 'Ada Lovelace',
+        outcome: 'missed', ringing: 20, talking: 0, type: 'missed', disconnectReason: 'Orig: Bye',
+        origCallId: 'c2-orig', termCallId: '', origUser: '8454259811', termUser: '6080',
+        recordingCallId: '', recordingUser: '6080', traceApi: '', servers: '',
+        hasRecordingHint: false, hasFlowHint: false }
+    ],
+    total: 2, page: 1, size: 25, last_page: 1
+  },
   call_flow: { data: { steps: [{ ts: '2026-08-02 14:15:00', kind: 'ring', label: 'Ring start', diff_ts: '+0s' }], count: 1 }, steps: [], count: 1 },
   recording: { data: { url: 'https://pbx.example/ns-api/rec?callid=c1', duration: 180, status: 'available', callId: 'c1' } },
   audio: { data: { url: '', duration: 0, status: '', callId: '' } },
@@ -169,8 +190,16 @@ export const FIXTURES = {
 /* ------------------------------------------------------------------- harness */
 
 const CHART_STUB = `
+window.__charts = [];
 class ChartStub {
-  constructor(canvas, config) { this.canvas = canvas; this.config = config || {}; this.data = this.config.data || { datasets: [] }; this.options = this.config.options || {}; }
+  constructor(canvas, config) {
+    this.canvas = canvas;
+    this.config = config || {};
+    this.data = this.config.data || { datasets: [] };
+    this.options = this.config.options || {};
+    /* Charts are clickable (hour bars, intervals); keep them reachable. */
+    window.__charts.push(this);
+  }
   destroy() {}
   update() {}
   resize() {}
@@ -291,8 +320,20 @@ export async function createHarness(options = {}) {
   window.React = React;
   window.ReactDOM = ReactDOM;
   window.eval(CHART_STUB);
+  /*
+   * Tabulator renders its own DOM, so the stub cannot be exercised for real —
+   * but it CAN remember the options it was constructed with, which is how the
+   * suite inspects the column definitions (titles, fields, formatters) the
+   * modal passes in.
+   */
+  window.__tabulatorTables = [];
   window.Tabulator = class {
-    constructor() { this.handlers = {}; }
+    constructor(el, options) {
+      this.el = el;
+      this.options = options || {};
+      this.handlers = {};
+      window.__tabulatorTables.push(this);
+    }
     on() { return this; } setData() { return this; } setColumns() { return this; }
     destroy() {} redraw() { return this; } setHeight() { return this; } setFilter() { return this; }
   };
@@ -335,7 +376,16 @@ export async function createHarness(options = {}) {
     [...window.document.querySelectorAll(selector)].find(el => el.textContent.includes(text));
   const root = () => window.document.getElementById('root');
 
-  return { dom, window, document: window.document, React, ReactDOM, flush, click, press, byText, containing, root, errors, warnings, requested };
+  return {
+    dom, window, document: window.document, React, ReactDOM, flush, click, press,
+    byText, containing, root, errors, warnings, requested,
+    /* Every Tabulator the app constructed, oldest first. */
+    tables: window.__tabulatorTables,
+    /* Every Chart the app constructed, oldest first. */
+    charts: window.__charts,
+    /* Chart options.onClick handlers run outside React's act() otherwise. */
+    act: async fn => { await act(async () => { await fn(); }); }
+  };
 }
 
 export const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));

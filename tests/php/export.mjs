@@ -129,7 +129,7 @@ console.log('== CSV exports (real PHP 8.4)\n');
   });
   const lines = csvLines(csv.phpOutput);
   check('calls export header matches the modal columns',
-    lines[0] === 'date,time,type,from_name,from,dialed,to,agent,talk,ring,reason,total', lines[0]);
+    lines[0] === 'date,time,type,from_name,from,dialed,to,agent,talk,ring,reason,total,recording,sip_flow', lines[0]);
   check('calls export writes every matching call',
     lines.length - 1 === 17, { dataRows: lines.length - 1 });
   check('calls export formats durations as HH:MM:SS',
@@ -137,6 +137,34 @@ console.log('== CSV exports (real PHP 8.4)\n');
   const first = parse(lines[1]);
   check('calls export stamps date and time as the UI shows them',
     first[0] === '2026-08-04' && first[1] === '9:00 AM' && first[4] === '(845) 425-9810', first);
+
+  /*
+   * The export must honour the SAME filters as the list on screen — including
+   * the new ones. A window (the interval a Simultaneous row stands for) and a
+   * single call id both have to narrow the file, or the spreadsheet and the
+   * table disagree about what was exported.
+   */
+  const windowed = await harness.request('calls.php', {
+    method: 'POST',
+    body: { start: '2026-08-02', end: '2026-08-04', metric: 'total', timeFrom: '09:00', timeTo: '10:00', export: true },
+    user: USERS.office_manager
+  });
+  const windowLines = csvLines(windowed.phpOutput);
+  const windowTimes = windowLines.slice(1).map(line => parse(line)[1]);
+  /* One 09:00 call per day in the range (Aug 2, 3 and the hostile-named 4th). */
+  check('calls export honours the interval window',
+    windowLines.length - 1 === 3 && windowTimes.every(t => t === '9:00 AM'),
+    { rows: windowLines.length - 1, times: [...new Set(windowTimes)] });
+
+  const oneCall = await harness.request('calls.php', {
+    method: 'POST',
+    body: { start: '2026-08-02', end: '2026-08-04', metric: 'total', callId: 'cdr-3-12', export: true },
+    user: USERS.office_manager
+  });
+  const oneLines = csvLines(oneCall.phpOutput);
+  check('calls export honours the single-call filter',
+    oneLines.length === 2 && parse(oneLines[1])[1] === '12:00 PM',
+    { rows: oneLines.length - 1, row: oneLines[1] });
 }
 
 /* -------------------------------------------------------- telephone numbers */

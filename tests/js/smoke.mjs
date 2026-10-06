@@ -21,7 +21,7 @@ const check = (label, condition, extra) => {
 };
 
 const harness = await createHarness();
-const { window, document, root, flush, click, press, byText, containing, errors, warnings, requested } = harness;
+const { window, document, root, flush, click, press, byText, containing, errors, warnings, requested, tables, charts, act } = harness;
 
 console.log('\n== boot ==');
 await flush(10);
@@ -194,6 +194,238 @@ console.log('\n== missed / abandoned labels ==');
   } else {
     check('agent Missed cell found', false, statsTable && statsTable.textContent.slice(0, 200));
   }
+}
+
+console.log('\n== drill-down filters match the clicked item (P7) ==');
+{
+  const lastCall = () => [...requested].reverse().find(r => r.endpoint === 'calls');
+  const bodyOf = call => (call && typeof call.body === 'string' ? call.body : '') || '';
+  const modalEl = () => document.querySelector('.call-modal');
+  const closeModal = async () => {
+    /* The header × has no text label beyond the glyph, so match both. */
+    const btn = [...(modalEl() || document).querySelectorAll('button')]
+      .find(b => /^(close|×|✕)$/i.test((b.textContent || '').trim()) || b.getAttribute('aria-label') === 'Close');
+    if (btn) await click(btn);
+    await flush(8);
+    if (document.querySelector('.call-modal')) check('modal closes after a drill', false, root().textContent.slice(-120));
+  };
+
+  /* 1 — Queues: the hour bar carries the hour AND the SLA the screen used. */
+  requested.length = 0;
+  charts.length = 0;
+  await goTo('Queues');
+  await flush(12);
+  /* The hour chart only exists on the Overview tab. */
+  const qOverview = byText('.aa-tab', 'Overview');
+  if (qOverview) await click(qOverview);
+  await flush(12);
+  const hourChart = charts.filter(c => (c.data?.labels || []).length === 24 && typeof c.options?.onClick === 'function').slice(-1)[0];
+  check('queue hour chart is clickable', !!hourChart);
+  if (hourChart) {
+    await act(() => hourChart.options.onClick(null, [{ index: 9 }]));
+    await flush(10);
+    const call = lastCall();
+    const body = JSON.parse(bodyOf(call) || '{}');
+    check('queue hour drill sends the clicked hour', body.hour === 9, body);
+    check('queue hour drill keeps the queue scope', body.queue === '700' || body.queuesOnly === true, JSON.stringify(body));
+    check('queue hour drill keeps the page SLA (ring colouring)', Number(body.slaSeconds) > 0, body.slaSeconds);
+    check('queue hour drill keeps the range', !!body.start && !!body.end, [body.start, body.end]);
+    await closeModal();
+  }
+
+  /* 2 — Telephone Numbers: the interval row carries its own window. */
+  requested.length = 0;
+  await goTo('Telephone Numbers');
+  await flush(8);
+  const simTab = byText('.tn-tab', 'Simultaneous');
+  if (simTab) await click(simTab);
+  await flush(12);
+  const intervalRow = [...document.querySelectorAll('tr[tabindex="0"]')].find(r => /Open the calls behind this interval/.test(r.getAttribute('title') || ''));
+  check('simultaneous interval row is clickable', !!intervalRow);
+  if (intervalRow) {
+    await click(intervalRow);
+    await flush(10);
+    const body = JSON.parse(bodyOf(lastCall()) || '{}');
+    check('interval drill sends the interval window', !!body.timeFrom && !!body.timeTo, [body.timeFrom, body.timeTo]);
+    check('interval drill narrows the range to the bucket day', body.start === body.end && /^\d{4}-\d{2}-\d{2}$/.test(body.start || ''), [body.start, body.end]);
+    check('interval drill counts inbound + missed calls', body.metric === 'incoming', body.metric);
+    await closeModal();
+  }
+
+  /* 3 — Telephone Numbers: a DID bar carries that number. */
+  requested.length = 0;
+  const graphsTab = byText('.tn-tab', 'Graphs');
+  if (graphsTab) await click(graphsTab);
+  await flush(10);
+  const didBar = [...document.querySelectorAll('button')].find(b => /^Open the inbound calls to /.test(b.getAttribute('title') || ''));
+  check('top-numbers bar is clickable', !!didBar, root().textContent.slice(-120));
+  if (didBar) {
+    await click(didBar);
+    await flush(10);
+    const body = JSON.parse(bodyOf(lastCall()) || '{}');
+    check('DID bar drill carries that number', /^\d{7,}$/.test(String(body.phoneNumber || '')), body.phoneNumber);
+    check('DID bar drill counts inbound + missed calls', body.metric === 'incoming', body.metric);
+    await closeModal();
+  }
+
+  /* 4 — Agents: a recent-call row opens THAT call, not its type. */
+  requested.length = 0;
+  await goTo('Agents');
+  await flush(10);
+  const overviewTab = byText('.aa-tab', 'Overview');
+  if (overviewTab) await click(overviewTab);
+  await flush(12);
+  const recentRow = [...document.querySelectorAll('tr[tabindex="0"]')].find(r => /Open this call/.test(r.getAttribute('title') || ''));
+  check('agent recent-call row is clickable', !!recentRow, root().textContent.slice(-160));
+  if (recentRow) {
+    await click(recentRow);
+    await flush(10);
+    const body = JSON.parse(bodyOf(lastCall()) || '{}');
+    /* The table is newest-first, so the first row is the fixture's c2. */
+    check('recent-call row drills into that call id',
+      FIXTURES.calls.data.some(r => r.id === body.callId), JSON.stringify(body));
+    check('recent-call row keeps the agent scope', body.agent === '6080', body.agent);
+    await closeModal();
+  }
+
+  /* 5 — Agents compare: the range on screen, not the page range. */
+  requested.length = 0;
+  const compareTab = byText('.aa-tab', 'Compare');
+  if (compareTab) await click(compareTab);
+  await flush(12);
+  const compareLink = [...document.querySelectorAll('button')].find(b => /· calls$/.test((b.textContent || '').trim()));
+  check('agent compare call link is clickable', !!compareLink, root().textContent.slice(-160));
+  if (compareLink) {
+    await click(compareLink);
+    await flush(10);
+    const body = JSON.parse(bodyOf(lastCall()) || '{}');
+    check('compare drill keeps the metric', body.metric === 'total', body.metric);
+    check('compare drill scopes to the clicked agent', Array.isArray(body.agents) && body.agents.length === 1, body.agents);
+    check('compare drill keeps a date range', !!body.start && !!body.end, [body.start, body.end]);
+    await closeModal();
+  }
+
+  check('drill-down filter paths threw nothing', errors.length === 0, errors.slice(0, 2));
+}
+
+console.log('\n== agent KPI scope is the table it was clicked in ==');
+{
+  /*
+   * The stats tab loads the WHOLE roster (agents: []), so its KPI cards must
+   * not inherit the sidebar's Overview selection: doing that opened a list
+   * that disagreed with the number on the card. Select an agent first (the
+   * dashboard podium does that) and then click the stats KPI.
+   */
+  await goTo('Dashboard');
+  await flush(10);
+  const podiumRow = document.querySelector('.ops-agent-row');
+  check('dashboard podium agent row exists', !!podiumRow, root().textContent.slice(-120));
+  if (podiumRow) {
+    await click(podiumRow);
+    await flush(12);
+    check('podium click lands on the agent overview', /call activity and performance overview/.test(root().textContent), root().textContent.slice(-140));
+  }
+  const statsTab = byText('.aa-tab', 'Agent stats');
+  if (statsTab) await click(statsTab);
+  await flush(12);
+
+  requested.length = 0;
+  const kpiCard = [...document.querySelectorAll('.kpi-card')].find(b => /Total calls/.test(b.textContent || ''));
+  check('agent stats total-calls KPI exists', !!kpiCard, root().textContent.slice(-160));
+  if (kpiCard) {
+    await click(kpiCard);
+    await flush(10);
+    const call = [...requested].reverse().find(r => r.endpoint === 'calls');
+    const body = JSON.parse((call && typeof call.body === 'string' ? call.body : '') || '{}');
+    check('stats KPI opens every agent, not the sidebar selection',
+      Array.isArray(body.agents) && body.agents.length === 0, JSON.stringify(body.agents));
+    check('stats KPI keeps the range and department/site filters',
+      !!body.start && !!body.end && 'department' in body && 'site' in body,
+      [body.start, body.end, body.department, body.site]);
+    const btn = [...(document.querySelector('.call-modal') || document).querySelectorAll('button')]
+      .find(b => /^(close|×|✕)$/i.test((b.textContent || '').trim()) || b.getAttribute('aria-label') === 'Close');
+    if (btn) await click(btn);
+    await flush(8);
+  }
+}
+
+console.log('\n== call modal: recording + sip flow (P7) ==');
+{
+  /* The dashboard's Total calls KPI opens the modal with a row that has a
+   * recording + a trace and one that has neither (FIXTURES.calls). */
+  requested.length = 0;
+  tables.length = 0;
+  await goTo('Dashboard');
+  await flush(8);
+  const kpiButton = document.querySelector('.ops-total-n');
+  check('dashboard KPI found for the attachment drill', !!kpiButton);
+  if (kpiButton) await click(kpiButton);
+  await flush(12);
+
+  const modalTable = [...tables].reverse().find(t => (t.options?.columns || []).some(c => c.title === 'Rec'));
+  check('the drill-down table is built with a Rec column', !!modalTable,
+    tables.map(t => (t.options?.columns || []).map(c => c.title).join('|')).slice(-3));
+  const cols = (modalTable && modalTable.options.columns) || [];
+  const recCol = cols.find(c => c.title === 'Rec');
+  const flowCol = cols.find(c => c.title === 'SIP flow');
+  check('the drill-down table is built with a SIP flow column', !!flowCol,
+    cols.map(c => c.title).join('|'));
+  check('the Rec column is bound to hasRecordingHint and the flow column to hasFlowHint',
+    !!recCol && recCol.field === 'hasRecordingHint' && !!flowCol && flowCol.field === 'hasFlowHint',
+    [recCol && recCol.field, flowCol && flowCol.field]);
+
+  /* Run the real formatters against the two fixture rows. */
+  const cellFor = row => ({ getRow: () => ({ getData: () => row }) });
+  const [withAttachments, without] = FIXTURES.calls.data;
+  const recOn = recCol ? recCol.formatter(cellFor(withAttachments)) : null;
+  const recOff = recCol ? recCol.formatter(cellFor(without)) : null;
+  const flowOn = flowCol ? flowCol.formatter(cellFor(withAttachments)) : null;
+  const flowOff = flowCol ? flowCol.formatter(cellFor(without)) : null;
+  check('Rec renders a play button when the CDR has a recording',
+    !!recOn && recOn.tagName === 'BUTTON' && /cm-attach-btn/.test(recOn.className) && recOn.textContent === '▶' && !recOn.disabled,
+    recOn && recOn.outerHTML);
+  check('Rec renders a disabled dash when it does not',
+    !!recOff && recOff.textContent === '—' && recOff.disabled && recOff.className.includes('is-off'),
+    recOff && recOff.outerHTML);
+  check('SIP flow renders a Flow button when a trace exists',
+    !!flowOn && flowOn.textContent === 'Flow' && !flowOn.disabled, flowOn && flowOn.outerHTML);
+  check('SIP flow renders a disabled dash when it does not',
+    !!flowOff && flowOff.textContent === '—' && flowOff.disabled && flowOff.className.includes('is-off'),
+    flowOff && flowOff.outerHTML);
+
+  /* Clicking Rec opens the tray (and resolves the recording lazily). */
+  const before = errors.length;
+  requested.length = 0;
+  if (recOn) await click(recOn);
+  await flush(12);
+  const tray = document.querySelector('.cm-tray');
+  check('the recording tray opens under the table', !!tray, root().textContent.slice(-140));
+  check('the tray hosts the shared recording player', !!tray && !!tray.querySelector('.rec-panel'));
+  check('opening a recording asks the server for it', requested.some(r => r.endpoint === 'recording'),
+    requested.map(r => r.endpoint));
+
+  /* The flow dialog is the same component Call history uses. */
+  if (flowOn) await click(flowOn);
+  await flush(12);
+  const flowDialog = document.querySelector('.hist-modal[role="dialog"]');
+  check('the flow dialog opens from the SIP flow button', !!flowDialog && /Cradle to grave/.test(flowDialog.textContent),
+    flowDialog && flowDialog.textContent.slice(0, 80));
+  check('the flow dialog requested the cradle-to-grave steps', requested.some(r => r.endpoint === 'call_flow'),
+    requested.map(r => r.endpoint));
+
+  /* Escape unwinds one layer at a time: flow, then tray, then the modal. */
+  await press(document, 'Escape');
+  await flush(6);
+  check('Escape closes the flow dialog first', !document.querySelector('.hist-modal[role="dialog"]'));
+  check('the modal is still open after closing the flow', !!document.querySelector('.call-modal'));
+  await press(document, 'Escape');
+  await flush(6);
+  check('Escape closes the recording tray next', !document.querySelector('.cm-tray'));
+  check('the modal survives the tray too', !!document.querySelector('.call-modal'));
+  await press(document, 'Escape');
+  await flush(6);
+  check('a third Escape closes the modal', !document.querySelector('.call-modal'));
+  check('attachment drill-down path threw nothing', errors.length === before, errors.slice(before).join(' | '));
 }
 
 console.log('\n== CSV exports (server-streamed) ==');

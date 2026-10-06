@@ -48,7 +48,8 @@
     useEffect(() => {
       if (!open) return void 0;
       const onKey = (event) => {
-        if (event.key === "Escape") {
+        if (event.key === "Escape" && !event.defaultPrevented) {
+          event.preventDefault();
           event.stopPropagation();
           closeRef.current();
         }
@@ -2388,15 +2389,23 @@
         leftName || rightName ? h(
           "div",
           { className: "mt-3 flex flex-wrap gap-3 text-[11px] text-slate-400" },
+          /*
+           * The numbers on this screen came from the COMPARE range, not
+           * from the page's date filter. Passing the range along is what
+           * makes the drill-down list add up to the figure that was
+           * clicked instead of to a different period.
+           */
           h("button", {
             type: "button",
             className: "cursor-pointer text-sky-300 hover:underline",
-            onClick: () => left && onAgentClick && onAgentClick(left)
+            title: "Open these calls (" + range.start + " \u2192 " + range.end + ")",
+            onClick: () => left && onAgentClick && onAgentClick({ extension: left, start: range.start, end: range.end })
           }, (leftName?.name || left) + " \xB7 calls"),
           h("button", {
             type: "button",
             className: "cursor-pointer text-orange-300 hover:underline",
-            onClick: () => right && onAgentClick && onAgentClick(right)
+            title: "Open these calls (" + range.start + " \u2192 " + range.end + ")",
+            onClick: () => right && onAgentClick && onAgentClick({ extension: right, start: range.start, end: range.end })
           }, (rightName?.name || right) + " \xB7 calls")
         ) : null
       ),
@@ -2746,8 +2755,9 @@
                       key: i,
                       tabIndex: 0,
                       className: "cursor-pointer hover:bg-slate-800/60",
-                      onClick: () => open(c.type || "total"),
-                      onKeyDown: keyActivate(() => open(c.type || "total"))
+                      title: "Open this call",
+                      onClick: () => open("total", c.id ? { callId: c.id } : null),
+                      onKeyDown: keyActivate(() => open("total", c.id ? { callId: c.id } : null))
                     },
                     h(
                       "td",
@@ -2932,7 +2942,7 @@
           onClick: (event, elements) => {
             if (!elements || !elements.length) return;
             const row = intervals[elements[0].index];
-            if (row) drill({ date: row.date, hour: row.hour, metric: "incoming" });
+            if (row) drill({ date: row.date, hour: row.hour, timeFrom: row.time, timeTo: row.endTime, metric: "incoming" });
           }
         }
       });
@@ -3210,7 +3220,14 @@
           "fa-solid fa-users",
           peakValue > 0 ? "warn" : null,
           "Most inbound calls in flight at the same moment. Click for the calls behind it.",
-          () => drill({ date: summary.peakDate, hour: Number(String(summary.peakTime || "0").slice(0, 2)) || 0, metric: "incoming" })
+          /* The peak is one interval of one day — open exactly that window. */
+          () => drill({
+            date: summary.peakDate,
+            hour: Number(String(summary.peakTime || "0").slice(0, 2)) || 0,
+            timeFrom: summary.peakTime || "",
+            timeTo: summary.peakEndTime || "",
+            metric: "incoming"
+          })
         ),
         kpi(
           "Average simultaneous",
@@ -3357,10 +3374,15 @@
                   {
                     key: [row.date, row.time, startIndex + index].join("-"),
                     tabIndex: 0,
-                    onKeyDown: keyActivate(() => drill({ date: row.date, hour: row.hour, metric: "incoming" })),
+                    /*
+                     * The clicked item is one interval, not the whole hour:
+                     * the exact window travels with it so the list is the
+                     * calls inside '10:15 – 10:30', not '10:00 – 10:59'.
+                     */
+                    onKeyDown: keyActivate(() => drill({ date: row.date, hour: row.hour, timeFrom: row.time, timeTo: row.endTime, metric: "incoming" })),
                     className: "cursor-pointer " + peakRowClass(row),
                     title: "Open the calls behind this interval",
-                    onClick: () => drill({ date: row.date, hour: row.hour, metric: "incoming" })
+                    onClick: () => drill({ date: row.date, hour: row.hour, timeFrom: row.time, timeTo: row.endTime, metric: "incoming" })
                   },
                   h("td", { className: "hist-day-label" }, histDayLabel(row.date)),
                   h(
@@ -3868,8 +3890,6 @@
     const outcomeChart = useRef(null);
     const durationRef = useRef(null);
     const durationChart = useRef(null);
-    const topRef = useRef(null);
-    const topChart = useRef(null);
     const hours = toHourList(charts?.hours);
     const days = charts?.days && typeof charts.days === "object" && !Array.isArray(charts.days) ? charts.days : {};
     const dayKeys = Object.keys(days).sort();
@@ -4042,10 +4062,39 @@
         "Inbound talk duration",
         h("div", { className: "h-36" }, h("canvas", { ref: durationRef }))
       ),
+      /*
+       * Was an EMPTY canvas: panel() promised "click a bar" but no chart was
+       * ever created for it, and onNumberClick was never called by anything.
+       * The bars are real elements now, so a click can open that number's
+       * calls with the number as the filter.
+       */
       panel(
         "Top numbers",
         "Inbound to DID \xB7 click a bar",
-        h("div", { className: "h-36" }, h("canvas", { ref: topRef }))
+        top.length === 0 ? h("div", { className: "py-10 text-center text-[11px] text-slate-500" }, "No inbound calls to any number in this range.") : h(
+          "div",
+          { className: "space-y-1" },
+          ...top.map((n) => {
+            const pct = Math.max(2, Math.round(n.calls / topMax * 100));
+            return h(
+              "button",
+              {
+                key: n.number,
+                type: "button",
+                title: "Open the inbound calls to " + formatTopNumber(n.number),
+                onClick: () => onNumberClick && onNumberClick(n.number),
+                className: "flex w-full cursor-pointer items-center gap-2 text-left"
+              },
+              h("span", { className: "w-24 shrink-0 truncate font-mono text-[10px] text-slate-400" }, formatTopNumber(n.number)),
+              h(
+                "span",
+                { className: "min-w-0 flex-1" },
+                h("span", { className: "block h-3 rounded-sm bg-cyan-600/70", style: { width: pct + "%" } })
+              ),
+              h("span", { className: "w-10 shrink-0 text-right font-mono text-[10px] text-cyan-300" }, fmtNum(n.calls))
+            );
+          })
+        )
       ),
       panel(
         "Activity heatmap",
@@ -4223,8 +4272,12 @@
       tnView === "graphs" ? h(TelephoneNumbersGraphs, {
         charts,
         numbers,
+        /*
+         * A DID bar counts inbound + missed calls to that number, which is
+         * metric 'incoming' (inbound + missed), scoped by the number.
+         */
         onNumberClick: (number) => {
-          if (onCallClick && number) onCallClick({ phoneNumber: number, metric: "incoming" });
+          if (onCallClick && number) onCallClick({ phoneNumber: number, callerNumber: null, metric: "incoming" });
         }
       }) : tnView === "simultaneous" ? h(SimultaneousCallsPanel, { filters, onCallClick }) : tnView === "repeats" ? h(
         "div",
@@ -6363,6 +6416,86 @@
     );
   }
 
+  // assets/js/src/components/call-flow-dialog.js
+  async function loadCallFlow(row) {
+    const res = await api("call_flow", {
+      traceApi: row.traceApi,
+      origCallId: row.origCallId,
+      termCallId: row.termCallId,
+      startTime: row.startedAt,
+      endTime: row.disconnectedAt || row.startedAt,
+      servers: row.servers || ""
+    });
+    const steps = res && (res.steps || res.data && res.data.steps) || [];
+    return Array.isArray(steps) ? steps : [];
+  }
+  function flowSubtitle(row) {
+    if (!row) return "";
+    const stamp = formatHistDate(row.startedAt);
+    const from = String(row.from || row.fromNumber || "").trim();
+    const to = String(row.to || row.dialed || "").trim();
+    return [stamp, [from, to].filter(Boolean).join(" \u2192 ")].filter(Boolean).join(" \xB7 ");
+  }
+  function CallFlowDialog({ row, steps, loading, error, onClose }) {
+    return h(
+      "div",
+      {
+        className: "hist-modal-bg cursor-default",
+        style: { zIndex: 2147483646 },
+        role: "presentation",
+        onClick: onClose
+      },
+      h(
+        "div",
+        {
+          className: "hist-modal cursor-default",
+          role: "dialog",
+          "aria-modal": "true",
+          "aria-label": "Cradle to grave",
+          onClick: (e) => e.stopPropagation()
+        },
+        h(
+          "div",
+          { className: "hist-modal-head" },
+          h(
+            "div",
+            null,
+            h("div", { className: "hist-modal-title" }, "Cradle to grave"),
+            h("div", { className: "hist-modal-sub" }, flowSubtitle(row))
+          ),
+          h("button", { type: "button", className: "hist-modal-x", onClick: onClose, title: "Close" }, "\xD7")
+        ),
+        h(
+          "div",
+          { className: "hist-modal-body" },
+          loading ? h("div", { className: "p-4 text-sm text-slate-400" }, "Loading call flow\u2026") : error ? h("div", { className: "p-4 text-sm text-rose-300" }, error) : (steps || []).length === 0 ? h("div", { className: "p-4 text-sm text-slate-400" }, "No cradle-to-grave events for this call.") : h(
+            "ol",
+            { className: "hist-flow" },
+            (steps || []).map(
+              (st, i) => h(
+                "li",
+                { key: i, className: "hist-flow-step" },
+                h(
+                  "div",
+                  { className: "hist-flow-time" },
+                  h("div", { className: "hist-flow-clock" }, st.ts || st.clock || ""),
+                  st.diff_ts || st.delta ? h("div", { className: "hist-flow-delta" }, st.diff_ts || st.delta) : null
+                ),
+                h(
+                  "div",
+                  { className: "hist-flow-rail" },
+                  h(FlowKindIcon, { classes: st.classes || st.kind }),
+                  i < (steps || []).length - 1 ? h("div", { className: "hist-flow-line" }) : null
+                ),
+                h("div", { className: "hist-flow-label" }, st.str || st.label || "")
+              )
+            )
+          )
+        )
+      )
+    );
+  }
+
   // assets/js/src/lib/recording.js
   var RECORDING_VARIANTS = [
     { convert: "wav16", type: "audio/wav" },
@@ -6419,7 +6552,7 @@
     return ["rec", stamp, a, b].filter(Boolean).join("_").slice(0, 90) + "." + ext;
   }
 
-  // assets/js/src/components/call-history.js
+  // assets/js/src/components/recording-player.js
   function RecordingPlayer({ row, preresolved, onClose }) {
     const seedUrl = preresolved && preresolved.url || "";
     const [state, setState] = useState(seedUrl ? "ready" : "loading");
@@ -6646,6 +6779,8 @@
       }, h(NavIcon, { name: "chevronUp", size: 15 }))
     );
   }
+
+  // assets/js/src/components/call-history.js
   function CallHistoryDashboard({ filters, callTypes }) {
     const [caller, setCaller] = useState("");
     const [called, setCalled] = useState("");
@@ -6776,20 +6911,7 @@
     const openFlow = async (row) => {
       setFlow({ loading: true, row, steps: [] });
       try {
-        const res = await api("call_flow", {
-          traceApi: row.traceApi,
-          origCallId: row.origCallId,
-          termCallId: row.termCallId,
-          startTime: row.startedAt,
-          endTime: row.disconnectedAt || row.startedAt,
-          servers: row.servers || ""
-        });
-        const steps = res && (res.steps || res.data && res.data.steps) || [];
-        setFlow({
-          loading: false,
-          row,
-          steps: Array.isArray(steps) ? steps : []
-        });
+        setFlow({ loading: false, row, steps: await loadCallFlow(row) });
       } catch (e) {
         setFlow({
           loading: false,
@@ -7107,78 +7229,51 @@
           }, "Next")
         )
       ),
-      flow ? h(
-        "div",
-        {
-          className: "hist-modal-bg cursor-default",
-          style: { zIndex: 2147483646 },
-          role: "presentation",
-          onClick: () => setFlow(null)
-        },
-        h(
-          "div",
-          {
-            className: "hist-modal cursor-default",
-            role: "dialog",
-            "aria-modal": "true",
-            "aria-label": "Cradle to grave",
-            onClick: (e) => e.stopPropagation()
-          },
-          h(
-            "div",
-            { className: "hist-modal-head" },
-            h(
-              "div",
-              null,
-              h("div", { className: "hist-modal-title" }, "Cradle to grave"),
-              h(
-                "div",
-                { className: "hist-modal-sub" },
-                formatHistDate(flow.row && flow.row.startedAt) + " \xB7 " + (flow.row && flow.row.from || "") + " \u2192 " + (flow.row && flow.row.to || "")
-              )
-            ),
-            h("button", { type: "button", className: "hist-modal-x", onClick: () => setFlow(null), title: "Close" }, "\xD7")
-          ),
-          h(
-            "div",
-            { className: "hist-modal-body" },
-            flow.loading ? h("div", { className: "p-4 text-sm text-slate-400" }, "Loading call flow\u2026") : flow.error ? h("div", { className: "p-4 text-sm text-rose-300" }, flow.error) : (flow.steps || []).length === 0 ? h("div", { className: "p-4 text-sm text-slate-400" }, "No cradle-to-grave events for this call.") : h(
-              "ol",
-              { className: "hist-flow" },
-              flow.steps.map(
-                (st2, i) => h(
-                  "li",
-                  { key: i, className: "hist-flow-step" },
-                  h(
-                    "div",
-                    { className: "hist-flow-time" },
-                    h("div", { className: "hist-flow-clock" }, st2.ts || st2.clock || ""),
-                    st2.diff_ts || st2.delta ? h("div", { className: "hist-flow-delta" }, st2.diff_ts || st2.delta) : null
-                  ),
-                  h(
-                    "div",
-                    { className: "hist-flow-rail" },
-                    h(FlowKindIcon, { classes: st2.classes || st2.kind }),
-                    i < flow.steps.length - 1 ? h("div", { className: "hist-flow-line" }) : null
-                  ),
-                  h("div", { className: "hist-flow-label" }, st2.str || st2.label || "")
-                )
-              )
-            )
-          )
-        )
-      ) : null
+      flow ? h(CallFlowDialog, {
+        row: flow.row,
+        steps: flow.steps,
+        loading: flow.loading,
+        error: flow.error,
+        onClose: () => setFlow(null)
+      }) : null
     );
   }
 
   // assets/js/src/components/call-modal.js
-  function CallModal({ metric, hour, agent, phoneNumber, callerNumber, queue, queuesOnly, filters, callTypes, slaSeconds, onClose }) {
-    useEscape(true, onClose);
+  function CallModal({ metric, hour, timeFrom, timeTo, agent, callId, phoneNumber, callerNumber, queue, queuesOnly, filters, callTypes, slaSeconds, onClose }) {
     const ref = useRef(null);
     const table = useRef(null);
     const [records, setRecords] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
+    const [playing, setPlaying] = useState(null);
+    const [flow, setFlow] = useState(null);
+    const playingRef = useRef("");
+    playingRef.current = playing ? String(playing.id || playing.origCallId || "") : "";
+    useEscape(true, () => {
+      if (flow) {
+        setFlow(null);
+        return;
+      }
+      if (playing) {
+        setPlaying(null);
+        return;
+      }
+      onClose();
+    });
+    const openFlow = async (row) => {
+      setFlow({ loading: true, row, steps: [] });
+      try {
+        setFlow({ loading: false, row, steps: await loadCallFlow(row) });
+      } catch (e) {
+        setFlow({
+          loading: false,
+          row,
+          steps: [],
+          error: e && e.message ? e.message : "Unable to load call flow."
+        });
+      }
+    };
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(25);
     const [totalRecords, setTotalRecords] = useState(0);
@@ -7199,7 +7294,9 @@
     }, [tableReady]);
     useEffect(() => {
       setPage(1);
-    }, [metric, hour, agent, phoneNumber, callerNumber, queue, queuesOnly, filters, callTypes, pageSize]);
+      setPlaying(null);
+      setFlow(null);
+    }, [metric, hour, timeFrom, timeTo, agent, callId, phoneNumber, callerNumber, queue, queuesOnly, filters, callTypes, pageSize]);
     useEffect(() => {
       let cancelled = false;
       setLoading(true);
@@ -7216,7 +7313,10 @@
         callTypes,
         metric,
         hour,
+        timeFrom,
+        timeTo,
         agent,
+        callId,
         phoneNumber,
         callerNumber,
         queue,
@@ -7251,7 +7351,7 @@
           table.current = null;
         }
       };
-    }, [metric, hour, agent, phoneNumber, callerNumber, queue, queuesOnly, slaSeconds, filters, callTypes, page, pageSize]);
+    }, [metric, hour, timeFrom, timeTo, agent, callId, phoneNumber, callerNumber, queue, queuesOnly, slaSeconds, filters, callTypes, page, pageSize]);
     const startIndex = totalRecords === 0 ? 0 : (page - 1) * pageSize;
     const endIndex = Math.min(startIndex + records.length, totalRecords);
     const currentRows = records;
@@ -7416,6 +7516,69 @@
               formatter: (cell) => fmt(
                 cell.getValue()
               )
+            },
+            /*
+             * RECORDING
+             *
+             * The cell knows only whether the CDR points at a
+             * recording (hasRecordingHint, decided server-side by
+             * callHasRecordingHint()). Clicking resolves it —
+             * api/recording.php walks every PBX server, so the
+             * table never pays for that unless asked — and the
+             * player opens in the tray under the table.
+             */
+            {
+              title: "Rec",
+              field: "hasRecordingHint",
+              minWidth: 58,
+              hozAlign: "center",
+              headerHozAlign: "center",
+              formatter: (cell) => {
+                const row = cell.getRow().getData() || {};
+                const has = !!row.hasRecordingHint;
+                const id = String(row.id || row.origCallId || "");
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "cm-attach-btn" + (has ? "" : " is-off") + (has && playingRef.current === id ? " is-on" : "");
+                btn.disabled = !has;
+                btn.title = has ? "Play the recording of this call" : "No recording was stored for this call";
+                btn.setAttribute("aria-label", has ? "Play recording" : "No recording available");
+                btn.textContent = has ? "\u25B6" : "\u2014";
+                btn.addEventListener("click", (ev) => {
+                  ev.stopPropagation();
+                  if (has) setPlaying(row);
+                });
+                return btn;
+              }
+            },
+            /*
+             * SIP FLOW
+             *
+             * Opens the same cradle-to-grave dialog Call history
+             * uses (components/call-flow-dialog.js) for this call.
+             */
+            {
+              title: "SIP flow",
+              field: "hasFlowHint",
+              minWidth: 72,
+              hozAlign: "center",
+              headerHozAlign: "center",
+              formatter: (cell) => {
+                const row = cell.getRow().getData() || {};
+                const has = !!row.hasFlowHint;
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "cm-attach-btn" + (has ? "" : " is-off");
+                btn.disabled = !has;
+                btn.title = has ? "Open the cradle-to-grave SIP flow for this call" : "No SIP trace was recorded for this call";
+                btn.setAttribute("aria-label", has ? "Open SIP flow" : "No SIP flow available");
+                btn.textContent = has ? "Flow" : "\u2014";
+                btn.addEventListener("click", (ev) => {
+                  ev.stopPropagation();
+                  if (has) openFlow(row);
+                });
+                return btn;
+              }
             }
           ]
         }
@@ -7436,6 +7599,13 @@
       tableReady,
       slaSeconds
     ]);
+    useEffect(() => {
+      if (!table.current || typeof table.current.redraw !== "function") return;
+      try {
+        table.current.redraw();
+      } catch (e) {
+      }
+    }, [playing]);
     const changePageSize = (value) => {
       const size = Number(value);
       setPageSize(size);
@@ -7522,6 +7692,7 @@
           metric,
           hour,
           agent,
+          callId,
           phoneNumber,
           callerNumber,
           queue,
@@ -7535,7 +7706,6 @@
         setExporting(false);
       }
     };
-    const title = `${metric === "total" ? "All" : metric === "incoming" || metric === "offered" ? "Inbound + missed" : metric === "sla_missed" ? "SLA missed (ring over target)" : metric === "sla" ? "Answered within SLA" : metric} call details`;
     const metricLabels = {
       total: "All calls",
       incoming: "Inbound + missed",
@@ -7559,6 +7729,7 @@
       queue_abandoned: "Abandoned in queue",
       queue_offered: "Offered to queue"
     };
+    const title = callId ? "Call " + callId + " details" : `${metric === "total" ? "All" : metric === "incoming" || metric === "offered" ? "Inbound + missed" : metric === "sla_missed" ? "SLA missed (ring over target)" : metric === "sla" ? "Answered within SLA" : metricLabels[metric] || metric} call details`;
     const filterChips = [];
     const f = filters || {};
     if (f.start && f.end) {
@@ -7576,6 +7747,7 @@
     if (metric) {
       filterChips.push({ k: "View", v: metricLabels[metric] || String(metric) });
     }
+    if (callId) filterChips.push({ k: "Call", v: callId });
     if (phoneNumber) filterChips.push({ k: "Number", v: formatPhoneNumber(phoneNumber) });
     if (callerNumber) filterChips.push({ k: "Caller", v: formatPhoneNumber(callerNumber) });
     if (agent) filterChips.push({ k: "Agent", v: String(agent) });
@@ -7584,6 +7756,9 @@
     if (hour !== null && hour !== void 0) {
       const hh = String(hour).padStart(2, "0");
       filterChips.push({ k: "Hour", v: hh + ":00\u2013" + hh + ":59" });
+    }
+    if (timeFrom && timeTo) {
+      filterChips.push({ k: "Window", v: timeFrom + "\u2013" + timeTo });
     }
     if (slaSeconds && (metric === "sla" || metric === "sla_missed")) {
       filterChips.push({ k: "SLA ring", v: slaSeconds + "s" });
@@ -7606,6 +7781,9 @@
       h(
         "div",
         {
+          role: "dialog",
+          "aria-modal": "true",
+          "aria-label": title,
           className: "call-modal flex w-full max-w-[1400px] flex-col overflow-hidden border border-slate-700 bg-slate-950 shadow-2xl",
           style: {
             display: "flex",
@@ -7768,6 +7946,37 @@
         ),
         /*
          * =================================================
+         * RECORDING TRAY
+         * =================================================
+         *
+         * One row at a time. The player resolves its own URL when it is
+         * mounted without one, so opening a row costs exactly one
+         * api/recording.php call and closing it stops the audio.
+         */
+        playing ? h(
+          "div",
+          { className: "cm-tray" },
+          h(
+            "div",
+            { className: "cm-tray-head" },
+            h("span", { className: "cm-tray-title" }, "Recording"),
+            h(
+              "span",
+              { className: "cm-tray-sub" },
+              [
+                playing.startedAt ? formatCallDate(playing.startedAt) + " " + formatCallTime(playing.startedAt) : "",
+                [playing.from || playing.fromNumber, playing.to || playing.dialed].filter(Boolean).join(" \u2192 ")
+              ].filter(Boolean).join(" \xB7 ")
+            )
+          ),
+          h(RecordingPlayer, {
+            row: playing,
+            preresolved: null,
+            onClose: () => setPlaying(null)
+          })
+        ) : null,
+        /*
+         * =================================================
          * FOOTER
          * =================================================
          */
@@ -7918,7 +8127,18 @@
             )
           )
         ) : null
-      )
+      ),
+      /*
+       * Sip flow, above everything else. Same dialog Call history opens; the
+       * request (loadCallFlow) is the one this modal's rows are shaped for.
+       */
+      flow ? h(CallFlowDialog, {
+        row: flow.row,
+        steps: flow.steps,
+        loading: flow.loading,
+        error: flow.error,
+        onClose: () => setFlow(null)
+      }) : null
     );
   }
 
@@ -9050,7 +9270,9 @@
               metric: "total",
               hour: elements[0].index,
               queue: selected || null,
-              queuesOnly: !selected
+              queuesOnly: !selected,
+              /* Same SLA the chart and the table colour rings with. */
+              slaSeconds
             });
           },
           scales: {
@@ -9063,7 +9285,7 @@
         hourChart.current?.destroy();
         hourChart.current = null;
       };
-    }, [hours.join("|"), tab]);
+    }, [hours.join("|"), tab, slaSeconds, selected]);
     const exportCsv = () => {
       const rows = tab === "summary" ? [
         ["queue", "name", "site", "total_calls", "offered", "handled", "sla_missed", "sla_rate", "abandoned", "abandon_rate", "avg_ring", "max_ring", "avg_talk", "max_talk", "total_talk"],
@@ -10289,7 +10511,7 @@
           agent: extension || null,
           filters: {
             ...filters,
-            agents: extension ? [extension] : Array.isArray(selectedAgents) ? selectedAgents : []
+            agents: extension ? [extension] : []
           }
         });
       }
@@ -10498,21 +10720,40 @@
           agentSub === "compare" ? h(AgentCompare, {
             filters,
             callTypes,
-            onAgentClick: (extension) => setModal({
-              metric: "total",
-              agent: extension,
-              filters: { ...filters, agents: [extension] }
-            })
+            /*
+             * AgentCompare's "· calls" links count the COMPARE
+             * range, which the screen can set independently of the
+             * page filter. The payload carries that range (and its
+             * metric) so the list adds up to the number clicked.
+             */
+            onAgentClick: (payload) => {
+              const extension = typeof payload === "string" ? payload : String(payload && payload.extension || "");
+              if (!extension) return;
+              const start = payload && payload.start || filters.start;
+              const end = payload && payload.end || filters.end;
+              setModal({
+                metric: payload && payload.metric || "total",
+                agent: extension,
+                filters: { ...filters, start, end, agents: [extension] }
+              });
+            }
           }) : agentSub === "overview" ? h(AgentOverview, {
             report: agentReport,
             loading: agentReportLoading,
             filters,
             callTypes,
             selectedAgents,
+            /*
+             * A recent-call row stands for ONE call, and the row
+             * carries its id. Dropping it here opened "every call
+             * of that type for that agent" instead — the figure
+             * clicked and the list no longer matched.
+             */
             onCallClick: (payload) => setModal({
               metric: payload.metric || "total",
               hour: payload.hour,
-              agent: payload.agent || null
+              agent: payload.agent || null,
+              callId: payload.callId || null
             })
           }) : agentPerformanceTable
         )
@@ -10596,11 +10837,23 @@
           const callerNumber = typeof payload === "object" ? payload?.callerNumber || null : null;
           const hour = typeof payload === "object" && payload?.hour !== void 0 && payload?.hour !== null ? Number(payload.hour) : null;
           const dayFilters = typeof payload === "object" && typeof payload?.date === "string" && payload.date ? { ...filters, start: payload.date, end: payload.date } : null;
+          const timeFrom = typeof payload === "object" && typeof payload?.timeFrom === "string" ? payload.timeFrom : "";
+          const timeTo = typeof payload === "object" && typeof payload?.timeTo === "string" ? payload.timeTo : "";
           setModal({
-            metric: typeof payload === "object" && payload?.metric || (callerNumber ? "total" : "inbound"),
+            /*
+             * A payload that names its own view wins; otherwise a caller
+             * number means "everything this caller did" and a plain DID
+             * drill means the inbound + missed volume those DID figures
+             * count. (The old fallback here was 'inbound', answered
+             * inbound only, which dropped every missed call from a
+             * per-number list.)
+             */
+            metric: typeof payload === "object" && payload?.metric || (callerNumber ? "total" : "incoming"),
             phoneNumber: phoneNumber || null,
             callerNumber,
             hour: hour !== null && Number.isFinite(hour) ? hour : null,
+            timeFrom: timeFrom || null,
+            timeTo: timeTo || null,
             ...dayFilters ? { filters: dayFilters } : {}
           });
         }
@@ -10795,14 +11048,22 @@
       modal ? h(CallModal, {
         metric: modal.metric || "total",
         hour: modal.hour !== void 0 ? modal.hour : null,
+        callId: modal.callId || null,
         agent: modal.agent || null,
         phoneNumber: modal.phoneNumber || null,
         callerNumber: modal.callerNumber || null,
         queue: modal.queue || null,
         queuesOnly: !!modal.queuesOnly,
+        timeFrom: modal.timeFrom || null,
+        timeTo: modal.timeTo || null,
         filters: modal.filters || filters,
         callTypes: modal.callTypes || callTypes,
-        slaSeconds,
+        /*
+         * The SLA the modal colours rings with is the screen's, unless the
+         * drill named its own (Queues passes the value its chart was drawn
+         * with). Either way the modal and the figure it came from agree.
+         */
+        slaSeconds: modal.slaSeconds != null ? modal.slaSeconds : slaSeconds,
         onClose: () => setModal(null)
       }) : null
     );

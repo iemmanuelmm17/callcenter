@@ -735,15 +735,23 @@ function AgentCompare({filters, callTypes, onAgentClick}) {
                 )
             ),
             (leftName || rightName) ? h('div', {className: 'mt-3 flex flex-wrap gap-3 text-[11px] text-slate-400'},
+                /*
+                 * The numbers on this screen came from the COMPARE range, not
+                 * from the page's date filter. Passing the range along is what
+                 * makes the drill-down list add up to the figure that was
+                 * clicked instead of to a different period.
+                 */
                 h('button', {
                     type: 'button',
                     className: 'cursor-pointer text-sky-300 hover:underline',
-                    onClick: () => left && onAgentClick && onAgentClick(left)
+                    title: 'Open these calls (' + range.start + ' → ' + range.end + ')',
+                    onClick: () => left && onAgentClick && onAgentClick({ extension: left, start: range.start, end: range.end })
                 }, (leftName?.name || left) + ' · calls'),
                 h('button', {
                     type: 'button',
                     className: 'cursor-pointer text-orange-300 hover:underline',
-                    onClick: () => right && onAgentClick && onAgentClick(right)
+                    title: 'Open these calls (' + range.start + ' → ' + range.end + ')',
+                    onClick: () => right && onAgentClick && onAgentClick({ extension: right, start: range.start, end: range.end })
                 }, (rightName?.name || right) + ' · calls')
             ) : null
         ),
@@ -1034,12 +1042,18 @@ function AgentOverview({report, loading, filters, callTypes, selectedAgents, onC
               h('tbody', null,
                 actSlice.length === 0
                   ? h('tr', null, h('td', {colSpan: 3, className: 'px-2 py-8 text-center text-slate-500'}, actLoading ? 'Loading…' : 'No calls.'))
+                  /*
+                   * A recent-call row IS a call, so it opens that call —
+                   * not "every call of that type for this agent", which is
+                   * what it used to do (the row's own identity was dropped).
+                   */
                   : actSlice.map((c, i) => h('tr', {
                       key: i,
                       tabIndex: 0,
                       className: 'cursor-pointer hover:bg-slate-800/60',
-                      onClick: () => open(c.type || 'total'),
-                      onKeyDown: keyActivate(() => open(c.type || 'total'))
+                      title: 'Open this call',
+                      onClick: () => open('total', c.id ? { callId: c.id } : null),
+                      onKeyDown: keyActivate(() => open('total', c.id ? { callId: c.id } : null))
                     },
                       h('td', {className: 'text-slate-200'},
                         h('span', {className: 'inline-flex items-center gap-2 min-w-0'},

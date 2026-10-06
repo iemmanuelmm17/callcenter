@@ -51,6 +51,20 @@ the queued calls only, which is a scope difference and is stated in its column
 tooltips. `tests/php/outcomes.mjs` asserts that all seven report navs agree on
 these numbers for the same CDRs.
 
+## Drill-downs
+
+Every figure that opens a call list sends the filters that figure was computed
+with, so the list adds up to the number that was clicked: the agent (or the whole
+table), the queue scope, the date range of the screen the number came from, the
+part of an hour a Simultaneous interval covers (`timeFrom`/`timeTo`), and — for a
+row that *is* one call — its `callId`. The same filters drive the CSV export.
+
+The call-details modal also carries a **Rec** column (plays the recording in a
+tray under the table; resolved on click, never cached in the row) and a **SIP
+flow** column (the cradle-to-grave dialog, shared with Call history). Both are
+booleans on the row — `hasRecordingHint` / `hasFlowHint` — because resolving
+either one is a PBX walk.
+
 ## CDR cache
 
 The raw PBX CDRs are cached per day (domain + timezone + date) so a report does

@@ -181,7 +181,9 @@ function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, o
             metric: 'total',
             hour: elements[0].index,
             queue: selected || null,
-            queuesOnly: !selected
+            queuesOnly: !selected,
+            /* Same SLA the chart and the table colour rings with. */
+            slaSeconds
           });
         },
         scales: {
@@ -191,7 +193,8 @@ function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, o
       }
     });
     return () => { hourChart.current?.destroy(); hourChart.current = null; };
-  }, [hours.join('|'), tab]);
+    /* slaSeconds + selected, because the click handler above closes over them. */
+  }, [hours.join('|'), tab, slaSeconds, selected]);
 
   const exportCsv = () => {
     const rows = tab === 'summary'

@@ -429,8 +429,6 @@ function TelephoneNumbersGraphs({charts, numbers, onNumberClick}) {
   const outcomeChart = useRef(null);
   const durationRef = useRef(null);
   const durationChart = useRef(null);
-  const topRef = useRef(null);
-  const topChart = useRef(null);
 
   const hours = toHourList(charts?.hours);
   const days = charts?.days && typeof charts.days === 'object' && !Array.isArray(charts.days) ? charts.days : {};
@@ -589,8 +587,33 @@ function TelephoneNumbersGraphs({charts, numbers, onNumberClick}) {
     panel('Talk time', 'Inbound talk duration',
       h('div', {className:'h-36'}, h('canvas', {ref: durationRef}))
     ),
+    /*
+     * Was an EMPTY canvas: panel() promised "click a bar" but no chart was
+     * ever created for it, and onNumberClick was never called by anything.
+     * The bars are real elements now, so a click can open that number's
+     * calls with the number as the filter.
+     */
     panel('Top numbers', 'Inbound to DID · click a bar',
-      h('div', {className:'h-36'}, h('canvas', {ref: topRef}))
+      top.length === 0
+        ? h('div', {className:'py-10 text-center text-[11px] text-slate-500'}, 'No inbound calls to any number in this range.')
+        : h('div', {className:'space-y-1'},
+            ...top.map(n => {
+              const pct = Math.max(2, Math.round((n.calls / topMax) * 100));
+              return h('button', {
+                key: n.number,
+                type: 'button',
+                title: 'Open the inbound calls to ' + formatTopNumber(n.number),
+                onClick: () => onNumberClick && onNumberClick(n.number),
+                className: 'flex w-full cursor-pointer items-center gap-2 text-left'
+              },
+                h('span', {className:'w-24 shrink-0 truncate font-mono text-[10px] text-slate-400'}, formatTopNumber(n.number)),
+                h('span', {className:'min-w-0 flex-1'},
+                  h('span', {className:'block h-3 rounded-sm bg-cyan-600/70', style:{width: pct + '%'}})
+                ),
+                h('span', {className:'w-10 shrink-0 text-right font-mono text-[10px] text-cyan-300'}, fmtNum(n.calls))
+              );
+            })
+          )
     ),
     panel('Activity heatmap', 'Hour × weekday',
       h('div', {className:'overflow-x-auto'},
@@ -745,8 +768,12 @@ function TelephoneNumbers({filters, onCallClick}) {
       ? h(TelephoneNumbersGraphs, {
           charts,
           numbers,
+          /*
+           * A DID bar counts inbound + missed calls to that number, which is
+           * metric 'incoming' (inbound + missed), scoped by the number.
+           */
           onNumberClick: number => {
-            if (onCallClick && number) onCallClick({ phoneNumber: number, metric: 'incoming' });
+            if (onCallClick && number) onCallClick({ phoneNumber: number, callerNumber: null, metric: 'incoming' });
           }
         })
       : tnView === 'simultaneous'
