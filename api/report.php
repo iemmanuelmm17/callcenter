@@ -108,6 +108,13 @@ if (
                     'start'  => $previousFilters['start'],
                     'end'    => $previousFilters['end'],
                     'counts' => $previous['counts'],
+                    /*
+                     * Same breakdown as the current period, so the client can
+                     * compute a previous abandon rate instead of guessing one
+                     * (the Agent overview previously divided the whole previous
+                     * missed count as if it were abandons).
+                     */
+                    'missedBreakdown' => $previous['missedBreakdown'] ?? [],
                     'hours'  => $previous['hours'] ?? [],
                 ],
             ],
@@ -266,6 +273,7 @@ $comparison = [
         'end'   => $previousFilters['end'],
 
         'counts' => $previous['counts'],
+        'missedBreakdown' => $previous['missedBreakdown'] ?? [],
         'hours'  => $previous['hours'] ?? [],
     ],
 

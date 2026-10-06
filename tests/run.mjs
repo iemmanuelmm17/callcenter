@@ -34,7 +34,8 @@ const SUITES = {
     { name: 'url policy', cmd: ['node', 'tests/php/security.mjs'] },
     { name: 'csv exports', cmd: ['node', 'tests/php/export.mjs'] },
     { name: 'cdr store', cmd: ['node', 'tests/php/cdr-store.mjs'] },
-    { name: 'cdr cache', cmd: ['node', 'tests/php/cdr-cache.mjs'] }
+    { name: 'cdr cache', cmd: ['node', 'tests/php/cdr-cache.mjs'] },
+    { name: 'outcome parity', cmd: ['node', 'tests/php/outcomes.mjs'] }
   ]
 };
 

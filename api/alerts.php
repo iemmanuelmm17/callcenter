@@ -66,10 +66,27 @@ try {
         }
         $type = callType($c);
         $talk = seconds($c, 'call-talking-duration-seconds');
+        /*
+         * Canonical outcome (includes/reporting/outcomes.php) — the same
+         * missed / abandoned definitions the Dashboard, Agents, Queues, Auto
+         * Attendants and Call history report, so a limit breach here means the
+         * same thing it means on the screen the number came from.
+         *
+         * These used to be `$talk <= 0` tests, which called an answered call
+         * with zero talking seconds (an agent picked up and hung up) missed,
+         * and only saw an abandon when the directory happened to be passed in.
+         */
         $offered = ($type === 'inbound' || $type === 'missed');
         $missed = ($type === 'missed');
-        $abandon = $missed && missedKind($c, $directory, $queueIds) === 'abandon';
-        $answered = $talk > 0 && $type === 'inbound';
+        $abandon = ($missed && callMissedReason($c, $directory, $queueIds) === 'abandon');
+        /*
+         * "Answered" is the type, not `talk > 0`: an agent who picks up and
+         * hangs up immediately is answered with zero talking seconds, and
+         * counting it as missed (as this did) both inflated the missed rate and
+         * left a call that was neither answered nor missed in the totals. With
+         * this, offered = answered + missed for every entity.
+         */
+        $answered = ($type === 'inbound');
 
         $agentExt = trim((string)callAgent($c));
         $agentCode = (string)($directory[$agentExt]['serviceCode'] ?? '');
@@ -98,13 +115,13 @@ try {
                 $queues[$through] = $init($through, $queueNames[$through] ?? $through, 'queue');
             }
             $queues[$through]['offered']++;
-            if ($talk <= 0) {
+            if ($missed) {
                 $queues[$through]['missed']++;
             }
-            if ($talk <= 0 && missedKind($c, $directory, $queueIds) === 'abandon') {
+            if ($abandon) {
                 $queues[$through]['abandon']++;
             }
-            if ($talk > 0) {
+            if ($answered) {
                 $queues[$through]['answered']++;
                 $queues[$through]['talk'] += $talk;
             }
@@ -121,13 +138,19 @@ try {
                 $aas[$aaExt] = $init($aaExt, $aaIds[$aaExt] ?? $aaExt, 'aa');
             }
             $aas[$aaExt]['offered']++;
-            if ($talk <= 0) {
+            if ($missed) {
                 $aas[$aaExt]['missed']++;
             }
-            if ($abandon || ($talk <= 0 && missedKind($c) === 'abandon')) {
+            /*
+             * Was missedKind($c) with no directory / queue list and an extra
+             * `$talk <= 0` clause of its own, so an auto attendant abandon
+             * detected through the directory's service code was never counted
+             * here and an answered zero-talk call was. One rule now.
+             */
+            if ($abandon) {
                 $aas[$aaExt]['abandon']++;
             }
-            if ($talk > 0) {
+            if ($answered) {
                 $aas[$aaExt]['answered']++;
                 $aas[$aaExt]['talk'] += $talk;
             }

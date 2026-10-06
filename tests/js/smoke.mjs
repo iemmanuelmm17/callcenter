@@ -149,6 +149,53 @@ console.log('\n== agent overview (report-driven) ==');
   check('agent sub-tabs threw nothing', errors.length === before, errors.slice(before).join(' | '));
 }
 
+console.log('\n== missed / abandoned labels ==');
+{
+  /* The Dashboard's abandon row must be the summary breakdown over offered
+   * inbound (60 / (1400 + 130) = 3.9% -> the ring rounds to 4%). */
+  await goTo('Dashboard');
+  await flush(8);
+  const abandonRow = containing('.ops-rate-row', 'Abandon rate');
+  check('dashboard abandon row shows the summary abandon count',
+    !!abandonRow && /60 calls/.test(abandonRow.textContent), abandonRow && abandonRow.textContent.trim());
+  check('dashboard abandon rate is abandon ÷ (inbound + missed)',
+    !!abandonRow && /4%/.test(abandonRow.textContent), abandonRow && abandonRow.textContent.trim());
+
+  /* The Agent stats table reads report.php's agentPerformance verbatim, so the
+   * Abandoned column and the missed rate must come straight from the payload
+   * (16 abandoned, missed rate 16.7%) instead of being re-derived per screen. */
+  await goTo('Agents');
+  await flush(8);
+  const statsTab = byText('.aa-tab', 'Agent stats');
+  if (statsTab) await click(statsTab);
+  await flush(8);
+  const statsSection = [...document.querySelectorAll('section')].find(s => /Agent stats/.test(s.textContent));
+  const statsTable = statsSection ? statsSection.querySelector('table') : null;
+  check('agent stats table renders', !!statsTable);
+  check('agent stats table has an Abandoned column',
+    !!statsTable && /Abandoned/.test(statsTable.textContent), statsTable && statsTable.textContent.slice(0, 120));
+  check('agent stats table shows the payload abandoned count',
+    !!statsTable && /16/.test(statsTable.textContent));
+  check('agent stats table shows the payload missed rate (16.7%)',
+    !!statsTable && /16\.7%/.test(statsTable.textContent));
+
+  /* The Missed cell must open the calls it counts (missed minus abandoned),
+   * and the Abandoned cell the abandons — not the whole missed family. */
+  const missedCell = statsTable && [...statsTable.querySelectorAll('button.qs-num-btn')].find(b => b.textContent.trim() === '24');
+  if (missedCell) {
+    await click(missedCell);
+    await flush(8);
+    const lastCall = [...requested].reverse().find(r => r.endpoint === 'calls');
+    check('agent Missed cell drills into missed_no_abandon',
+      !!lastCall && String(lastCall.body).includes('missed_no_abandon'),
+      lastCall && lastCall.body);
+    const closeBtn = containing('.call-modal button', 'Close') || containing('.call-modal button', '×');
+    if (closeBtn) await click(closeBtn);
+  } else {
+    check('agent Missed cell found', false, statsTable && statsTable.textContent.slice(0, 200));
+  }
+}
+
 console.log('\n== CSV exports (server-streamed) ==');
 {
   /* Call history: the export must ask the server for the whole filtered set

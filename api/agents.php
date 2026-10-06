@@ -18,6 +18,25 @@ try {
 
     $users = cachedUsers($user);
     $directory = userDirectory($user);
+
+    /*
+     * Queue ids, exactly like api/report.php. They are needed to classify a
+     * missed call the same way the Dashboard does: a call that went through a
+     * queue and was never answered is abandoned, not missed. Without them this
+     * endpoint could only see the `call-batch-start-datetime` signal, so
+     * aggregate-only queue abandons and auto attendant abandons landed in the
+     * Missed column of the Agents table.
+     */
+    $queueIds = [];
+    foreach (cachedCallQueues($user) as $qrow) {
+        if (!is_array($qrow)) {
+            continue;
+        }
+        $qid = trim((string)($qrow['callqueue'] ?? ''));
+        if ($qid !== '') {
+            $queueIds[$qid] = true;
+        }
+    }
 	
 	appLog(
     'AGENTS DEBUG: cachedUsers count = ' .
@@ -132,6 +151,7 @@ try {
 
         $total = count($calls);
         $missed = 0;
+        $abandoned = 0;
         $onnet = 0;
 
         foreach ($calls as $call) {
@@ -147,7 +167,21 @@ try {
             }
 
             elseif ($type === 'missed') {
-                $missed++;
+
+                /*
+                 * Same definition as includes/reporting/rows.php and the
+                 * Queues screen (includes/reporting/outcomes.php):
+                 * `mc` is missed-and-not-abandoned, `ab` is abandoned, and
+                 * mc + ab is every missed call the agent was involved in.
+                 * This endpoint used to count every missed call — queue
+                 * abandons included — into `mc`, and had no `ab` at all, so
+                 * the Agents screen disagreed with the Dashboard and Queues.
+                 */
+                if (callIsAbandoned($call, $directory, $queueIds)) {
+                    $abandoned++;
+                } else {
+                    $missed++;
+                }
             }
 
             elseif ($type === 'onnet') {
@@ -310,6 +344,7 @@ try {
             'ib' => $ibCount,
             'ob' => $obCount,
             'mc' => $missed,
+            'ab' => $abandoned,
             'onnet' => $onnet,
 
             'ibAht' => $ibAht,

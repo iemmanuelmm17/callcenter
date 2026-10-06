@@ -12,6 +12,7 @@ declare(strict_types=1);
  * Module map (see tools/split-php-file.mjs, which produced the split):
  *   reporting/cache.php     day cache read/write, range status, warming, raw load
  *   reporting/support.php   timezone/date maths, durations, logging
+ *   reporting/outcomes.php  the one definition of answered/abandoned/voicemail/no-answer
  *   reporting/cdr_fields.php per-CDR accessors and call classification
  *   reporting/rows.php      row sets, aggregation, SLA resolution, AA/inventory reads
  *   reporting/inventory.php PBX list caches, phone normalisation, user directory
@@ -35,6 +36,7 @@ if (!defined('CDR_PAGE_SIZE')) {
 require_once __DIR__ . '/reporting/cdr_store.php';
 require_once __DIR__ . '/reporting/cache.php';
 require_once __DIR__ . '/reporting/support.php';
+require_once __DIR__ . '/reporting/outcomes.php';
 require_once __DIR__ . '/reporting/cdr_fields.php';
 require_once __DIR__ . '/reporting/rows.php';
 require_once __DIR__ . '/reporting/inventory.php';

@@ -421,7 +421,7 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
         : pulse,
       reportReady
         ? h('section', {className:'ops-card'},
-            h('div', {className:'ops-label'}, 'Rates', qHelp('Answer rate is answered inbound ÷ offered. Abandon rate is hang-ups before answer ÷ offered. Service level is offered inbound answered within the SLA ring setting. Click a row to open related calls.')),
+            h('div', {className:'ops-label'}, 'Rates', qHelp('Offered = inbound answered + missed calls. Answer rate is answered inbound ÷ offered. Abandon rate is callers who reached a queue or the auto attendant and hung up before an agent answered ÷ offered — the same abandoned definition every other report uses. Service level is offered inbound answered within the SLA ring setting. Click a row to open related calls.')),
             h('div', {className:'ops-hint'}, 'Answer, abandon & SLA'),
             h('button', {type:'button', className:'ops-rate-row w-full text-left', onClick: () => onMetric && onMetric('inbound')},
               ringMeter(answerRate, answerRate >= 85 ? C.good : (answerRate >= 70 ? C.warn : C.bad)),
