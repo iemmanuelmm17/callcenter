@@ -7240,6 +7240,11 @@
   }
 
   // assets/js/src/components/call-modal.js
+  var asText = (value) => document.createTextNode(
+    String(
+      value == null ? "" : value
+    )
+  );
   function CallModal({ metric, hour, timeFrom, timeTo, agent, callId, phoneNumber, callerNumber, queue, queuesOnly, filters, callTypes, slaSeconds, onClose }) {
     const ref = useRef(null);
     const table = useRef(null);
@@ -7442,7 +7447,18 @@
                 const wrap = document.createElement("span");
                 wrap.title = label;
                 wrap.style.cssText = "display:inline-flex;align-items:center;justify-content:center;width:100%;color:" + color;
-                wrap.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' + paths.map((d) => '<path d="' + d + '"/>').join("") + "</svg>";
+                const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                svg.setAttribute("width", "16");
+                svg.setAttribute("height", "16");
+                svg.setAttribute("viewBox", "0 0 16 16");
+                svg.setAttribute("fill", "currentColor");
+                svg.setAttribute("aria-hidden", "true");
+                paths.forEach((d) => {
+                  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                  path.setAttribute("d", d);
+                  svg.appendChild(path);
+                });
+                wrap.appendChild(svg);
                 return wrap;
               }
             },
@@ -7453,7 +7469,9 @@
               title: "From Name",
               field: "from",
               minWidth: 120,
-              formatter: (cell) => cell.getValue() || ""
+              formatter: (cell) => asText(
+                cell.getValue()
+              )
             },
             /*
              * FROM
@@ -7462,8 +7480,10 @@
               title: "From",
               field: "fromNumber",
               minWidth: 100,
-              formatter: (cell) => formatPhoneNumber(
-                cell.getValue()
+              formatter: (cell) => asText(
+                formatPhoneNumber(
+                  cell.getValue()
+                )
               )
             },
             /*
@@ -7473,8 +7493,10 @@
               title: "Dialed",
               field: "dialed",
               minWidth: 100,
-              formatter: (cell) => formatPhoneNumber(
-                cell.getValue()
+              formatter: (cell) => asText(
+                formatPhoneNumber(
+                  cell.getValue()
+                )
               )
             },
             /*
@@ -7484,8 +7506,10 @@
               title: "To",
               field: "to",
               minWidth: 90,
-              formatter: (cell) => formatPhoneNumber(
-                cell.getValue()
+              formatter: (cell) => asText(
+                formatPhoneNumber(
+                  cell.getValue()
+                )
               )
             },
             {
@@ -7504,7 +7528,7 @@
               title: "Reason",
               field: "disconnectReason",
               minWidth: 140,
-              formatter: (cell) => cell.getValue() || ""
+              formatter: (cell) => asText(cell.getValue())
             },
             /*
              * TOTAL

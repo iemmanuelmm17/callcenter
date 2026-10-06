@@ -393,6 +393,31 @@ console.log('\n== call modal: recording + sip flow (P7) ==');
     !!flowOff && flowOff.textContent === '—' && flowOff.disabled && flowOff.className.includes('is-off'),
     flowOff && flowOff.outerHTML);
 
+  /*
+   * SEC-9 regression. Tabulator applies a string formatter result with
+   * `element.innerHTML = val` (dist/js/tabulator.js, _generateContents), so a
+   * formatter that echoes CDR text would execute a hostile caller-ID name as
+   * HTML. Mount each text column's output exactly the way Tabulator does.
+   */
+  const HOSTILE = '<img src=x onerror="window.__xss=1">';
+  const TEXT_FIELDS = ['from', 'fromNumber', 'dialed', 'to', 'disconnectReason'];
+  const mounted = [];
+  const leaks = [];
+  TEXT_FIELDS.forEach(field => {
+    const col = cols.find(c => c.field === field);
+    if (!col || typeof col.formatter !== 'function') return;
+    const out = col.formatter({getValue: () => HOSTILE, getRow: () => ({getData: () => ({})})});
+    const holder = document.createElement('td');
+    if (typeof out === 'string') holder.innerHTML = out;
+    else if (out && out.nodeType) holder.appendChild(out);
+    else holder.textContent = String(out == null ? '' : out);
+    mounted.push(field + '=' + (typeof out === 'string' ? 'string' : (out && out.nodeType ? 'node' : typeof out)));
+    if (holder.querySelector('img') || /<img/i.test(holder.innerHTML)) leaks.push(field);
+  });
+  check('every CDR text column escapes a hostile caller-ID value (SEC-9)',
+    mounted.length === TEXT_FIELDS.length && leaks.length === 0,
+    {mounted, leaks});
+
   /* Clicking Rec opens the tray (and resolves the recording lazily). */
   const before = errors.length;
   requested.length = 0;

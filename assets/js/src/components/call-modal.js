@@ -12,6 +12,21 @@ import { ensureTabulator, h, useEffect, useEscape, useRef, useState } from '../l
 import { slaRingHtml } from '../lib/sla.js';
 import { formatCallDate, formatCallTime } from '../lib/time.js';
 
+/*
+ * SEC-9: Tabulator applies a string formatter result with
+ * `element.innerHTML = val`, so a formatter that echoes CDR text would parse
+ * it as HTML. Caller-ID names are attacker-influenced, so every text
+ * formatter returns a Text node instead — Tabulator appends Nodes safely.
+ */
+const asText = value =>
+    document.createTextNode(
+        String(
+            value == null
+                ? ''
+                : value
+        )
+    );
+
 function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerNumber,queue,queuesOnly,filters,callTypes,slaSeconds,onClose}) {
     const ref = useRef(null);
     const table = useRef(null);
@@ -305,9 +320,20 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
                                 const wrap = document.createElement('span');
                                 wrap.title = label;
                                 wrap.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;width:100%;color:' + color;
-                                wrap.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
-                                    paths.map(d => '<path d="' + d + '"/>').join('') +
-                                    '</svg>';
+                                /* SVG namespace, and setAttribute for path data, so no
+                                 * markup is ever parsed from a string (SEC-9). */
+                                const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                                svg.setAttribute('width', '16');
+                                svg.setAttribute('height', '16');
+                                svg.setAttribute('viewBox', '0 0 16 16');
+                                svg.setAttribute('fill', 'currentColor');
+                                svg.setAttribute('aria-hidden', 'true');
+                                paths.forEach(d => {
+                                    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                                    path.setAttribute('d', d);
+                                    svg.appendChild(path);
+                                });
+                                wrap.appendChild(svg);
                                 return wrap;
                             }
                         },
@@ -329,8 +355,9 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
 
                             formatter:
                                 cell =>
-                                    cell.getValue() ||
-                                    ''
+                                    asText(
+                                        cell.getValue()
+                                    )
                         },
 
 
@@ -350,8 +377,10 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
 
                             formatter:
                                 cell =>
-                                    formatPhoneNumber(
-                                        cell.getValue()
+                                    asText(
+                                        formatPhoneNumber(
+                                            cell.getValue()
+                                        )
                                     )
                         },
 
@@ -372,8 +401,10 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
 
                             formatter:
                                 cell =>
-                                    formatPhoneNumber(
-                                        cell.getValue()
+                                    asText(
+                                        formatPhoneNumber(
+                                            cell.getValue()
+                                        )
                                     )
                         },
 
@@ -394,8 +425,10 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
 
                             formatter:
                                 cell =>
-                                    formatPhoneNumber(
-                                        cell.getValue()
+                                    asText(
+                                        formatPhoneNumber(
+                                            cell.getValue()
+                                        )
                                     )
                         },
 
@@ -416,7 +449,7 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
                             title: 'Reason',
                             field: 'disconnectReason',
                             minWidth: 140,
-                            formatter: cell => cell.getValue() || ''
+                            formatter: cell => asText(cell.getValue())
                         },
 
                         /*
