@@ -567,6 +567,18 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
               fmtNum(abandonWaitBuckets.lt5 || 0) + ' under 5s (usually misdials) · ' +
               fmtNum(abandonWaitBuckets['5-30'] || 0) + ' 5–30s · ' +
               fmtNum(abandonWaitBuckets.gt30 || 0) + ' over 30s (a staffing failure)'
+            ),
+            /*
+             * Sprint B (§3): the miss rate inside each wait band, with the band's
+             * own base in brackets. The bands partition every arrival, so the
+             * three counts add up to the period's offered calls.
+             */
+            h('div', {className:'ops-hint ops-wait-miss'},
+              'Missed within each wait band: ' +
+              (report?.summary?.waitBandMix || []).map(b =>
+                b.label + ' ' + Number(b.missPct || 0).toFixed(1) + '% (' +
+                fmtNum(b.missed || 0) + ' of ' + fmtNum(b.offered || 0) + ')'
+              ).join(' · ')
             )
           )
         : pulse,

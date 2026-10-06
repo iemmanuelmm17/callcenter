@@ -1,3 +1,49 @@
+# CHANGES — Sprint B, phase 9: the miss rate inside each wait band
+
+**What this phase is about.** Sprint A split abandons by how long the caller
+waited ("a 4-second abandon is usually a misdial; a 90-second one is a staffing
+failure"), but only over the calls that were missed. That answers "how many" and
+not "how bad": a band with 40 abandons and 4,000 calls is a different problem
+from a band with 40 abandons and 50 calls. This phase publishes the **miss rate
+inside each band, with the base it was taken over**.
+
+## The rule
+
+The same three bands (`under 5s`, `5-30s`, `over 30s`) applied to **every
+arrival**: an answered call is banded by its ring time (`ringSeconds()`), a missed
+call by how long the caller waited before giving up (`waitSeconds()`, which is
+deliberately the same function). Arrivals = answered + missed in the band, the
+miss rate is missed ÷ arrivals, and a band with no arrivals is published as a
+zero row rather than omitted, so the three bases always add up to the period's
+arrivals.
+
+`summary.waitBandMix[]` carries `{band, label, offered, answered, missed,
+missPct}`; `missedWaitBuckets`, `abandonWaitBuckets` and the wait-bucket drill
+are unchanged, and a test asserts the missed-only buckets still agree with the
+bands they extend.
+
+## On screen
+
+The Operations Overview wait card gains one line under the abandon hint:
+`Missed within each wait band: under 5s 50.0% (1 of 2) · 5-30s 33.3% (1 of 3) ·
+over 30s 66.7% (2 of 3)` — every rate with the counts it came from.
+
+## Evidence
+
+`tests/php/report-metrics.mjs` §11b (10 checks) on a fixture nothing else owns
+(Monday 2026-07-13), where the eight calls and their bands are written out in the
+comment first: 2 arrivals / 1 missed under 5s, 3 / 1 in 5-30s, 3 / 2 over 30s;
+the bases sum to the day's answered + missed; every rate re-derived from its own
+counts; and the extended buckets still line up. `tests/js/smoke.mjs` asserts the
+rendered line (rates and bases) in the real bundle. `npm test` = 25 suites green;
+`dead code`, `ui audit`, `css coverage` and `module budget` clean.
+
+**Behaviour change to disclose:** the report payload gains
+`summary.waitBandMix`; the Operations Overview wait card gains one hint line. No
+existing figure moves.
+
+---
+
 # CHANGES — Sprint C, phase 8: the printable month-end report
 
 **What this phase is about.** The pack's row sets and trust blocks existed but

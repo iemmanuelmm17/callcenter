@@ -67,6 +67,21 @@ for (const [label, landmarks] of routes) {
  * assumptions (occupancy, baseline, scoring) are stated on the page rather
  * than left to the reader.
  */
+/*
+ * Sprint B, §3: the wait card's miss-rate line - every band prints its rate WITH
+ * the counts it came from, and the three bases add up to the arrivals.
+ */
+await goTo('Dashboard');
+await flush(8);
+{
+  const text = root().textContent;
+  check('the wait card prints the miss rate per band with its base',
+    /Missed within each wait band: under 5s 50\.0% \(1 of 2\)/.test(text)
+      && /5-30s 33\.3% \(1 of 3\)/.test(text)
+      && /over 30s 66\.7% \(2 of 3\)/.test(text),
+    text.slice(0, 400));
+}
+
 await goTo('Reports');
 await flush(10);
 {

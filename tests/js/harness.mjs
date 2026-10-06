@@ -156,6 +156,15 @@ export const FIXTURES = {
       missedWaitBuckets: { lt5: 1, '5-30': 2, gt30: 2 },
       abandonWaitBuckets: { lt5: 1, '5-30': 1, gt30: 2 },
       hold: { totalSeconds: 480, calls: 3, avgSeconds: 160 },
+      /*
+       * Sprint B, §3: the miss rate inside each wait band, bases summed from the
+       * bands themselves (2 + 3 + 3 = 8 arrivals).
+       */
+      waitBandMix: [
+        { band: 'lt5', label: 'under 5s', offered: 2, answered: 1, missed: 1, missPct: 50 },
+        { band: '5-30', label: '5-30s', offered: 3, answered: 2, missed: 1, missPct: 33.3 },
+        { band: 'gt30', label: 'over 30s', offered: 3, answered: 1, missed: 2, missPct: 66.7 }
+      ],
       /* Sprint B: the period's sentiment, with its base. */
       sentiment: {
         positive: 38.3, neutral: 25.0, negative: 43.3, score: -5.0,

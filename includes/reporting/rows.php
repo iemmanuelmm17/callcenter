@@ -243,6 +243,16 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
     $waitBuckets = ['0-30'=>0,'31-60'=>0,'61-120'=>0,'120+'=>0];
     $missedWaitBuckets = ['lt5'=>0,'5-30'=>0,'gt30'=>0];
     $abandonWaitBuckets = ['lt5'=>0,'5-30'=>0,'gt30'=>0];
+    /*
+     * Sprint B (§3): the same three bands over EVERY arrival - answered calls by
+     * their ring time, missed calls by how long the caller waited before giving
+     * up - so each band publishes a miss RATE with the base it was taken over.
+     * A band with no arrivals is published with a zero base and a zero rate, not
+     * omitted, so the three always add up to the period's arrivals.
+     */
+    $waitBandOffered = ['lt5'=>0,'5-30'=>0,'gt30'=>0];
+    $waitBandMissed = ['lt5'=>0,'5-30'=>0,'gt30'=>0];
+    $waitBandAnswered = ['lt5'=>0,'5-30'=>0,'gt30'=>0];
     $holdTotal = 0;
     $holdCalls = 0;
     /* Sprint B: the period's sentiment, with the same three figures the live
@@ -311,6 +321,8 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
             $waited = waitSeconds($call);
             $band = $waited < 5 ? 'lt5' : ($waited <= 30 ? '5-30' : 'gt30');
             $missedWaitBuckets[$band]++;
+            $waitBandMissed[$band]++;
+            $waitBandOffered[$band]++;
             if ($bucket === 'abandon') {
                 $abandonWaitBuckets[$band]++;
             }
@@ -319,6 +331,12 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
         if ($type === 'inbound') {
             $ring = ringSeconds($call);
             $inboundRings[] = $ring;
+            /* The SAME band on the answered side, so each band's miss rate has a
+             * denominator: how long a caller waited before a person picked up is
+             * the same quantity as how long they waited before giving up. */
+            $waitBand = $ring < 5 ? 'lt5' : ($ring <= 30 ? '5-30' : 'gt30');
+            $waitBandOffered[$waitBand]++;
+            $waitBandAnswered[$waitBand]++;
             if ($ring <= 30) { $waitBuckets['0-30']++; }
             elseif ($ring <= 60) { $waitBuckets['31-60']++; }
             elseif ($ring <= 120) { $waitBuckets['61-120']++; }
@@ -456,6 +474,27 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
         'serviceLevel' => $serviceLevel,
         'waitBuckets' => $waitBuckets,
         'missedWaitBuckets' => $missedWaitBuckets,
+        /*
+         * Miss rate per wait band, each with its own base. The three bands
+         * partition every arrival (answered calls by ring time, missed calls by
+         * how long the caller waited), so a band with no arrivals is published
+         * as a zero row rather than omitted.
+         */
+        'waitBandMix' => array_values(array_map(
+            static function (string $band, string $label) use ($waitBandOffered, $waitBandAnswered, $waitBandMissed): array {
+                $base = (int)$waitBandOffered[$band];
+                return [
+                    'band' => $band,
+                    'label' => $label,
+                    'offered' => $base,
+                    'answered' => (int)$waitBandAnswered[$band],
+                    'missed' => (int)$waitBandMissed[$band],
+                    'missPct' => $base > 0 ? round((((int)$waitBandMissed[$band]) / $base) * 100, 1) : 0.0,
+                ];
+            },
+            ['lt5','5-30','gt30'],
+            ['under 5s','5-30s','over 30s']
+        )),
         'abandonWaitBuckets' => $abandonWaitBuckets,
         'hold' => [
             'totalSeconds' => $holdTotal,

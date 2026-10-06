@@ -3503,3 +3503,6 @@ html[data-theme="light"] .grid-totals td {
   .ops-heat-scroll, .ops-heat-table { overflow: visible !important; }
   .ops-card { border-color: #999999 !important; background: #ffffff !important; color: #111111 !important; }
 }
+
+/* The miss rate per wait band under the wait card (Sprint B, §3). */
+.ops-wait-miss { margin-top: 4px; font-variant-numeric: tabular-nums; }

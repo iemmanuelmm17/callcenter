@@ -1510,6 +1510,81 @@ if (packRes.status === 200) {
 }
 
 
+/* ====== 11b. the miss rate inside each wait band (Sprint B, §3) */
+
+console.log('\n== miss rate per wait band, each with its own base ==');
+
+/*
+ * A fixture nothing else owns (Monday 2026-07-13), so the bands are stated in
+ * full and hand-checked:
+ *
+ *   w1  answered after  2 s   band under 5s     } 2 arrivals, 1 missed = 50.0 %
+ *   w2  gave up after   3 s   band under 5s     }
+ *   w3  answered after 10 s   band 5-30s        }
+ *   w4  answered after 20 s   band 5-30s        } 3 arrivals, 1 missed = 33.3 %
+ *   w5  gave up after   8 s   band 5-30s        }
+ *   w6  answered after 40 s   band over 30s     }
+ *   w7  gave up after  40 s   band over 30s     } 3 arrivals, 2 missed = 66.7 %
+ *   w8  gave up after  60 s   band over 30s     }
+ *
+ * The three bases must sum to the period's arrivals (4 answered + 4 missed), and
+ * every band must print the base its rate came from.
+ */
+await harness.seedPbx('fetchCdrs', [
+  { id: 'w1', 'call-direction': 1, 'call-start-datetime': '2026-07-13T09:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-07-13T09:00:02Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'w2', 'call-direction': 1, 'call-start-datetime': '2026-07-13T09:05:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-07-13T09:05:03Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'w3', 'call-direction': 1, 'call-start-datetime': '2026-07-13T09:10:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-07-13T09:10:10Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'w4', 'call-direction': 1, 'call-start-datetime': '2026-07-13T09:15:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-07-13T09:15:20Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'w5', 'call-direction': 1, 'call-start-datetime': '2026-07-13T09:20:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-07-13T09:20:08Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'w6', 'call-direction': 1, 'call-start-datetime': '2026-07-13T09:25:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-07-13T09:25:40Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'w7', 'call-direction': 1, 'call-start-datetime': '2026-07-13T09:30:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-07-13T09:30:40Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'w8', 'call-direction': 1, 'call-start-datetime': '2026-07-13T09:35:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-07-13T09:36:00Z[US/Eastern]', 'call-term-user': '6080' }
+]);
+
+const bandRes = await harness.request('report.php', {
+  body: { start: '2026-07-13', end: '2026-07-13', hours: 'all', skipPrevious: true },
+  user: USERS.office_manager
+});
+check('the band request answers', bandRes.status === 200, bandRes.log ?? bandRes.status);
+if (bandRes.status === 200) {
+  const mix = bandRes.body.summary.waitBandMix || [];
+  const byBand = Object.fromEntries(mix.map(b => [b.band, b]));
+  check('three bands are published, in order, with their labels',
+    mix.length === 3 && byBand.lt5 && byBand['5-30'] && byBand.gt30, mix.map(b => b.band));
+  check('under 5s: 2 arrivals, 1 missed = 50 %',
+    byBand.lt5.offered === 2 && byBand.lt5.answered === 1 && byBand.lt5.missed === 1
+      && byBand.lt5.missPct === 50, byBand.lt5);
+  check('5-30s: 3 arrivals, 1 missed = 33.3 % (answered at 10 s and 20 s, out at 8 s)',
+    byBand['5-30'].offered === 3 && byBand['5-30'].answered === 2 && byBand['5-30'].missed === 1
+      && byBand['5-30'].missPct === 33.3, byBand['5-30']);
+  check('over 30s: 3 arrivals, 2 missed = 66.7 % (answered at 40 s, out at 40 s and 60 s)',
+    byBand.gt30.offered === 3 && byBand.gt30.answered === 1 && byBand.gt30.missed === 2
+      && byBand.gt30.missPct === 66.7, byBand.gt30);
+  check('a band with no arrivals would still be a zero row, not an omission',
+    mix.every(b => typeof b.offered === 'number' && typeof b.missPct === 'number'), mix);
+  check('the bands partition every arrival (bases sum to answered + missed for the day)',
+    mix.reduce((a, b) => a + b.offered, 0)
+      === bandRes.body.summary.counts.inbound + bandRes.body.summary.counts.missed,
+    [mix.map(b => b.offered), bandRes.body.summary.counts]);
+  check("every band's rate is its own count over its own base",
+    mix.every(b => b.missPct === (b.offered > 0 ? Math.round((b.missed / b.offered) * 1000) / 10 : 0)), mix);
+  check('each band\'s answered + missed adds up to its base',
+    mix.every(b => b.answered + b.missed === b.offered), mix);
+  check('the missed-only buckets still agree with the bands they extend',
+    (bandRes.body.summary.missedWaitBuckets || {}).lt5 === byBand.lt5.missed
+      && (bandRes.body.summary.missedWaitBuckets || {})['5-30'] === byBand['5-30'].missed
+      && (bandRes.body.summary.missedWaitBuckets || {}).gt30 === byBand.gt30.missed,
+    bandRes.body.summary.missedWaitBuckets);
+}
+
 /* ====== 12. the pack's trust blocks: quality, staffing, 4-week baseline */
 
 console.log('\n== the appendix: data quality, staffing estimate, weekday baseline ==');
