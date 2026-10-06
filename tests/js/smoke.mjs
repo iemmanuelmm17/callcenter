@@ -574,6 +574,66 @@ console.log('\n== CSV exports (server-streamed) ==');
   }
 }
 
+console.log('\n== QA-5: the settings panel is role-gated ==');
+{
+  /*
+   * The server refuses both the read and the write for agents and basic users
+   * (tests/php/endpoints.mjs). The page must not offer what the server will
+   * reject, so each role gets its own harness.
+   */
+  const asRole = async role => {
+    const h2 = await createHarness({user: {...FIXTURES.session.user, role, username: role}});
+    await h2.flush(14);
+    return h2;
+  };
+
+  const agent = await asRole('agent');
+  check('an agent is not offered Settings',
+    !/Settings/.test(agent.root().textContent), agent.root().textContent.slice(0, 120));
+  check('an agent never calls the settings endpoint',
+    !agent.requested.some(r => r.endpoint === 'settings'),
+    [...new Set(agent.requested.map(r => r.endpoint))]);
+
+  const basic = await asRole('basic_user');
+  check('a basic user is not offered Settings either',
+    !/Settings/.test(basic.root().textContent) &&
+      !basic.requested.some(r => r.endpoint === 'settings'));
+
+  const sup = await asRole('supervisor');
+  check('a supervisor is offered Settings', /Settings/.test(sup.root().textContent));
+  check('a supervisor reads the thresholds', sup.requested.some(r => r.endpoint === 'settings'));
+
+  const supSettingsBtn = [...sup.document.querySelectorAll('button')]
+    .find(b => /^Settings$/.test((b.textContent || '').trim()));
+  if (supSettingsBtn) {
+    await sup.click(supSettingsBtn);
+    await sup.flush(10);
+    check('a supervisor sees the panel but has no Save control',
+      sup.document.querySelector('.set-save') === null && sup.document.querySelector('.set-reset') === null);
+    check('the panel says why it is read-only',
+      /Only an office manager can change/.test(sup.root().textContent));
+  } else {
+    check('a supervisor can open the settings panel', false, sup.root().textContent.slice(0, 120));
+  }
+
+  /* The manager (the main harness) can save — same panel, Save present. */
+  const managerBtn = [...document.querySelectorAll('button')]
+    .find(b => /^Settings$/.test((b.textContent || '').trim()));
+  if (managerBtn) {
+    await click(managerBtn);
+    await flush(10);
+    const saveBtn = document.querySelector('.set-save');
+    check('an office manager can save', !!saveBtn && saveBtn.disabled === false,
+      saveBtn && saveBtn.outerHTML.slice(0, 140));
+    const closeBtn = [...(document.querySelector('.call-modal') || document).querySelectorAll('button')]
+      .find(b => /^(close|×|✕)$/i.test((b.textContent || '').trim()) || b.getAttribute('aria-label') === 'Close');
+    if (closeBtn) await click(closeBtn);
+    await flush(6);
+  } else {
+    check('the office manager can open the settings panel', false, document.body.textContent.slice(0, 120));
+  }
+}
+
 console.log('\n== global error budget ==');
 check('no unexpected runtime errors', errors.length === 0, errors.slice(0, 5).join(' | '));
 const uniqueWarnings = [...new Set(warnings)];

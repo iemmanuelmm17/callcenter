@@ -12,7 +12,8 @@ import { writeSlaSeconds } from '../lib/sla.js';
 function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClose, onSaved, onNotify}) {
   useEscape(true, onClose);
   const DEFAULTS = { slaSeconds: 20, slaPct: 80, missedPct: 20, abandonPct: 10, ahtMinutes: 5, ahtOutboundMinutes: 5, topAgentAhtMinutes: 5, topAgentMinCalls: 20 };
-  const canSave = user.role === 'office_manager' || user.role === 'supervisor';
+  /* QA-5: supervisors may read the thresholds, only managers change them. */
+  const canSave = user.role === 'office_manager';
   const [form, setForm] = useState({
     slaSeconds: slaSeconds || DEFAULTS.slaSeconds,
     slaPct: DEFAULTS.slaPct,
@@ -257,7 +258,7 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
           h(ThemeToggle)
         ),
         error ? h('div', { className: 'set-error' }, error) : null,
-        !canSave ? h('div', { className: 'set-readonly' }, 'View only. Office managers and supervisors can save.') : null
+        !canSave ? h('div', { className: 'set-readonly' }, 'View only. Only an office manager can change the domain thresholds.') : null
       ),
       h('div', { className: 'set-foot' },
         h('div', { className: 'set-foot-left' },

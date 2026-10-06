@@ -17,6 +17,7 @@ import { SettingsModal } from './settings.js';
 import { TelephoneNumbers } from './telephone-numbers.js';
 import { ErrorState, NavIcon, ThemeToggle, ToastHost, navItems, useToasts } from './ui.js';
 import { api, routesForRole } from '../lib/api.js';
+import { CAN_READ_SETTINGS } from '../lib/roles.js';
 import { histInitials } from '../lib/format.js';
 import { h, useEffect, useRef, useState } from '../lib/react.js';
 import { readSlaSeconds, writeSlaSeconds } from '../lib/sla.js';
@@ -89,27 +90,36 @@ const navPanelRef = useRef(null);
 const mainScrollRef = useRef(null);
 
 
+/*
+ * QA-5: api/settings.php is now a manager/supervisor endpoint, so only those
+ * roles fetch it. Everyone else receives the same values with the dashboard
+ * payload (api/report.php -> `settings`), which keeps an agent's red/green
+ * identical to the manager's.
+ */
+const applyThresholds = d => {
+    if (!d) return;
+    if (d.slaSeconds) setSlaSeconds(writeSlaSeconds(d.slaSeconds));
+    setDomainSettings({
+        slaPct: Number(d.slaPct || 80),
+        abandonPct: Number(d.abandonPct || 10),
+        missedPct: Number(d.missedPct || 20),
+        ahtMinutes: Number(d.ahtMinutes || 5),
+        ahtOutboundMinutes: Number(d.ahtOutboundMinutes || d.ahtMinutes || 5),
+        /*
+         * Top-agent qualification. Falls back to the general AHT threshold so
+         * the podium still behaves sensibly against a backend that does not
+         * yet persist these two keys.
+         */
+        topAgentAhtMinutes: Number(d.topAgentAhtMinutes || d.ahtMinutes || 5),
+        topAgentMinCalls: Number(d.topAgentMinCalls ?? 20)
+    });
+};
+
 useEffect(() => {
-    api('settings').then(r => {
-        const d = r && r.data ? r.data : r;
-        if (!d) return;
-        setSlaSeconds(writeSlaSeconds(d.slaSeconds));
-        setDomainSettings({
-            slaPct: Number(d.slaPct || 80),
-            abandonPct: Number(d.abandonPct || 10),
-            missedPct: Number(d.missedPct || 20),
-            ahtMinutes: Number(d.ahtMinutes || 5),
-            ahtOutboundMinutes: Number(d.ahtOutboundMinutes || d.ahtMinutes || 5),
-            /*
-             * Top-agent qualification. Falls back to the general AHT
-             * threshold so the podium still behaves sensibly against a
-             * backend that does not yet persist these two keys.
-             */
-            topAgentAhtMinutes: Number(d.topAgentAhtMinutes || d.ahtMinutes || 5),
-            topAgentMinCalls: Number(d.topAgentMinCalls ?? 20)
-        });
-    }).catch(() => {});
-}, []);
+    if (!CAN_READ_SETTINGS(user.role)) return;
+    api('settings').then(r => applyThresholds(r && r.data ? r.data : r)).catch(() => {});
+    /* A role cannot change without a new login. */
+}, [user.role]);
 
 useEffect(() => {
     const allowed = routesForRole(user.role);
@@ -292,6 +302,14 @@ useEffect(() => {
     }));
     setInventoryReady({agents:true, numbers:true, aa:true, queues:true});
 }, [route, report]);
+
+/*
+ * QA-5: every role's dashboard payload carries the domain thresholds, so a
+ * screen's red/green is the manager's red/green without the settings endpoint.
+ */
+useEffect(() => {
+    if (report && report.settings) applyThresholds(report.settings);
+}, [report]);
 
 useEffect(() => {
     if (route !== 'agents') return;
@@ -773,7 +791,9 @@ return h('div', { className: 'min-h-screen' },
         },
             h('button', { onClick: () => setCollapsed(!collapsed), className: 'w-full border-b border-slate-700 py-3 text-cyan-400' }, '☰'),
             h('div', { ref: navPanelRef, className: 'nav-panel pt-2' }, ...item,
-                h('button', {
+                /* QA-5: manager/supervisor only — the server gates both the
+                 * read and the write, so the button matches. */
+                CAN_READ_SETTINGS(user.role) ? h('button', {
                     key: 'settings',
                     type: 'button',
                     onClick: () => setSettingsOpen(true),
@@ -784,7 +804,7 @@ return h('div', { className: 'min-h-screen' },
                 },
                     h(NavIcon, {name: 'settings', className: 'h-4 w-4 shrink-0'}),
                     !collapsed && h('span', null, 'Settings')
-                )
+                ) : null
             ),
             h('div', { className: 'nav-user' + (collapsed ? ' is-collapsed' : '') },
                 h('span', {

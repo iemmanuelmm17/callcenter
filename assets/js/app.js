@@ -10068,7 +10068,7 @@
   function SettingsModal({ user, slaSeconds, filters, callTypes, onSlaChange, onClose, onSaved, onNotify }) {
     useEscape(true, onClose);
     const DEFAULTS = { slaSeconds: 20, slaPct: 80, missedPct: 20, abandonPct: 10, ahtMinutes: 5, ahtOutboundMinutes: 5, topAgentAhtMinutes: 5, topAgentMinCalls: 20 };
-    const canSave = user.role === "office_manager" || user.role === "supervisor";
+    const canSave = user.role === "office_manager";
     const [form, setForm] = useState({
       slaSeconds: slaSeconds || DEFAULTS.slaSeconds,
       slaPct: DEFAULTS.slaPct,
@@ -10340,7 +10340,7 @@
             h(ThemeToggle)
           ),
           error ? h("div", { className: "set-error" }, error) : null,
-          !canSave ? h("div", { className: "set-readonly" }, "View only. Office managers and supervisors can save.") : null
+          !canSave ? h("div", { className: "set-readonly" }, "View only. Only an office manager can change the domain thresholds.") : null
         ),
         h(
           "div",
@@ -10361,6 +10361,10 @@
       )
     );
   }
+
+  // assets/js/src/lib/roles.js
+  var ROLES_READING_SETTINGS = ["office_manager", "supervisor"];
+  var CAN_READ_SETTINGS = (role) => ROLES_READING_SETTINGS.includes(role);
 
   // assets/js/src/components/app-shell.js
   function Dashboard({ user, onLogout }) {
@@ -10418,28 +10422,29 @@
     const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
     const navPanelRef = useRef(null);
     const mainScrollRef = useRef(null);
-    useEffect(() => {
-      api("settings").then((r) => {
-        const d = r && r.data ? r.data : r;
-        if (!d) return;
-        setSlaSeconds(writeSlaSeconds(d.slaSeconds));
-        setDomainSettings({
-          slaPct: Number(d.slaPct || 80),
-          abandonPct: Number(d.abandonPct || 10),
-          missedPct: Number(d.missedPct || 20),
-          ahtMinutes: Number(d.ahtMinutes || 5),
-          ahtOutboundMinutes: Number(d.ahtOutboundMinutes || d.ahtMinutes || 5),
-          /*
-           * Top-agent qualification. Falls back to the general AHT
-           * threshold so the podium still behaves sensibly against a
-           * backend that does not yet persist these two keys.
-           */
-          topAgentAhtMinutes: Number(d.topAgentAhtMinutes || d.ahtMinutes || 5),
-          topAgentMinCalls: Number(d.topAgentMinCalls ?? 20)
-        });
-      }).catch(() => {
+    const applyThresholds = (d) => {
+      if (!d) return;
+      if (d.slaSeconds) setSlaSeconds(writeSlaSeconds(d.slaSeconds));
+      setDomainSettings({
+        slaPct: Number(d.slaPct || 80),
+        abandonPct: Number(d.abandonPct || 10),
+        missedPct: Number(d.missedPct || 20),
+        ahtMinutes: Number(d.ahtMinutes || 5),
+        ahtOutboundMinutes: Number(d.ahtOutboundMinutes || d.ahtMinutes || 5),
+        /*
+         * Top-agent qualification. Falls back to the general AHT threshold so
+         * the podium still behaves sensibly against a backend that does not
+         * yet persist these two keys.
+         */
+        topAgentAhtMinutes: Number(d.topAgentAhtMinutes || d.ahtMinutes || 5),
+        topAgentMinCalls: Number(d.topAgentMinCalls ?? 20)
       });
-    }, []);
+    };
+    useEffect(() => {
+      if (!CAN_READ_SETTINGS(user.role)) return;
+      api("settings").then((r) => applyThresholds(r && r.data ? r.data : r)).catch(() => {
+      });
+    }, [user.role]);
     useEffect(() => {
       const allowed = routesForRole(user.role);
       if (!allowed.includes(route)) {
@@ -10600,6 +10605,9 @@
       }));
       setInventoryReady({ agents: true, numbers: true, aa: true, queues: true });
     }, [route, report]);
+    useEffect(() => {
+      if (report && report.settings) applyThresholds(report.settings);
+    }, [report]);
     useEffect(() => {
       if (route !== "agents") return;
       const agents = agentSub === "overview" ? selectedAgents : [];
@@ -10985,7 +10993,9 @@
             "div",
             { ref: navPanelRef, className: "nav-panel pt-2" },
             ...item,
-            h(
+            /* QA-5: manager/supervisor only — the server gates both the
+             * read and the write, so the button matches. */
+            CAN_READ_SETTINGS(user.role) ? h(
               "button",
               {
                 key: "settings",
@@ -10996,7 +11006,7 @@
               },
               h(NavIcon, { name: "settings", className: "h-4 w-4 shrink-0" }),
               !collapsed && h("span", null, "Settings")
-            )
+            ) : null
           ),
           h(
             "div",
