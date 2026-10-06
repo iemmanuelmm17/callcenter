@@ -10,7 +10,8 @@
     "test": "node tests/run.mjs",
     "test:js": "node tests/run.mjs js",
     "test:php": "node tests/run.mjs php",
-    "lint:php": "node tools/php-lint.mjs"
+    "lint:php": "node tools/php-lint.mjs",
+    "build:prod": "node tools/build.mjs --prod"
   },
   "devDependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.6",

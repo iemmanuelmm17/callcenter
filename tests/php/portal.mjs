@@ -77,6 +77,40 @@ check('React/ReactDOM/Chart.js are deferred scripts from this origin',
     return tag && tag.includes('defer') && !/https?:/.test(tag);
   }));
 
+/*
+ * QA-4: with a manifest present the deploy artifacts are the content-hashed
+ * files, each carrying the sha384 from the manifest; without one (a dev
+ * checkout) the unversioned dev build is used.
+ */
+const buildManifest = JSON.parse(readFileSync(path.join(ROOT, 'assets/build-manifest.json'), 'utf8'));
+await harness.write('assets/build-manifest.json', JSON.stringify(buildManifest));
+/* portal.php only serves the manifest when the named files are really there,
+ * so the sandbox needs them (their bytes are irrelevant to this check). */
+await harness.write(buildManifest.js.file, '/*prod bundle stub*/\n');
+await harness.write(buildManifest.css.file, '/*prod css stub*/\n');
+const prodHtml = await harness.script(`require '${TMP}/portal.php';`);
+check('with a manifest, the hashed stylesheet is loaded with its integrity',
+  prodHtml.includes('href="' + buildManifest.css.file + '"') &&
+    prodHtml.includes('integrity="sha384-' + buildManifest.css.sha384 + '"'),
+  buildManifest.css.file);
+check('with a manifest, the hashed bundle is loaded with its integrity',
+  prodHtml.includes('src="' + buildManifest.js.file + '"') &&
+    prodHtml.includes('integrity="sha384-' + buildManifest.js.sha384 + '"') &&
+    /<script[^>]+defer[^>]+src="assets\/js\/app\.[0-9a-f]{10}\.js"/.test(prodHtml),
+  buildManifest.js.file);
+check('the unversioned dev bundle is not referenced in a prod deploy',
+  !/src="assets\/js\/app\.js"/.test(prodHtml) && !/href="assets\/css\/app\.css"/.test(prodHtml));
+check('every prod tag exists on disk',
+  [buildManifest.js.file, buildManifest.css.file, ...refs].every(url => existsSync(path.join(ROOT, url))),
+  [buildManifest.js.file, buildManifest.css.file].filter(url => !existsSync(path.join(ROOT, url))));
+
+/* And the dev fallback: no manifest, unversioned names, no integrity needed. */
+await harness.write('assets/build-manifest.json', '{ not json');
+const devHtml = await harness.script(`require '${TMP}/portal.php';`);
+check('a malformed manifest falls back to the dev build instead of breaking',
+  /src="assets\/js\/app\.js"/.test(devHtml) && !/https?:/.test(devHtml.match(/<script[^>]+>/g).join('')),
+  devHtml.match(/<script[^>]+>/g).join(' ').slice(0, 160));
+
 check('the app bundle is still loaded',
   tags.some(t => /src="assets\/js\/app\.js"/.test(t)), tags.join(' ').slice(0, 160));
 

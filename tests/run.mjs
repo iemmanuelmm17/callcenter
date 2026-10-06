@@ -19,6 +19,13 @@ const which = (process.argv[2] || 'all').toLowerCase();
 
 const SUITES = {
   static: [
+    /*
+     * The dev build runs first: css-coverage, ui-audit and the jsdom smoke all
+     * read assets/js/app.js + assets/css/app.css, which are git-ignored build
+     * output (QA-4) — a fresh clone has no stylesheet until this step runs.
+     */
+    { name: 'build', cmd: ['node', 'tools/build.mjs'] },
+    { name: 'prod build', cmd: ['node', 'tools/prod-build.mjs'] },
     { name: 'php lint', cmd: ['node', 'tools/php-lint.mjs'] },
     { name: 'css coverage', cmd: ['node', 'tools/css-coverage.mjs'] },
     { name: 'ui audit', cmd: ['node', 'tools/ui-audit.mjs', '--strict'] },
@@ -28,7 +35,6 @@ const SUITES = {
     { name: 'vendor check', cmd: ['node', 'tools/vendor.mjs', '--check'] }
   ],
   js: [
-    { name: 'build', cmd: ['node', 'tools/build.mjs'] },
     { name: 'js smoke', cmd: ['node', 'tests/js/smoke.mjs'] },
     { name: 'aa fields', cmd: ['node', 'tests/js/aa-fields.mjs'] }
   ],

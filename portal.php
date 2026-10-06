@@ -17,6 +17,34 @@ if (is_readable($vendorPath)) {
     }
 }
 
+/*
+ * QA-4: in a deploy, the bundle and the stylesheet are content-hashed and
+ * named by assets/build-manifest.json (tools/build.mjs --prod). The manifest
+ * also carries their sha384, so our own two files are integrity-checked like
+ * the vendored ones. Without a manifest (a dev checkout) the unversioned dev
+ * build is used instead.
+ */
+$buildManifest = null;
+$buildPath = __DIR__ . '/assets/build-manifest.json';
+if (is_readable($buildPath)) {
+    $decoded = json_decode((string)file_get_contents($buildPath), true);
+    if (is_array($decoded) && isset($decoded['js']['file'], $decoded['css']['file'])
+        && is_file(__DIR__ . '/' . $decoded['js']['file']) && is_file(__DIR__ . '/' . $decoded['css']['file'])) {
+        $buildManifest = $decoded;
+    }
+}
+
+function assetTag(array $entry, string $kind): string
+{
+    $integrity = isset($entry['sha384'])
+        ? ' integrity="sha384-' . htmlspecialchars((string)$entry['sha384'], ENT_QUOTES) . '"'
+        : '';
+    if ($kind === 'js') {
+        return '  <script defer src="' . htmlspecialchars((string)$entry['file'], ENT_QUOTES) . '"' . $integrity . '></script>';
+    }
+    return '  <link rel="stylesheet" href="' . htmlspecialchars((string)$entry['file'], ENT_QUOTES) . '"' . $integrity . '>';
+}
+
 $asset = static function (string $relative): string {
     /* Cache-busting for our own files (QA-4): the build writes the hash into
      * the filename, so this is a straight path, but keep the helper in one
@@ -41,7 +69,12 @@ function vendorTag(array $entry): string
   <!-- Tabulator (JS + CSS) is injected on first use by the call modal: see
        ensureTabulator() in assets/js/src/lib/react.js. It reads the same
        manifest through the #vendor-manifest element at the end of <body>. -->
+<?php if ($buildManifest !== null): ?>
+<?= assetTag($buildManifest['css'], 'css') ?>
+
+<?php else: ?>
   <link rel="stylesheet" href="<?= $asset('assets/css/app.css') ?>">
+<?php endif; ?>
 <?php if ($vendorManifest === null): ?>
   <!-- assets/vendor/VENDOR.json is missing: run `node tools/vendor.mjs`. The
        app cannot load React without it, so say so instead of rendering blank. -->
@@ -56,7 +89,12 @@ function vendorTag(array $entry): string
 <body class="min-h-screen bg-slate-950 text-slate-200 antialiased">
   <div id="root"></div>
 
+<?php if ($buildManifest !== null): ?>
+<?= assetTag($buildManifest['js'], 'js') ?>
+
+<?php else: ?>
   <script defer src="<?= $asset('assets/js/app.js') ?>"></script>
+<?php endif; ?>
 <?php if ($vendorManifest !== null): ?>
   <!-- Integrity for the lazily injected Tabulator files, kept in one place
        (the manifest) instead of hard-coded in the bundle. -->

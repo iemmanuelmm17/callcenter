@@ -1,8 +1,9 @@
 # CallScope reporting
 
 Call-centre reporting dashboard for the Birns PBX: PHP endpoints under `api/`,
-a single-page React front end (`assets/js/app.js` + `assets/css/app.css`), and a
-JSON cache of PBX CDRs under `cache/`.
+a single-page React front end (deployed as `assets/js/app.<hash>.js` +
+`assets/css/app.<hash>.css`, built from `assets/*/src`), and a cache of PBX CDRs
+under `cache/`.
 
 ```
 index.php            → redirects into the app shell (portal.php)
@@ -11,10 +12,13 @@ api/*.php            → one endpoint per view (session + role gated, JSON in/ou
 includes/            → shared code: bootstrap, auth, security, export, PBX client, config
 includes/reporting/  → the reporting layer as modules, loaded by includes/reporting.php
                        outcomes.php holds the one definition of missed / abandoned
-assets/js/app.js     → BUILT bundle (generated — never edit by hand)
+assets/js/app.<hash>.js → DEPLOYED bundle (generated, minified, content-hashed)
+assets/css/app.<hash>.css → DEPLOYED stylesheet (same)
+assets/build-manifest.json → which hashed files to load + their sha384 (portal.php reads it)
+assets/vendor/       → vendored third-party libraries + fonts (see "Third-party assets")
 assets/js/src/       → bundle source (this is what you edit)
-assets/css/app.css   → BUILT stylesheet (generated — never edit by hand)
 assets/css/src/      → stylesheet source (Tailwind entry + hand-written CSS)
+assets/js/app.js, assets/css/app.css → dev build, unminified, NOT committed
 cache/, logs/        → runtime state, never committed (includes cdrs.sqlite, the
                        CDR day cache; see "CDR cache" below)
 tests/, tools/       → development harness (not deployed)
@@ -24,8 +28,35 @@ tests/, tools/       → development harness (not deployed)
 
 The deployed application is plain PHP + static files: copy `*.php`, `api/`,
 `includes/` **including `includes/reporting/`**, `assets/`, and `CHANGES.md` to
-the web root. There is no build step
-on the server and no database to migrate — the front end is the committed bundle.
+the web root. There is no build step on the server and no database to migrate —
+the front end is the committed prod bundle (`assets/js/app.<hash>.js`,
+`assets/css/app.<hash>.css`, named by `assets/build-manifest.json`).
+
+Cache the two hashed files hard (`Cache-Control: public, max-age=31536000,
+immutable`): their names change whenever their bytes do, so a deploy cannot be
+half-served. `npm run build:prod` before committing any source change — `npm
+test` fails if the committed pair is stale.
+
+## Third-party assets
+
+The page loads React, ReactDOM, Chart.js, Font Awesome and IBM Plex Mono from
+`assets/vendor/`, and Tabulator lazily from the same place. Nothing is fetched
+from a CDN and every tag carries an SRI hash, so the app works on a network that
+blocks the public internet — and a compromised CDN cannot run code in an
+authenticated session.
+
+```
+npm run build:prod   # also regenerates nothing here; vendor files change only when a version does
+node tools/vendor.mjs          # re-copy the vendored files from node_modules
+node tools/vendor.mjs --check  # verify their hashes (part of npm test)
+```
+
+Versions are pinned in `package.json` (devDependencies only), the files come out
+of those npm packages — never a CDN — and `assets/vendor/VENDOR.json` records
+each file's sha256/sha384 plus the upstream licenses in
+`assets/vendor/licenses/`. Bumping a version is: change the pin, `npm install`,
+`node tools/vendor.mjs`, `npm run build:prod`, commit. `tools/no-cdn.mjs` (in
+`npm test`) fails if a template or source starts referencing a CDN again.
 
 Configuration comes from the environment (`PBX_SERVERS`, `PBX_CLIENT_ID`,
 `PBX_CLIENT_SECRET`, `PBX_SIP_TOKEN`, …) or from `includes/config.local.php`,
@@ -89,15 +120,18 @@ production.
 ```
 npm install          # esbuild, Tailwind CLI, jsdom, acorn, php-parser, php-wasm
 npm test             # everything: lint, coverage, audits, build, js smoke, api matrix, cdr cache
-npm run build        # regenerate assets/js/app.js and assets/css/app.css from src/
+npm run build        # dev build: assets/js/app.js + assets/css/app.css (git-ignored)
+npm run build:prod   # deploy build: minified, content-hashed, writes assets/build-manifest.json
 npm run build:js     # JS only
 npm run build:css    # CSS only
 npm run lint:php     # syntax + banned-construct scan over every .php file
 ```
 
 * **Edit the sources under `assets/js/src/` and `assets/css/src/`, never the
-  built files.** `npm run build` rewrites both bundles; the build is
-  deterministic (identical sources → byte-identical output), so a rebuild that
+  built files.** `npm run build` rewrites the dev bundles; `npm run build:prod`
+  rewrites the deployed pair and the manifest, and `npm test` fails if the
+  committed pair is stale (`tools/prod-build.mjs` rebuilds and compares). The
+  build is deterministic (identical sources → byte-identical output), so a rebuild that
   produces no diff means the committed bundle really does match the source.
   `assets/js/src/app.js` is the entry point (React root + `App`); everything
   else lives in `lib/` (api, time, format, sla, recording, react helpers,
