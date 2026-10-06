@@ -1,3 +1,57 @@
+# CHANGES — Sprint A, phases 4-5: per-queue targets, ASA by interval, data quality
+
+## Per-queue service targets, now actually applied
+
+`api/queue.php` and `api/cradle.php` resolved one target for the whole period.
+They now resolve each queue's own target (`resolveQueueSlaSeconds`: queue id →
+extension → name → the report's target → the stored default) and:
+
+* judge calls against the queue's target, so `sla` means what the manager set;
+* publish the target with every figure that used it — `queueStats[].slaSeconds`
+  and `kpis.avgTargetSeconds` — so a mixed period is never labelled with one
+  queue's number. `kpis.perQueueTargets` says whether any override is in play.
+
+## ASA by interval
+
+`api/queue.php` gained `intervalSla`: 15/30/60-minute buckets (the request's
+`intervalMinutes`, defaulting to 60 and falling back on an unsupported value),
+each with `offered`, `answered`, `abandoned`, `asa`, `sla` and `slaMiss`. The
+review's point was that a 09:00 spike averaged into the month hides itself; now
+the 09:00 bucket says so. A test asserts the buckets sum to the period total.
+
+## Data quality (the review's F7, data half)
+
+`api/report.php` now ships `cacheStatus` (per-range readiness) and
+`dataQuality`: one entry per day in the range with its record count and whether
+the fetch that filled it **finished**. A day that stopped at the page cap is
+short, and until now nothing on screen said so — the appendix in Sprint C prints
+this, and the fact is now available wherever the numbers are. It also restates
+`hours` and `businessHoursConfigured`, so a reader can see the scope the numbers
+were computed over without opening the filter bar.
+
+## Lengthened window for the manager
+
+`includes/auth.php`: the 31-day span cap protects the PBX from a bookmarked
+multi-month URL (the day cache fetches a day at a time). It stays 31 days for
+every role except `office_manager`, who gets **366** — the person who produces
+the month-end and year-on-year reports is the one who should be able to ask for
+a year in one request. Counted as calendar days inclusive, so a "31 days" window
+is still exactly 31 days for everyone else.
+
+## Evidence
+
+`tests/php/report-metrics.mjs` grew two sections over a fresh day: two queues
+with different targets (15 s and 30 s) where each percentage is hand-computed and
+the mean target must be 21 s; an interval bucket that must hold 5 offered / 4
+answered / 1 abandoned with asa 23 s; cradle parity; and 15/60/1-60 interval
+sizes. For data quality: a configured calendar must flip the default scope to
+`business` and say so; `hours=all` and `hours=after` must report the scope they
+applied (and `after` must find nothing without erroring); and a deliberately
+partial day must come back incomplete with its resume point. `npm test` = 24
+suites green.
+
+---
+
 # CHANGES — Sprint A, phase 3: the list behind the card
 
 **What this phase is about.** Sprint A's filters are only useful if the list you

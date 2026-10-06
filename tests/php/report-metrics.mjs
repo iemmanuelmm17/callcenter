@@ -711,6 +711,169 @@ if (all.status === 200 && business.status === 200 && after.status === 200) {
     calls.status === 200 ? { total: calls.body.total, rows: drilled.length } : calls.log);
 }
 
+/* ======================= 6. per-queue targets, ASA by interval, data quality */
+
+console.log('\n== per-queue targets and ASA by interval ==');
+
+/*
+ * A fresh day (2026-08-17) so the day cache cannot serve an earlier fixture.
+ *
+ *   queue 700 (target 15 s): answered after 10 s (in), after 20 s (out), 1 abandon
+ *   queue 701 (target 30 s): answered after 20 s (in), after 40 s (out)
+ *
+ * Hand count: 700 sla = 1/2 = 50 %, 701 sla = 1/2 = 50 %.
+ * Mean target over the 5 matched rows = (15*3 + 30*2)/5 = 21 s.
+ * Interval 09:00 (60-minute buckets) holds every one of them: 5 offered,
+ * 4 answered, 1 abandoned, asa = (10+20+20+40)/4 = 22.5 -> 23 s.
+ */
+await harness.seedPbx('fetchCdrs', [
+  { id: 'q1', 'call-direction': 1, 'call-start-datetime': '2026-08-17T09:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-17T09:00:10Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-talking-duration-seconds': 30, 'call-orig-caller-id': '5552000001' },
+  { id: 'q2', 'call-direction': 1, 'call-start-datetime': '2026-08-17T09:05:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-17T09:05:20Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-talking-duration-seconds': 30, 'call-orig-caller-id': '5552000002' },
+  { id: 'q3', 'call-direction': 1, 'call-start-datetime': '2026-08-17T09:10:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-17T09:11:00Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-orig-caller-id': '5552000003' },
+  { id: 'q4', 'call-direction': 1, 'call-start-datetime': '2026-08-17T09:20:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-17T09:20:20Z[US/Eastern]', 'call-term-user': '6081',
+    'call-through-user': '701', 'call-talking-duration-seconds': 30, 'call-orig-caller-id': '5552000004' },
+  { id: 'q5', 'call-direction': 1, 'call-start-datetime': '2026-08-17T09:30:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-17T09:30:40Z[US/Eastern]', 'call-term-user': '6081',
+    'call-through-user': '701', 'call-talking-duration-seconds': 30, 'call-orig-caller-id': '5552000005' }
+]);
+await harness.seedPbx('callqueues', [
+  { callqueue: '700', description: 'Sales queue', site: 'HQ' },
+  { callqueue: '701', description: 'Support queue', site: 'HQ' }
+]);
+
+const queued = await harness.script(`
+require_once TEST_TMP . '/includes/reporting.php';
+saveDomainSettings('test.example', ['queueSla' => ['700' => 15, '701' => 30]]);
+echo json_encode(loadDomainSettings('test.example')['queueSla']);
+`);
+check('the queue targets are stored', parseJson(queued, '{', '}')?.['700'] === 15, queued.slice(0, 200));
+
+const queueRes = await harness.request('queue.php', {
+  body: { start: '2026-08-17', end: '2026-08-17', intervalMinutes: 60 },
+  user: USERS.office_manager,
+});
+check('queue.php returns 200', queueRes.status === 200, queueRes.log ?? queueRes.status);
+if (queueRes.status === 200) {
+  const Q = queueRes.body.data;
+  const byId = Object.fromEntries((Q.queueStats ?? []).map(r => [r.callqueue, r]));
+  check('each queue row carries the target it was measured against',
+    byId['700']?.slaSeconds === 15 && byId['701']?.slaSeconds === 30,
+    { 700: byId['700']?.slaSeconds, 701: byId['701']?.slaSeconds });
+  check('queue 700 is judged against 15 s: 1 of 2 answered in SLA = 50 %',
+    byId['700']?.sla === 50, byId['700']);
+  check('queue 701 is judged against 30 s: 1 of 2 answered in SLA = 50 %',
+    byId['701']?.sla === 50, byId['701']);
+  check('the mean target actually applied is 21 s ((15*3 + 30*2)/5)',
+    Q.kpis.avgTargetSeconds === 21, Q.kpis);
+  check('the payload says per-queue targets are in play',
+    Q.kpis.perQueueTargets === true && Q.kpis.slaSeconds === 20, Q.kpis);
+  /* The 09:00 interval holds all five calls; asa = (10+20+20+40)/4 = 22.5 -> 23 */
+  const nine = (Q.intervalSla ?? []).find(b => b.from === '09:00');
+  check('ASA by interval: 09:00 holds 5 offered / 4 answered / 1 abandoned',
+    nine && nine.offered === 5 && nine.answered === 4 && nine.abandoned === 1, nine);
+  check('the interval ASA is 23 s and its SLA is 2 of 4 = 50 %',
+    nine && nine.asa === 23 && nine.sla === 50, nine);
+  check('24 hourly buckets are published for intervalMinutes=60',
+    (Q.intervalSla ?? []).length === 24, (Q.intervalSla ?? []).length);
+  check('the interval buckets add up to the queue total',
+    (Q.intervalSla ?? []).reduce((a, b) => a + b.offered, 0) === Q.kpis.totalCalls,
+    { offered: (Q.intervalSla ?? []).reduce((a, b) => a + b.offered, 0), total: Q.kpis.totalCalls });
+}
+
+const quarter = await harness.request('queue.php', {
+  body: { start: '2026-08-17', end: '2026-08-17', intervalMinutes: 15 },
+  user: USERS.office_manager,
+});
+check('intervalMinutes=15 produces 96 buckets',
+  quarter.status === 200 && (quarter.body.data.intervalSla ?? []).length === 96,
+  quarter.status === 200 ? (quarter.body.data.intervalSla ?? []).length : quarter.log);
+check('an unsupported intervalMinutes falls back to hourly',
+  await (async () => {
+    const odd = await harness.request('queue.php', {
+      body: { start: '2026-08-17', end: '2026-08-17', intervalMinutes: 7 },
+      user: USERS.office_manager,
+    });
+    return odd.status === 200 && (odd.body.data.intervalSla ?? []).length === 24;
+  })(), 'expected 24 buckets');
+
+const cradleRes = await harness.request('cradle.php', {
+  body: { start: '2026-08-17', end: '2026-08-17', queue: '700' },
+  user: USERS.office_manager,
+});
+check('cradle.php applies the same per-queue target',
+  cradleRes.status === 200 && cradleRes.body.data.kpis.sla === 50
+    && cradleRes.body.data.kpis.perQueueTargets === true, cradleRes.status === 200 ? cradleRes.body.data.kpis : cradleRes.log);
+
+console.log('\n== data quality: what the reader cannot see from the numbers ==');
+
+const quality = await harness.request('report.php', {
+  body: { start: '2026-08-17', end: '2026-08-17', skipPrevious: true },
+  user: USERS.office_manager,
+});
+check('report.php ships cacheStatus and dataQuality',
+  quality.status === 200 && quality.body.cacheStatus && quality.body.dataQuality, quality.status);
+if (quality.status === 200) {
+  const D = quality.body.dataQuality;
+  check('one data-quality entry per requested day',
+    Object.keys(D.days).length === 1 && D.days['2026-08-17'] !== undefined, Object.keys(D.days));
+  check('a fully fetched day is marked complete with its record count',
+    D.days['2026-08-17'].complete === true && D.days['2026-08-17'].records === 5, D.days['2026-08-17']);
+  check('no incomplete or empty days are claimed', D.incompleteDays === 0 && D.emptyDays === 0, D);
+  /*
+   * A Monday-Friday calendar was saved earlier in this suite, so this request
+   * with no explicit scope must default to `business` and say so in the
+   * appendix - and, because all five calls sit at 09:xx, the numbers must be
+   * identical to the unscoped view.
+   */
+  check('a configured calendar makes business hours the default scope, and the appendix says so',
+    D.hours === 'business' && D.businessHoursConfigured === true, D);
+  check('cacheStatus agrees the range is complete',
+    quality.body.cacheStatus.complete === true && quality.body.cacheStatus.total === 1,
+    quality.body.cacheStatus);
+  const explicitAll = await harness.request('report.php', {
+    body: { start: '2026-08-17', end: '2026-08-17', skipPrevious: true, hours: 'all' },
+    user: USERS.office_manager,
+  });
+  check('asking for hours=all reports all, and finds the same calls (all are inside 08:00-18:00)',
+    explicitAll.status === 200 && explicitAll.body.dataQuality.hours === 'all'
+      && explicitAll.body.summary.counts.total === quality.body.summary.counts.total,
+    explicitAll.status === 200
+      ? { hours: explicitAll.body.dataQuality.hours, total: explicitAll.body.summary.counts.total, business: quality.body.summary.counts.total }
+      : explicitAll.log);
+  const explicitAfter = await harness.request('report.php', {
+    body: { start: '2026-08-17', end: '2026-08-17', skipPrevious: true, hours: 'after' },
+    user: USERS.office_manager,
+  });
+  check('hours=after on the same day finds nothing, and says so rather than erroring',
+    explicitAfter.status === 200 && explicitAfter.body.summary.counts.total === 0
+      && explicitAfter.body.dataQuality.hours === 'after',
+    explicitAfter.status === 200 ? explicitAfter.body.summary.counts.total : explicitAfter.log);
+}
+
+/*
+ * A day whose fetch stopped at the page cap is SHORT, and the whole point of
+ * the appendix is to say so. This writes the partial day the way the fetcher
+ * would and reads the flag back through the same helper the endpoint uses; the
+ * wiring itself is asserted above.
+ */
+const partialRaw = await harness.script(`
+require_once TEST_TMP . '/includes/reporting.php';
+$day = '2026-08-17';
+cdrDayCacheWrite('test.example', $day, [['id' => 'only-one']], false, 250, true);
+$meta = cdrDayCacheMeta('test.example', $day);
+echo json_encode(['complete' => !empty($meta['complete']), 'records' => (int)($meta['records'] ?? 0), 'nextOffset' => (int)($meta['nextOffset'] ?? 0)]);
+`);
+const partial = parseJson(partialRaw, '{', '}');
+check('a partial fetch is recorded as incomplete with its resume point',
+  partial && partial.complete === false && partial.records === 1 && partial.nextOffset === 250, partial);
+
 console.log('');
 if (failures.length) {
   console.log(`FAILED: ${failures.length} check(s)`);

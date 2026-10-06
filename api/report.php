@@ -162,6 +162,46 @@ if (
     $current = summary($calls, $slaSeconds, $directory, $queueIds, $settings);
 
     /*
+     * How complete the underlying data is. cdrRangeCacheStatus() says whether
+     * every day in the range is cached; the per-day detail adds the two facts a
+     * reader needs before quoting a number: how many records each day holds, and
+     * whether the fetch that filled it finished (a partial day is short).
+     */
+    $cacheStatus = cdrRangeCacheStatus(
+        $user,
+        (string)$filters['start'],
+        (string)$filters['end']
+    );
+    $dataQualityDays = [];
+    $incompleteDays = 0;
+    $emptyDays = 0;
+    foreach (reportingDateList((string)$filters['start'], (string)$filters['end']) as $date) {
+        $meta = cdrDayCacheMeta((string)($user['domain'] ?? ''), $date);
+        $complete = !empty($meta['complete']);
+        $records = (int)($meta['records'] ?? 0);
+        if (!$complete) {
+            $incompleteDays++;
+        }
+        if ($complete && $records === 0) {
+            $emptyDays++;
+        }
+        $dataQualityDays[$date] = [
+            'records' => $records,
+            'complete' => $complete,
+            'cached' => !empty($meta['exists']),
+        ];
+    }
+    $dataQuality = [
+        'days' => $dataQualityDays,
+        'incompleteDays' => $incompleteDays,
+        'emptyDays' => $emptyDays,
+        /* The scope the numbers were computed over, restated where a reader can
+         * see it without opening the filter bar. */
+        'hours' => (string)($filters['hours'] ?? 'all'),
+        'businessHoursConfigured' => businessHoursConfigured($settings),
+    ];
+
+    /*
      * Sprint A: the links layer. Transfers, the returned-call worklist and the
      * repeat callers are derived from the SAME scoped row set as every other
      * number in this payload, so the hours filter, the department filter and the
@@ -390,6 +430,15 @@ $current['topAgents'] = $topAgents;
 		/* The settings actually used for the numbers above, not a second read:
 		 * a file written between the two reads would have shipped a threshold
 		 * that did not colour these figures. */
+		/*
+		 * Data quality (the review's F7). Every published figure is only as good
+		 * as the day files behind it, and a day whose fetch stopped at the page
+		 * cap is silently short: the numbers understate and nothing on screen
+		 * says so. The appendix in Sprint C prints this; it ships here so the
+		 * fact is available wherever the numbers are.
+		 */
+		'cacheStatus' => $cacheStatus,
+		'dataQuality' => $dataQuality,
 		'settings' => $settings,
 		'timezone' => DEFAULT_TIMEZONE
 	]);

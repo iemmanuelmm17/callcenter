@@ -26,6 +26,16 @@ try {
      * (domain settings default, clamped 1..120).
      */
     $slaSeconds = resolveSlaSeconds($requested, $user);
+    /*
+     * Per-queue target for the queue being inspected (Sprint A). The cradle is
+     * one queue, so this is the whole story: the target the KPI is measured
+     * against, and the one published with it.
+     */
+    $settings = loadDomainSettings((string)($user['domain'] ?? ''));
+    $settingsForSla = array_merge($settings, ['slaSeconds' => $slaSeconds]);
+    $queueTarget = static function (string $queue) use ($settingsForSla): int {
+        return resolveQueueSlaSeconds($settingsForSla, $queue);
+    };
 
     $queues = cachedCallQueues($user);
     $allQueueIds = [];
@@ -152,6 +162,8 @@ try {
     $talkSum = 0;
     $talkN = 0;
     $slaHit = 0;
+    $avgTargetSum = 0;
+    $avgTargetN = 0;
     $posSum = 0;
     $neuSum = 0;
     $negSum = 0;
@@ -300,11 +312,13 @@ try {
             continue;
         }
         $queueStats[$through]['totalCalls']++;
+        $queueStats[$through]['slaSeconds'] = $queueTarget($through);
         if ($answeredCall) {
             $queueStats[$through]['answered']++;
             $queueStats[$through]['waitSum'] += $wait;
             $queueStats[$through]['waitN']++;
-            if ($wait <= $slaSeconds) {
+            /* Judged against this queue's own target. */
+            if ($wait <= $queueTarget($through)) {
                 $queueStats[$through]['slaHit']++;
             }
             if ($talk > 0) {
@@ -329,11 +343,14 @@ try {
         $answeredCall = callAnswered($row);
         $abandonedCall = callOutcome($row, $directory, $queueIds, $answeredCall) === 'abandoned';
 
+        $rowTarget = $queueTarget($through);
+        $avgTargetSum += $rowTarget;
+        $avgTargetN++;
         if ($answeredCall) {
             $answered++;
             $waitSum += $wait;
             $waitN++;
-            if ($wait <= $slaSeconds) {
+            if ($wait <= $rowTarget) {
                 $slaHit++;
             }
             if ($talk > 0) {
@@ -592,6 +609,8 @@ try {
                 'avgTalk' => $talkN ? (int)round($talkSum / $talkN) : 0,
                 'answerRate' => $offered ? round(($answered / $offered) * 100, 1) : 0,
                 'slaSeconds' => $slaSeconds,
+                'avgTargetSeconds' => $avgTargetN > 0 ? (int)round($avgTargetSum / $avgTargetN) : $slaSeconds,
+                'perQueueTargets' => is_array($settings['queueSla'] ?? null) && $settings['queueSla'] !== [],
             ],
             'hours' => $hours,
             'outcomes' => [
