@@ -23,7 +23,9 @@ const SUITES = {
     { name: 'css coverage', cmd: ['node', 'tools/css-coverage.mjs'] },
     { name: 'ui audit', cmd: ['node', 'tools/ui-audit.mjs', '--strict'] },
     { name: 'module budget', cmd: ['node', 'tools/module-budget.mjs'] },
-    { name: 'dead code', cmd: ['node', 'tools/dead-code.mjs', '--strict'] }
+    { name: 'dead code', cmd: ['node', 'tools/dead-code.mjs', '--strict'] },
+    { name: 'no cdn', cmd: ['node', 'tools/no-cdn.mjs'] },
+    { name: 'vendor check', cmd: ['node', 'tools/vendor.mjs', '--check'] }
   ],
   js: [
     { name: 'build', cmd: ['node', 'tools/build.mjs'] },
@@ -36,7 +38,8 @@ const SUITES = {
     { name: 'csv exports', cmd: ['node', 'tests/php/export.mjs'] },
     { name: 'cdr store', cmd: ['node', 'tests/php/cdr-store.mjs'] },
     { name: 'cdr cache', cmd: ['node', 'tests/php/cdr-cache.mjs'] },
-    { name: 'outcome parity', cmd: ['node', 'tests/php/outcomes.mjs'] }
+    { name: 'outcome parity', cmd: ['node', 'tests/php/outcomes.mjs'] },
+    { name: 'portal', cmd: ['node', 'tests/php/portal.mjs'] }
   ]
 };
 

@@ -10,7 +10,17 @@
       handler(event);
     }
   };
-  var TABULATOR_BASE = "https://unpkg.com/tabulator-tables@6.3.1/dist/";
+  var TABULATOR_BASE = "assets/vendor/tabulator/";
+  var vendorIntegrity = (key) => {
+    try {
+      const node = document.getElementById("vendor-manifest");
+      if (!node) return "";
+      const parsed = JSON.parse(node.textContent || "{}");
+      return parsed && parsed[key] && parsed[key].integrity || "";
+    } catch (e) {
+      return "";
+    }
+  };
   var tabulatorPromise = null;
   var ensureTabulator = () => {
     if (typeof window !== "undefined" && window.Tabulator) return Promise.resolve(window.Tabulator);
@@ -25,13 +35,17 @@
       };
       const css = document.createElement("link");
       css.rel = "stylesheet";
-      css.href = TABULATOR_BASE + "css/tabulator_midnight.min.css";
+      css.href = TABULATOR_BASE + "tabulator_midnight.min.css";
+      const cssIntegrity = vendorIntegrity("tabulatorCss");
+      if (cssIntegrity) css.integrity = cssIntegrity;
       css.onload = css.onerror = () => {
         cssReady = true;
         settle();
       };
       document.head.appendChild(css);
       const script = document.createElement("script");
+      const jsIntegrity = vendorIntegrity("tabulatorJs");
+      if (jsIntegrity) script.integrity = jsIntegrity;
       script.src = TABULATOR_BASE + "js/tabulator.min.js";
       script.onload = () => {
         jsReady = true;
@@ -153,20 +167,6 @@
     }
   };
   applyTheme(readTheme());
-  if (!document.getElementById("fa-icons")) {
-    const fa = document.createElement("link");
-    fa.id = "fa-icons";
-    fa.rel = "stylesheet";
-    fa.href = "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css";
-    document.head.appendChild(fa);
-  }
-  if (!document.getElementById("plex-mono")) {
-    const plex = document.createElement("link");
-    plex.id = "plex-mono";
-    plex.rel = "stylesheet";
-    plex.href = "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600;700&display=swap";
-    document.head.appendChild(plex);
-  }
 
   // assets/js/src/components/ui.js
   function SlaControl({ value: value2, onChange }) {

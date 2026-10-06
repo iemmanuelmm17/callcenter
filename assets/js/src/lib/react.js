@@ -16,7 +16,23 @@ const keyActivate = handler => event => {
     }
   };
 
-const TABULATOR_BASE = 'https://unpkg.com/tabulator-tables@6.3.1/dist/';
+/*
+ * QA-3: Tabulator is vendored (tools/vendor.mjs) and served from this origin.
+ * portal.php renders the integrity hashes into #vendor-manifest so a lazily
+ * injected script is checked the same way a <script> tag would be.
+ */
+const TABULATOR_BASE = 'assets/vendor/tabulator/';
+
+const vendorIntegrity = key => {
+    try {
+      const node = document.getElementById('vendor-manifest');
+      if (!node) return '';
+      const parsed = JSON.parse(node.textContent || '{}');
+      return (parsed && parsed[key] && parsed[key].integrity) || '';
+    } catch (e) {
+      return '';
+    }
+  };
 
 let tabulatorPromise = null;
 
@@ -33,11 +49,15 @@ const ensureTabulator = () => {
       };
       const css = document.createElement('link');
       css.rel = 'stylesheet';
-      css.href = TABULATOR_BASE + 'css/tabulator_midnight.min.css';
+      css.href = TABULATOR_BASE + 'tabulator_midnight.min.css';
+      const cssIntegrity = vendorIntegrity('tabulatorCss');
+      if (cssIntegrity) css.integrity = cssIntegrity;
       /* A missing stylesheet must not block the table itself. */
       css.onload = css.onerror = () => { cssReady = true; settle(); };
       document.head.appendChild(css);
       const script = document.createElement('script');
+      const jsIntegrity = vendorIntegrity('tabulatorJs');
+      if (jsIntegrity) script.integrity = jsIntegrity;
       script.src = TABULATOR_BASE + 'js/tabulator.min.js';
       script.onload = () => { jsReady = true; settle(); };
       script.onerror = () => reject(new Error('Tabulator failed to load'));
