@@ -17,13 +17,13 @@ const TREND_NOISE_THRESHOLD = 2.0;
 const HISTORICAL_CDR_START_DATE = '2021-01-01';
 
 const PBX_SERVERS = [
-    'nms1' => 'https://nms1.nyc.birns.net',
-    'nms2' => 'https://nms2.nyc.birns.net',
+    'nms1' => '',
+    'nms2' => '',
 ];
 
 // Prefer environment variables in production; these defaults intentionally contain no credentials.
-const PBX_CLIENT_ID = 'report';
-const PBX_CLIENT_SECRET = 'daffafeef50bf0562ddf5b158a75c5d6';
+const PBX_CLIENT_ID = '';
+const PBX_CLIENT_SECRET = '';
 
 define('PBX_RATE_LIMIT_REQUESTS', 5);
 define('PBX_RATE_LIMIT_WINDOW', 1.0);

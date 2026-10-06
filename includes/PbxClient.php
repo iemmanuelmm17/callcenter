@@ -1519,7 +1519,7 @@ final class PbxClient
 
         appLog('SIPFlow GET ' . $pathAndQuery);
 
-        $sipToken = 'nss_xCNC1sJHnLV5aQDxbe0W0FSeTNIgw60JLzSRzru9teOkkSLyf3fca144';
+        $sipToken = '';
 
         foreach (array_keys(PBX_SERVERS) as $server) {
             try {

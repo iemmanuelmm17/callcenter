@@ -1,0 +1,26 @@
+# ---------------------------------------------------------------------------
+# Never commit runtime state: these directories hold caller records, tenant
+# domains, PBX cache payloads and audit trails.
+# ---------------------------------------------------------------------------
+/cache/
+/logs/
+*.log
+*.jsonl
+
+# ---------------------------------------------------------------------------
+# Local configuration and secrets. Deployment values live in the environment
+# (PBX_SERVERS, PBX_CLIENT_ID, PBX_CLIENT_SECRET, PBX_SIP_TOKEN, ...) or in
+# includes/config.local.php, which must stay on the server.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+/includes/config.local.php
+
+# ---------------------------------------------------------------------------
+# Tooling / editor noise
+# ---------------------------------------------------------------------------
+/node_modules/
+.DS_Store
+Thumbs.db
+*.swp
