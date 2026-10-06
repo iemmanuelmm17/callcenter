@@ -1,3 +1,126 @@
+# CHANGES — SQLite CDR store behind a config switch (P5)
+
+**Scope:** the CDR day cache now has two backends behind one interface. The
+JSON day files are still there and still the default when the runtime has no
+SQLite. No endpoint contract changed (one additive field, see below); the
+reporting layer, the exports and the front end are untouched.
+
+**Files:** `includes/reporting/cdr_store.php` (new, ~560 lines),
+`includes/reporting/cache.php` (rewritten as a two-backend day cache),
+`includes/config.php` + `includes/config.local.example.php` (the switch),
+`api/cache_job.php` (reports the backend), `tools/cdr-cache.php` (new CLI),
+`tests/php/cdr-store.mjs` + `tests/php/cdr-cache.mjs` (new suites),
+`tests/php/fixtures/cdr-store-double.php` (new), `tests/php/php.mjs`
+(multi-page PBX stub), `tools/php-lint.mjs` (fixed false positive + self-test),
+`tools/reporting-modules.json` (historian's note).
+
+## Why SQLite, and what the day cache looked like
+
+The cache was one JSON file per day (`cache/cdr-day-<sha256>.json`, 2–4 MB,
+62 files / 169 MB on the current deployment). Every fetch page rewrote the whole
+file, "is this day complete?" could only be answered by reading the entire day,
+and nothing could be queried. The store keeps the same contract in a database:
+
+| | json (before) | sqlite (now) |
+| --- | --- | --- |
+| write per fetch page | whole day, 2× per page (callback + return) | one insert per new record |
+| resume of a partial day | rewrite the day | append from `next_offset` |
+| completeness | parse the file | one row in `cdr_days` |
+| queries | none | indexed `start_ts`, `kind`, `agent` |
+| atomicity | last writer wins | per-page transaction, WAL |
+
+## Schema
+
+```
+cdr_days    (domain, tz, day) → complete, next_offset, record_count, fetched_at
+cdr_records (domain, tz, day, cdr_key) → seq, start_ts, kind, agent, department, site, raw
+```
+
+* `raw` is the complete CDR as the PBX returned it — the source of truth. The
+  derived columns are a snapshot computed **without** the PBX user directory,
+  so they are used for indexing, statistics and the CLI only; the reporting
+  layer still classifies every row with the live directory, because `_type`,
+  `_agent`, `_department` and `_site` depend on it.
+* The timezone is part of the primary key, exactly like the JSON filenames hash
+  it in: changing `DEFAULT_TIMEZONE` invalidates the cache instead of silently
+  mixing two definitions of "a day".
+* Indexes: `(day, seq)` for the range read, `(kind, start_ts)`, `(agent,
+  start_ts)`, `(start_ts)`. `department`/`site` are deliberately unindexed (low
+  cardinality, one day is scanned anyway, every index costs write time).
+* `PRAGMA journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`,
+  `auto_vacuum=INCREMENTAL`; a non-WAL filesystem is logged, not fatal.
+* `user_version` carries the schema version; a file from a newer build is
+  refused with a log line instead of being written to.
+
+## The switch
+
+```php
+define('CDR_CACHE_DRIVER', 'auto');   // default: sqlite when pdo_sqlite exists, else json
+// 'sqlite' or 'json' to force one
+define('CDR_STORE_FILE', '');         // default CACHE_DIR/cdrs.sqlite
+```
+Also settable by environment variable. Reading an existing JSON day file keeps
+working while the store is selected (so flipping the switch does not cold-start
+the cache); writing goes to the selected backend only, which is the point.
+
+## Migrating a live deployment
+
+```
+php tools/cdr-cache.php status                      # driver, size, days, records
+php tools/cdr-cache.php import <domain> --delete-json
+php tools/cdr-cache.php verify <domain>             # json vs store, record by record
+php tools/cdr-cache.php days <domain>               # what is stored
+php tools/cdr-cache.php prune <domain> <before-day> --vacuum
+```
+`import` reads each day file, splits it by the local date of its records, writes
+each day through the same code the web app uses, and reports per day;
+`--delete-json` removes a file only after its records are stored, and `verify`
+compares keys and completeness before you delete anything.
+
+## What else changed
+
+* **Two full writes per fetch page are gone.** `PbxClient::fetchCdrs()` hands
+  the accumulated list to the callback *and* returns it, and the old code stored
+  both — a whole-day JSON rewrite twice per page, and now a whole-day
+  delete + re-insert twice per page. The cache writes the page once; the return
+  value only refreshes completeness/offset. On a fresh fetch the day is replaced
+  by the **first** page and every later page appends, so a 100k-record day costs
+  400 small transactions instead of 400 delete-and-reinsert cycles.
+* `api/cache_job.php` reports `driver` (additive; the UI ignores it).
+* `tools/php-lint.mjs` banned `$pdo->exec(...)` and `function exec(...)` as
+  "shell execution" — a real false positive on the new code. The rule now has a
+  lookbehind for `->`/`::`/`function `, and the lint **self-tests every rule in
+  both directions** at startup so an edit that neuters a security rule fails
+  loudly instead of quietly.
+
+## Verification
+
+`npm test`: 12 suites, all green — php lint, css coverage, ui audit --strict,
+module budget, dead code --strict, build, js smoke, api matrix 86 checks, url
+policy 62, csv exports 17, **cdr store 34 checks**, **cdr cache 41 checks**.
+
+* `tests/php/cdr-store.mjs` executes the store's own SQL against real SQLite
+  (`node:sqlite`): schema applies, the upsert is idempotent, `record_count`
+  tracks records, a resumed fetch appends only new rows, a replace drops the old
+  day, days are keyed per domain and per timezone.
+* `tests/php/cdr-cache.mjs` runs the real PHP cache against both backends and
+  asserts the behaviour that matters: first request fetches and stores, second
+  request answers **without touching the PBX**, a partial day resumes from its
+  `next_offset`, a multi-page fetch inserts each record exactly once and deletes
+  the day once, an expired day is refetched and replaced without duplicating
+  rows, and the endpoints (report.php, cache_job.php) answer unchanged with the
+  store selected. The operator CLI is covered too (status, usage, the refusal to
+  import without `--force` on the json driver, import, verify, prune, vacuum).
+* **Honest limitation:** the PHP runtime in this container (php-wasm) has no
+  `pdo_sqlite`, so the PHP-side suite drives the store through a recording
+  connection double (`tests/php/fixtures/cdr-store-double.php`), and the real
+  SQLite run happens in Node. That is why `CDR_CACHE_DRIVER` defaults to `auto`:
+  on a host without the extension nothing changes at all. The first thing to run
+  on the real server is `php tools/cdr-cache.php status`, which prints whether
+  pdo_sqlite is there and what the store would contain.
+
+---
+
 # CHANGES — assets/js/src/app.js (12,292 lines) split into 25 ES modules (P4b)
 
 **Scope:** structure only. Every declaration keeps its exact source text; the

@@ -14,7 +14,8 @@ assets/js/app.js     → BUILT bundle (generated — never edit by hand)
 assets/js/src/       → bundle source (this is what you edit)
 assets/css/app.css   → BUILT stylesheet (generated — never edit by hand)
 assets/css/src/      → stylesheet source (Tailwind entry + hand-written CSS)
-cache/, logs/        → runtime state, never committed
+cache/, logs/        → runtime state, never committed (includes cdrs.sqlite, the
+                       CDR day cache; see "CDR cache" below)
 tests/, tools/       → development harness (not deployed)
 ```
 
@@ -29,6 +30,22 @@ Configuration comes from the environment (`PBX_SERVERS`, `PBX_CLIENT_ID`,
 `PBX_CLIENT_SECRET`, `PBX_SIP_TOKEN`, …) or from `includes/config.local.php`,
 which stays on the server (it is git-ignored).
 
+## CDR cache
+
+The raw PBX CDRs are cached per day (domain + timezone + date) so a report does
+not refetch history. Two backends, chosen by `CDR_CACHE_DRIVER`:
+
+| value | storage | when |
+| --- | --- | --- |
+| `auto` (default) | SQLite when `pdo_sqlite` is available, else JSON | start here |
+| `sqlite` | `cache/cdrs.sqlite` (`cdr_days` + `cdr_records`) | after checking `status` |
+| `json` | `cache/cdr-day-<sha256>.json`, one file per day | previous behaviour |
+
+Move an existing deployment over with `php tools/cdr-cache.php` (status, import,
+verify, days, prune) — see `CHANGES.md` for what each command guarantees. Until a
+day has been imported, the JSON file for it is still read, so the switch can be
+flipped without a cold cache.
+
 ## Development
 
 `package.json` exists **only** for the development toolchain; it is not needed in
@@ -36,7 +53,7 @@ production.
 
 ```
 npm install          # esbuild, Tailwind CLI, jsdom, acorn, php-parser, php-wasm
-npm test             # everything: php lint, css coverage, build, js smoke, api matrix
+npm test             # everything: lint, coverage, audits, build, js smoke, api matrix, cdr cache
 npm run build        # regenerate assets/js/app.js and assets/css/app.css from src/
 npm run build:js     # JS only
 npm run build:css    # CSS only
@@ -63,4 +80,7 @@ npm run lint:php     # syntax + banned-construct scan over every .php file
   must be loaded on demand. Run it on its own for the full report.
 * `tests/js/` runs the real bundle in jsdom with React and Chart stubs;
   `tests/php/` executes every `api/*.php` under real PHP 8.4 (php-wasm) and
-  asserts the session/method/role gates and the response contract.
+  asserts the session/method/role gates and the response contract. The CDR
+  store's SQL is executed against real SQLite through `node:sqlite` (the PHP
+  runtime here has no `pdo_sqlite`), and the PHP cache is exercised against both
+  backends with a recording connection double.

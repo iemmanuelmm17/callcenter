@@ -32,7 +32,9 @@ const SUITES = {
   php: [
     { name: 'api matrix', cmd: ['node', 'tests/php/endpoints.mjs'] },
     { name: 'url policy', cmd: ['node', 'tests/php/security.mjs'] },
-    { name: 'csv exports', cmd: ['node', 'tests/php/export.mjs'] }
+    { name: 'csv exports', cmd: ['node', 'tests/php/export.mjs'] },
+    { name: 'cdr store', cmd: ['node', 'tests/php/cdr-store.mjs'] },
+    { name: 'cdr cache', cmd: ['node', 'tests/php/cdr-cache.mjs'] }
   ]
 };
 

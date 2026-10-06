@@ -29,6 +29,9 @@ try {
 
     $status['start'] = $filters['start'];
     $status['end'] = $filters['end'];
+    /* Which backend is warming the range; the UI shows the progress bar for
+     * both, this only makes it visible in the response/audit trail. */
+    $status['driver'] = cdrCacheDriver();
     $status['warming'] = $action === 'warm' && empty($status['complete']);
 
     jsonResponse($status);
