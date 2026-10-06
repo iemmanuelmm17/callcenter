@@ -4,7 +4,10 @@
  * tools/split-js-file.mjs. The body below is byte-identical to the
  * original source — the move is verified by declaration hash. */
 
-import { AgentCompare, AgentOverview, AgentPerformanceTable, Agents } from './agents.js';
+import { AgentCompare } from './agent-compare.js';
+import { AgentOverview } from './agent-overview.js';
+import { AgentPerformanceTable } from './agent-table.js';
+import { Agents } from './agents.js';
 import { AutoAttendantReport } from './auto-attendant-report.js';
 import { AutoAttendants } from './auto-attendants.js';
 import { CallHistoryDashboard } from './call-history.js';
