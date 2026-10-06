@@ -634,6 +634,104 @@ console.log('\n== QA-5: the settings panel is role-gated ==');
   }
 }
 
+console.log('\n== filter date-range picker (calendar popup) ==');
+{
+  /*
+   * The popup is a portal into document.body and was never exercised by this
+   * suite, which is exactly where a moved calendar helper could go missing: the
+   * route still renders, the popup only breaks when it is opened. Drive it for
+   * real - open, page back a month, pick two days, apply.
+   */
+  await goTo('Dashboard');
+  await flush(10);
+  const trigger = [...document.querySelectorAll('button')].find(b => (b.textContent || '').includes('▣'));
+  check('the date-range trigger is in the filter bar', !!trigger, root().textContent.slice(0, 120));
+  if (trigger) {
+    const popup = () => document.querySelector('.date-picker-pop');
+    await click(trigger);
+    await flush(6);
+
+    const headingOf = () => {
+      const pop = popup();
+      if (!pop) return undefined;
+      return [...pop.querySelectorAll('div')]
+        .map(el => (el.textContent || '').trim())
+        .find(text => new RegExp('^[A-Z][a-z]+ [0-9]{4}$').test(text));
+    };
+    const navButton = glyph => {
+      const pop = popup();
+      return pop && [...pop.querySelectorAll('button')].find(b => (b.textContent || '').trim() === glyph);
+    };
+    const dayCells = () => {
+      const pop = popup();
+      if (!pop) return [];
+      return [...pop.querySelectorAll('button')].filter(b => {
+        const text = (b.textContent || '').trim();
+        return text.length > 0 && text.length <= 2 && new RegExp('^[0-9]+$').test(text) && b.classList.contains('h-8');
+      });
+    };
+    const applyButton = () => {
+      const pop = popup();
+      return pop && [...pop.querySelectorAll('button')].find(b => (b.textContent || '').trim() === 'Apply');
+    };
+
+    const firstHeading = headingOf();
+    check('the calendar opens on a month', !!firstHeading, firstHeading);
+    const weekDayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+    check('weekday headers come from the calendar module',
+      weekDayLabels.every(day => document.body.textContent.includes(day)));
+    const thisMonthDays = dayCells().length;
+    check('the grid holds 28-31 day cells', thisMonthDays >= 28 && thisMonthDays <= 31, thisMonthDays);
+    check('a day cell carries the start/end selection classes',
+      dayCells().every(b => b.classList.contains('h-8')), dayCells().length);
+
+    const prev = navButton('‹');
+    check('the month back/forward controls are rendered', !!prev && !!navButton('›'));
+    await click(prev);
+    await flush(4);
+    const previousHeading = headingOf();
+    check('paging back changes the month and keeps a full grid',
+      previousHeading !== firstHeading && dayCells().length >= 28,
+      [firstHeading, previousHeading, dayCells().length]);
+
+    const days = dayCells();
+    const firstDay = days[0];
+    await click(firstDay);
+    await flush(3);
+    await click(dayCells()[dayCells().length - 1]);
+    await flush(3);
+    const apply = applyButton();
+    check('a complete range enables Apply', !!apply && apply.disabled === false,
+      apply && apply.outerHTML.slice(0, 140));
+
+    requested.length = 0;
+    if (apply) await click(apply);
+    await flush(10);
+    check('applying a range closes the popup and shows both dates',
+      !popup() && trigger.textContent.includes('–'), trigger.textContent);
+    check('applying a range refetches the report',
+      requested.some(r => r.endpoint === 'report'), requested.map(r => r.endpoint).join(','));
+
+    /* The two dates shown must be the two that were clicked, and the picker's
+     * own rules (never in the future, at most MAX_RANGE_DAYS) must hold. */
+    const shown = [...trigger.textContent.matchAll(new RegExp('([A-Z][a-z]{2}) ([0-9]{1,2}), ([0-9]{4})', 'g'))]
+      .map(m => new Date(m[1] + ' ' + m[2] + ', ' + m[3]));
+    check('a complete local date range is shown',
+      shown.length === 2 && shown.every(d => !Number.isNaN(d.getTime())) && shown[0] <= shown[1],
+      trigger.textContent);
+    check('the applied range is never in the future and spans at most 31 days',
+      shown.length === 2 && shown[1].getTime() <= Date.now() + 864e5 &&
+        (shown[1] - shown[0]) / 864e5 < 31,
+      trigger.textContent);
+    check('the first clicked day is the start of the range',
+      shown.length === 2 && shown[0].getDate() === Number((firstDay.textContent || '').trim()) &&
+        shown[0].getMonth() === new Date(previousHeading + ' 1').getMonth(),
+      [firstDay.textContent, trigger.textContent, previousHeading]);
+    check('the picker left no calendar behind in the DOM', !popup());
+  }
+  check('the date-range picker threw nothing', errors.length === 0, errors.slice(0, 2));
+}
+
 console.log('\n== global error budget ==');
 check('no unexpected runtime errors', errors.length === 0, errors.slice(0, 5).join(' | '));
 const uniqueWarnings = [...new Set(warnings)];
