@@ -5,7 +5,7 @@
  * original source — the move is verified by declaration hash. */
 
 import { SimultaneousCallsPanel } from './simultaneous.js';
-import { Tooltip, skel, skelPanel } from './ui.js';
+import { ErrorState, Tooltip, skel, skelPanel } from './ui.js';
 import { api, apiDownload } from '../lib/api.js';
 import { fmt, fmtNum, fmtPct, formatPhoneNumber } from '../lib/format.js';
 import { h, useEffect, useMemo, useRef, useState } from '../lib/react.js';
@@ -235,7 +235,7 @@ function TelephoneNumbersTable({data,loading, filters, onTelephoneClick}) {
     }
 
     return h('section', {className: 'border border-slate-700 bg-slate-900'},
-        error ? h('div', {className: 'border-b border-rose-900 bg-rose-950/30 p-2 text-[11px] text-rose-300'}, error) : null,
+        error ? h(ErrorState, {message: error, onRetry: () => setReload(n => n + 1), className: 'border-x-0 border-t-0 p-2 text-[11px]'}) : null,
         h('div', {className: 'overflow-x-auto'},
             h('table', {className: 'w-full min-w-[1200px] text-xs q-table'},
                 h('thead', null,
@@ -542,17 +542,6 @@ function TelephoneNumbersGraphs({charts, numbers, onNumberClick}) {
   }, [duration.map(d => d.count).join('|')]);
 
   const topMax = Math.max(1, ...top.map(n => n.calls));
-  const formatTopNumber = value => {
-    const digits = String(value || '').replace(/\D/g, '');
-    if (digits.length === 10) {
-      return `(${digits.slice(0,3)}) ${digits.slice(3,6)}-${digits.slice(6)}`;
-    }
-    if (digits.length === 11 && digits.startsWith('1')) {
-      return `(${digits.slice(1,4)}) ${digits.slice(4,7)}-${digits.slice(7)}`;
-    }
-    return value || '';
-  };
-
   const panel = (title, hint, body, extra) => h('section', {className:'border border-slate-700 bg-slate-900 p-2 ' + (extra||'')},
     h('div', {className:'mb-1 flex items-center justify-between'},
       h('h3', {className:'text-[10px] font-semibold uppercase tracking-wide text-slate-400'}, title),
@@ -602,11 +591,11 @@ function TelephoneNumbersGraphs({charts, numbers, onNumberClick}) {
               return h('button', {
                 key: n.number,
                 type: 'button',
-                title: 'Open the inbound calls to ' + formatTopNumber(n.number),
+                title: 'Open the inbound calls to ' + formatPhoneNumber(n.number),
                 onClick: () => onNumberClick && onNumberClick(n.number),
                 className: 'flex w-full cursor-pointer items-center gap-2 text-left'
               },
-                h('span', {className:'w-24 shrink-0 truncate font-mono text-[10px] text-slate-400'}, formatTopNumber(n.number)),
+                h('span', {className:'w-24 shrink-0 truncate font-mono text-[10px] text-slate-400'}, formatPhoneNumber(n.number)),
                 h('span', {className:'min-w-0 flex-1'},
                   h('span', {className:'block h-3 rounded-sm bg-cyan-600/70', style:{width: pct + '%'}})
                 ),
@@ -660,6 +649,7 @@ function TelephoneNumbers({filters, onCallClick}) {
   const [typeFilter, setTypeFilter] = useState('all');
   const [hideZeroCalls, setHideZeroCalls] = useState(false);
   const [tnView, setTnView] = useState('inventory');
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -676,12 +666,12 @@ function TelephoneNumbers({filters, onCallClick}) {
     }).catch(err => {
       if (cancelled) return;
       setNumbers([]);
-      setError(err?.message || 'Failed to load telephone numbers.');
+      setError(err?.message || 'Unable to load telephone numbers.');
     }).finally(() => {
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [filters?.start, filters?.end, filters?.department, filters?.site]);
+  }, [filters?.start, filters?.end, filters?.department, filters?.site, reload]);
 
   const term = search.toLowerCase().trim();
   const unusedCount = numbers.filter(p => tnCallVolume(p) === 0).length;
@@ -719,7 +709,7 @@ function TelephoneNumbers({filters, onCallClick}) {
 
   if (error) {
     return h('section', {className:'min-w-0 flex-1 overflow-auto p-3'},
-      h('section', {className:'border border-red-900 bg-slate-900 p-4 text-xs text-red-400'}, error)
+      h(ErrorState, {message: error, onRetry: () => setReload(n => n + 1), className: 'bg-slate-900 text-xs'})
     );
   }
   if (loading) {

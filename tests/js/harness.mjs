@@ -34,7 +34,21 @@ export const FIXTURES = {
     remaining: 1800, warningAt: 900, tokenRemaining: 3600
   },
   settings: { slaSeconds: 20, slaPct: 80, abandonPct: 10, missedPct: 20, ahtMinutes: 5, ahtOutboundMinutes: 5, topAgentAhtMinutes: 5, topAgentMinCalls: 20 },
-  filters: { departments: ['Sales', 'Support', 'Billing'], sites: ['HQ', 'Branch'] },
+  /*
+   * Mirrors api/filters.php: departments/sites plus the metric catalog from
+   * includes/reporting/metrics.php. The `total` title is a sentinel on
+   * purpose — the smoke test asserts the dialog shows THIS wording, which
+   * proves the client reads the server catalog instead of a local copy
+   * (QA-8). The real catalog is asserted in tests/php/outcomes.mjs.
+   */
+  filters: {
+    departments: ['Sales', 'Support', 'Billing'],
+    sites: ['HQ', 'Branch'],
+    metrics: {
+      total: {label: 'All calls', title: 'All calls (served by api/filters.php)'},
+      missed: {label: 'Missed', title: 'Missed'}
+    }
+  },
   cache_job: { complete: true, ready: 5, total: 5, percent: 100, next: null, start: '2026-08-02', end: '2026-08-06', warming: false },
   report: {
     filters: { start: '2026-08-02', end: '2026-08-06', department: '', site: '', agents: [] },
@@ -265,6 +279,17 @@ export async function createHarness(options = {}) {
     }
 
     if (/^https?:/.test(href)) return binaryResponse('');
+
+    /*
+     * A fixture tagged {__status: 502, ...} is answered with that status, so a
+     * test can force a panel failure, restore the fixture, and assert the
+     * Retry button recovers (QA-9).
+     */
+    if (fixture && typeof fixture === 'object' && fixture.__status) {
+      const {__status, ...body} = fixture;
+      return jsonResponse(body, __status);
+    }
+
     return jsonResponse(fixture);
   };
 

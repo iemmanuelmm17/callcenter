@@ -303,6 +303,34 @@ check('metric missed_no_abandon + abandoned = missed',
   metricCounts.missed_no_abandon + metricCounts.abandoned === metricCounts.missed, metricCounts);
 
 /*
+ * QA-8: the metric vocabulary is declared once (includes/reporting/metrics.php)
+ * and served to the client; an unknown id is a bad request, not an empty list.
+ */
+console.log('\n== api/calls.php (metric vocabulary) ==');
+const catalog = (await request('filters.php')).body?.metrics || {};
+check('api/filters.php serves the metric catalog',
+  Object.keys(catalog).length >= 15 && catalog.total?.label === 'All calls',
+  Object.keys(catalog));
+check('every metric the dialog titles come from carries label + title',
+  Object.entries(catalog).every(([, m]) => typeof m?.label === 'string' && m.label !== '' && typeof m?.title === 'string' && m.title !== ''),
+  Object.entries(catalog).filter(([, m]) => !m?.label || !m?.title));
+const rejectedMetrics = [];
+for (const id of Object.keys(catalog)) {
+  const res = await request('calls.php', { metric: id });
+  if (res.status !== 200) rejectedMetrics.push(id + ':' + res.status);
+}
+check('every catalog metric is accepted by api/calls.php', rejectedMetrics.length === 0, rejectedMetrics);
+const unknownMetric = await request('calls.php', { metric: 'not_a_metric' });
+check('an unknown metric is rejected with 422 (was: a plausible empty list)',
+  unknownMetric.status === 422, {status: unknownMetric.status, body: unknownMetric.body});
+check('the dead metric names handled/voicemail are gone',
+  (await request('calls.php', { metric: 'handled' })).status === 422 &&
+    (await request('calls.php', { metric: 'voicemail' })).status === 422);
+check('omitting the metric still means every call',
+  count((await request('calls.php', {})).body) === EXPECT.total,
+  count((await request('calls.php', {})).body));
+
+/*
  * ---------------------------------------------------------------------------
  * The list behind ONE clicked item.
  *
@@ -374,6 +402,20 @@ check('queue 700 missed = 0', qOutcomes.missed === 0, qOutcomes);
 check('queue outcomes add up to the 5 queue calls',
   qOutcomes.answered + qOutcomes.abandoned + qOutcomes.missed === 5, qOutcomes);
 check('queue table offered = answered + abandoned', q700.offered === (q700.handled + q700.abandoned), q700);
+
+/* QA-6: every recent row stands for one call, and its id must resolve. */
+const qRecent = Array.isArray(queueData.recent) ? queueData.recent : [];
+check('every queue recent row carries an id',
+  qRecent.length > 0 && qRecent.every(r => String(r.id || '') !== ''),
+  qRecent.map(r => r.id));
+if (qRecent.length) {
+  const firstId = String(qRecent[0].id);
+  const opened = await request('calls.php', { callId: firstId });
+  const row = (opened.body?.data || [])[0] || {};
+  check('a queue recent row opens exactly that call',
+    count(opened.body) === 1 && String(row.id) === firstId,
+    { opened: count(opened.body), ids: (opened.body?.data || []).map(r => r.id) });
+}
 check('queue table abandoned matches the KPI', q700.abandoned === qOutcomes.abandoned, [q700.abandoned, qOutcomes.abandoned]);
 check('queue abandonRate = abandoned ÷ offered = 40', Number(queueData.kpis?.abandonRate) === 40, queueData.kpis);
 check('queue abandoned = calls.php queue-scoped abandoned',

@@ -5,14 +5,26 @@
  * original source — the move is verified by declaration hash. */
 
 import { CallFlowDialog, loadCallFlow } from './call-flow-dialog.js';
+import { buildCallColumns } from './call-modal-columns.js';
 import { RecordingPlayer } from './recording-player.js';
 import { api, apiDownload } from '../lib/api.js';
-import { fmt, formatPhoneNumber } from '../lib/format.js';
-import { ensureTabulator, h, useEffect, useEscape, useRef, useState } from '../lib/react.js';
-import { slaRingHtml } from '../lib/sla.js';
+import { useMetricCatalog } from '../lib/metrics.js';
+import { formatPhoneNumber } from '../lib/format.js';
 import { formatCallDate, formatCallTime } from '../lib/time.js';
+import { ensureTabulator, h, useEffect, useEscape, useRef, useState } from '../lib/react.js';
 
 function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerNumber,queue,queuesOnly,filters,callTypes,slaSeconds,onClose}) {
+    /*
+     * Metric wording comes from the server catalog (api/filters.php /
+     * includes/reporting/metrics.php). Declared before the title uses it —
+     * a const is in the temporal dead zone until its own line runs.
+     */
+    const catalog = useMetricCatalog();
+    const metricMeta = catalog[metric] || null;
+    /* Chip wording is the label; the dialog title prefers its own wording. */
+    const metricLabel = metricMeta ? (metricMeta.label || metricMeta.title || metric) : metric;
+    const metricWording = metricMeta ? (metricMeta.title || metricMeta.label || metric) : metric;
+
     const ref = useRef(null);
     const table = useRef(null);
 
@@ -211,330 +223,12 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
                             true
                     },
 
-                    columns: [
-
-                        /*
-                         * DATE
-                         */
-
-                        {
-                            title:
-                                'Date',
-
-                            field:
-                                'startedAt',
-
-                            minWidth:
-                                85,
-
-                            formatter: cell => {
-                                const v = cell.getValue();
-                                const formatted = formatCallDate(v);
-                                return formatted || '';
-                            }
-                        },
-
-
-                        /*
-                         * TIME
-                         */
-
-                        {
-                            title:
-                                'Time',
-
-                            field:
-                                'startedAt',
-
-                            minWidth:
-                                85,
-
-                            formatter: cell => {
-                                const formatted = formatCallTime(cell.getValue());
-                                return formatted || '';
-                            }
-                        },
-
-
-                        /*
-                         * TYPE
-                         */
-
-                        {
-                            title:
-                                'Type',
-
-                            field:
-                                'type',
-
-                            minWidth:
-                                52,
-
-                            hozAlign:
-                                'center',
-
-                            headerHozAlign:
-                                'center',
-
-                            formatter: cell => {
-                                const t = String(cell.getValue() || '').toLowerCase();
-                                const phone = 'M1.885.511a1.745 1.745 0 0 1 2.612.163L6.29 2.98c.329.423.445.974.315 1.494l-.547 2.19a.678.678 0 0 0 .178.643l2.457 2.457a.678.678 0 0 0 .644.178l2.189-.547a1.745 1.745 0 0 1 1.494.315l2.306 1.794c.829.645.905 1.87.163 2.611l-1.034 1.034c-.74.74-1.846 1.065-2.877.702a18.634 18.634 0 0 1-7.01-4.42 18.634 18.634 0 0 1-4.42-7.009c-.362-1.03-.037-2.137.703-2.877L1.885.511z';
-                                const inboundArrow = 'M15.854.146a.5.5 0 0 1 0 .708L11.707 5H14.5a.5.5 0 0 1 0 1h-4a.5.5 0 0 1-.5-.5v-4a.5.5 0 0 1 1 0v2.793L15.146.146a.5.5 0 0 1 .708 0z';
-                                const outboundArrow = 'M11.5 1a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0V2.707l-4.146 4.147a.5.5 0 0 1-.708-.708L14.293 2H12a.5.5 0 0 1-.5-.5z';
-                                const missed = 'M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.57 17.57 0 0 0 4.168 6.608 17.57 17.57 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.678.678 0 0 0-.58-.122l-2.19.547a1.745 1.745 0 0 1-1.657-.459L5.482 8.062a1.745 1.745 0 0 1-.46-1.657l.548-2.19a.678.678 0 0 0-.122-.58L3.654 1.328zM13.78.22a.75.75 0 0 1 0 1.06L4.28 10.78a.75.75 0 1 1-1.06-1.06L12.72.22a.75.75 0 0 1 1.06 0z';
-                                let color = '#94a3b8';
-                                let label = String(cell.getValue() || '');
-                                let paths = [phone];
-                                if (t === 'inbound' || t === 'incoming') {
-                                    color = '#38bdf8';
-                                    label = 'Inbound';
-                                    paths = [phone, inboundArrow];
-                                } else if (t === 'outbound' || t === 'outgoing') {
-                                    color = '#34d399';
-                                    label = 'Outbound';
-                                    paths = [phone, outboundArrow];
-                                } else if (t === 'missed') {
-                                    color = '#f87171';
-                                    label = 'Missed';
-                                    paths = [missed];
-                                } else if (t === 'onnet') {
-                                    color = '#a78bfa';
-                                    label = 'On-net';
-                                    paths = [phone];
-                                }
-                                const wrap = document.createElement('span');
-                                wrap.title = label;
-                                wrap.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;width:100%;color:' + color;
-                                wrap.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
-                                    paths.map(d => '<path d="' + d + '"/>').join('') +
-                                    '</svg>';
-                                return wrap;
-                            }
-                        },
-
-
-                        /*
-                         * FROM NAME
-                         */
-
-                        {
-                            title:
-                                'From Name',
-
-                            field:
-                                'from',
-
-                            minWidth:
-                                120,
-
-                            formatter:
-                                cell =>
-                                    cell.getValue() ||
-                                    ''
-                        },
-
-
-                        /*
-                         * FROM
-                         */
-
-                        {
-                            title:
-                                'From',
-
-                            field:
-                                'fromNumber',
-
-                            minWidth:
-                                100,
-
-                            formatter:
-                                cell =>
-                                    formatPhoneNumber(
-                                        cell.getValue()
-                                    )
-                        },
-
-
-                        /*
-                         * DIALED
-                         */
-
-                        {
-                            title:
-                                'Dialed',
-
-                            field:
-                                'dialed',
-
-                            minWidth:
-                                100,
-
-                            formatter:
-                                cell =>
-                                    formatPhoneNumber(
-                                        cell.getValue()
-                                    )
-                        },
-
-
-                        /*
-                         * TO
-                         */
-
-                        {
-                            title:
-                                'To',
-
-                            field:
-                                'to',
-
-                            minWidth:
-                                90,
-
-                            formatter:
-                                cell =>
-                                    formatPhoneNumber(
-                                        cell.getValue()
-                                    )
-                        },
-
-
-                        {
-                            title: 'Talk',
-                            field: 'talking',
-                            minWidth: 70,
-                            formatter: cell => fmt(cell.getValue())
-                        },
-                        {
-                            title: 'Ring',
-                            field: 'ringing',
-                            minWidth: 70,
-                            formatter: cell => slaRingHtml(cell.getValue(), slaSeconds)
-                        },
-                        {
-                            title: 'Reason',
-                            field: 'disconnectReason',
-                            minWidth: 140,
-                            formatter: cell => cell.getValue() || ''
-                        },
-
-                        /*
-                         * TOTAL
-                         */
-
-                        {
-                            title:
-                                'Total',
-
-                            field:
-                                'total',
-
-                            minWidth:
-                                80,
-
-                            formatter:
-                                cell =>
-                                    fmt(
-                                        cell.getValue()
-                                    )
-                        },
-
-
-                        /*
-                         * RECORDING
-                         *
-                         * The cell knows only whether the CDR points at a
-                         * recording (hasRecordingHint, decided server-side by
-                         * callHasRecordingHint()). Clicking resolves it —
-                         * api/recording.php walks every PBX server, so the
-                         * table never pays for that unless asked — and the
-                         * player opens in the tray under the table.
-                         */
-
-                        {
-                            title:
-                                'Rec',
-
-                            field:
-                                'hasRecordingHint',
-
-                            minWidth:
-                                58,
-
-                            hozAlign:
-                                'center',
-
-                            headerHozAlign:
-                                'center',
-
-                            formatter: cell => {
-                                const row = cell.getRow().getData() || {};
-                                const has = !!row.hasRecordingHint;
-                                const id = String(row.id || row.origCallId || '');
-                                const btn = document.createElement('button');
-                                btn.type = 'button';
-                                btn.className = 'cm-attach-btn' +
-                                    (has ? '' : ' is-off') +
-                                    (has && playingRef.current === id ? ' is-on' : '');
-                                btn.disabled = !has;
-                                btn.title = has
-                                    ? 'Play the recording of this call'
-                                    : 'No recording was stored for this call';
-                                btn.setAttribute('aria-label', has ? 'Play recording' : 'No recording available');
-                                btn.textContent = has ? '▶' : '—';
-                                btn.addEventListener('click', ev => {
-                                    ev.stopPropagation();
-                                    if (has) setPlaying(row);
-                                });
-                                return btn;
-                            }
-                        },
-
-
-                        /*
-                         * SIP FLOW
-                         *
-                         * Opens the same cradle-to-grave dialog Call history
-                         * uses (components/call-flow-dialog.js) for this call.
-                         */
-
-                        {
-                            title:
-                                'SIP flow',
-
-                            field:
-                                'hasFlowHint',
-
-                            minWidth:
-                                72,
-
-                            hozAlign:
-                                'center',
-
-                            headerHozAlign:
-                                'center',
-
-                            formatter: cell => {
-                                const row = cell.getRow().getData() || {};
-                                const has = !!row.hasFlowHint;
-                                const btn = document.createElement('button');
-                                btn.type = 'button';
-                                btn.className = 'cm-attach-btn' + (has ? '' : ' is-off');
-                                btn.disabled = !has;
-                                btn.title = has
-                                    ? 'Open the cradle-to-grave SIP flow for this call'
-                                    : 'No SIP trace was recorded for this call';
-                                btn.setAttribute('aria-label', has ? 'Open SIP flow' : 'No SIP flow available');
-                                btn.textContent = has ? 'Flow' : '—';
-                                btn.addEventListener('click', ev => {
-                                    ev.stopPropagation();
-                                    if (has) openFlow(row);
-                                });
-                                return btn;
-                            }
-                        }
-                    ]
+                    columns: buildCallColumns({
+                        slaSeconds,
+                        playingRef,
+                        onPlay: setPlaying,
+                        onFlow: openFlow
+                    })
                 }
             );
 
@@ -806,43 +500,20 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
     };
 
     /*
-     * Readable names for the metric ids the nav and the tables pass in.
-     * Declared before the title uses it (a const is in the temporal dead
-     * zone until its own line runs).
-     */
-    const metricLabels = {
-        total: 'All calls', incoming: 'Inbound + missed', offered: 'Offered',
-        inbound: 'Inbound', outbound: 'Outbound', missed: 'Missed', onnet: 'On-net',
-        answered: 'Answered', abandoned: 'Abandoned', sla: 'Within SLA',
-        sla_missed: 'SLA missed', handled: 'Handled', voicemail: 'Voicemail',
-        /* The missed breakdown and the queue scopes used to show their raw
-         * metric id ("missed_noanswer") in the title and the View chip. */
-        missed_abandon: 'Abandoned', missed_noanswer: 'Missed — no answer',
-        missed_voicemail: 'Missed — voicemail', missed_no_abandon: 'Missed (not abandoned)',
-        queue_abandoned: 'Abandoned in queue', queue_offered: 'Offered to queue'
-    };
-
-    /*
      * =========================================================
      * TITLE
      * =========================================================
      */
 
+    /*
+     * No hard-coded metric wording here: `metricWording` is the server's title
+     * (or label), and the raw id is the fallback until the catalog lands.
+     */
     const title =
         callId
             /* One specific call (an agent's recent-call row, say). */
             ? 'Call ' + callId + ' details'
-            : `${
-                metric === 'total'
-                    ? 'All'
-                    : (metric === 'incoming' || metric === 'offered')
-                        ? 'Inbound + missed'
-                        : metric === 'sla_missed'
-                        ? 'SLA missed (ring over target)'
-                        : metric === 'sla'
-                        ? 'Answered within SLA'
-                        : (metricLabels[metric] || metric)
-            } call details`;
+            : metricWording + ' call details';
 
 
     /*
@@ -866,7 +537,7 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
         filterChips.push({ k: 'Types', v: on.length === keys.length ? 'All' : (on.length ? on.join(', ') : 'None') });
     }
     if (metric) {
-        filterChips.push({ k: 'View', v: metricLabels[metric] || String(metric) });
+        filterChips.push({ k: 'View', v: metricLabel });
     }
     if (callId) filterChips.push({ k: 'Call', v: callId });
     if (phoneNumber) filterChips.push({ k: 'Number', v: formatPhoneNumber(phoneNumber) });

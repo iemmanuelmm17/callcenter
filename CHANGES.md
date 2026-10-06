@@ -1,3 +1,101 @@
+# CHANGES — QA round 1: the P0s and P2s from QA-REVIEW.md
+
+**Scope:** everything `QA-REVIEW.md` rated **P0** or **P2**. The P1s (CDN
+vendoring, asset minification + cache-busting, the Settings role policy) are
+untouched on purpose — see "Still open" at the bottom.
+
+**Commits:** `092bbc0` escape the drill-down table, `c92750d` untrack runtime
+state, `7b0ae4e` one metric vocabulary, `67db536` error/retry + phone formatter
++ audio ids, `23d9c86` queue rows open their call + playback audit, `750d4d7`
+split the two largest components.
+
+**Files:** `assets/js/src/components/call-modal.js`,
+`components/call-modal-columns.js` (new), `components/ui.js`,
+`components/{queue,simultaneous,telephone-numbers,call-history,app-shell}.js`,
+`components/auto-attendant-report.js`, `lib/aa-call-fields.js` (new),
+`lib/metrics.js` (new), `lib/format.js`, `lib/recording.js`,
+`api/{calls,filters,queue,recording}.php`, `includes/reporting/metrics.php`
+(new), `includes/reporting.php`, `tests/js/{smoke,harness,aa-fields}.mjs`,
+`tests/php/{outcomes,endpoints}.mjs`, `tests/run.mjs`, rebuilt
+`assets/js/app.js` + `assets/css/app.css`.
+
+## Fixed
+
+* **QA-1 (P0) — caller text was rendered as HTML.** Tabulator applies a string
+  formatter result with `element.innerHTML = val`; the five columns that echoed
+  CDR text (From Name, From, Dialed, To, Reason) returned raw strings, so a
+  hostile caller-ID name was executable markup in an authenticated session. All
+  five now return a Text node (`asText()` — a Node is appended, never parsed),
+  and the call-type icon is built with `createElementNS`/`setAttribute` instead
+  of an `innerHTML` string.
+* **QA-2 (P0) — caller data and the audit trail were committed.** 93 files under
+  `cache/` (CDR day caches, tenant caches) and `logs/` (audit jsonl, app logs)
+  were tracked; `origin/main` tracked none of them, so every merge re-added
+  caller records. `git rm -r --cached cache logs`: git stops tracking them, the
+  files stay on disk, and history is deliberately **not** rewritten (no
+  force-push to `main`). Anyone who deployed this app on the branch gets the
+  operational note in the commit message; see QA-REVIEW.md Q2 for the retention
+  question behind it.
+* **QA-6 (P2) — the one list that could not open its call.** `api/queue.php`
+  recent rows now carry the CDR `id` (resolved by `callCallIds()`), and each row
+  has an **Open** button (the row itself still expands the cradle path) that
+  opens exactly that call, with its recording and SIP-flow columns.
+* **QA-7 (P2) — dead `paused` prop.** Removed from `QueueDashboard`; a live
+  refresh mode is a feature (QA-REVIEW F2), not a defect.
+* **QA-8 (P2) — one metric vocabulary.** `includes/reporting/metrics.php` is now
+  the single list (id → label/title). `api/calls.php` validates it and answers
+  **422** for an unknown metric instead of a plausible empty list; the dead names
+  `handled`/`voicemail` (no call type can equal them) are gone; `api/filters.php`
+  serves the catalog and the modal's titles/chips come from it — the second copy
+  in `call-modal.js` is deleted.
+* **QA-9 (P2) — error states.** `ui.js::ErrorState` replaces five inline copies
+  of the same block (two of which said "Failed to load…"), and every panel that
+  fetches its own data now offers **Retry** — Queues, Simultaneous, Telephone
+  Numbers, Call history, Agents compare and the Auto-Attendant panels.
+  `telephone-numbers.js` drops its byte-identical private phone formatter, and
+  the `<audio>` ids are per-instance counters instead of CDR strings (two
+  players for one call used to collide).
+* **QA-10 (P2) — playback is audited.** `api/recording.php` writes an
+  `auditView(..., 'recording')` entry for both the URL resolution and the
+  streamed bytes.
+* **QA-11 (P2, partial) — the two named files are split.**
+  `call-modal.js` 1,469 → 1,139 lines (`components/call-modal-columns.js`, built
+  by `buildCallColumns({slaSeconds, playingRef, onPlay, onFlow})`) and
+  `auto-attendant-report.js` 1,789 → 1,698 (`lib/aa-call-fields.js`, pure CDR
+  readers). The next two over 1,000 lines are `agents.js` (1,100) and
+  `date-range-picker.js` (1,079).
+
+## Evidence
+
+* New JS suite `tests/js/aa-fields.mjs` (14 suites total) pins the extracted
+  readers: fallback order (normalised name first, raw PBX field last, blanks
+  never shadow), trimming, coercion.
+* `tests/js/smoke.mjs`: every CDR text column is mounted **the way Tabulator
+  mounts it** (string → `innerHTML`, Node → `appendChild`) against
+  `<img src=x onerror=…>` and must not create an element — verified to fail
+  against the pre-fix source and pass after; the dialog title must show the
+  server-served metric wording (the fixture's sentinel), which fails when the
+  fixture stops serving `metrics`; a failed panel must show the shared error
+  block whose Retry re-requests and recovers (the harness can now force a
+  `{__status: 502}` response); a queue recent row's Open button must send its
+  `callId`; the drill-down table's full column set and order is pinned, so a
+  move can no longer silently drop a column.
+* `tests/php/outcomes.mjs`: the catalog is served, **every** catalog id is
+  accepted by `calls.php` (so no dead ids), unknown/removed names are 422, and
+  omitting the metric still means every call; every queue recent row's id opens
+  exactly that call.
+* `tests/php/endpoints.mjs`: both playback audit lines (`stream:1`, `stream:0`).
+* The split found its own bug: `formatPhoneNumber` is still used by the modal's
+  filter chips, and the smoke suite failed loudly on the missing import.
+
+## Still open (P1 — not in this round)
+
+| finding | why it is still open |
+| --- | --- |
+| QA-3 CDN-only front end | vendoring Tabulator/React/Chart.js + SRI + CSP changes how the app is deployed; needs the "is this internal-only?" answer (QA-REVIEW Q3) |
+| QA-4 unminified, uncacheable assets | `--minify` + content hashing changes the deploy step; needs a decision on the build flags (Q4) |
+| QA-5 Settings policy | needs the product answer on whether supervisors may change tenant-wide thresholds (Q1) |
+
 # CHANGES — drill-down filters that match the clicked item, plus recording and SIP-flow columns (P7)
 
 **Scope:** the call-details modal. Two problems, both about trust in a number:

@@ -4,7 +4,7 @@
  * tools/split-js-file.mjs. The body below is byte-identical to the
  * original source — the move is verified by declaration hash. */
 
-import { Tooltip, skel, skelPanel } from './ui.js';
+import { ErrorState, Tooltip, skel, skelPanel } from './ui.js';
 import { api } from '../lib/api.js';
 import { fmtNum } from '../lib/format.js';
 import { h, keyActivate, useEffect, useMemo, useRef, useState } from '../lib/react.js';
@@ -30,6 +30,7 @@ function SimultaneousCallsPanel({filters, onCallClick}) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [reload, setReload] = useState(0);
   const [intervalMinutes, setIntervalMinutes] = useState(15);
   const [search, setSearch] = useState('');
   const [minPeak, setMinPeak] = useState('');
@@ -79,13 +80,13 @@ function SimultaneousCallsPanel({filters, onCallClick}) {
       .catch(err => {
         if (cancelled) return;
         setData(null);
-        setError(err && err.message ? err.message : 'Failed to load simultaneous calls.');
+        setError(err && err.message ? err.message : 'Unable to load simultaneous calls.');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [filters?.start, filters?.end, filters?.department, filters?.site, intervalMinutes]);
+  }, [filters?.start, filters?.end, filters?.department, filters?.site, intervalMinutes, reload]);
 
   const summary = data && data.summary ? data.summary : {};
   const intervals = Array.isArray(data?.intervals) ? data.intervals : [];
@@ -392,7 +393,7 @@ function SimultaneousCallsPanel({filters, onCallClick}) {
 
   if (error) {
     return h('section', { className: 'min-w-0 flex-1 overflow-auto' },
-      h('section', { className: 'border border-red-900 bg-slate-900 p-4 text-xs text-red-400' }, error)
+      h(ErrorState, {message: error, onRetry: () => setReload(n => n + 1), className: 'bg-slate-900 text-xs'})
     );
   }
 

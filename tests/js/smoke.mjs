@@ -233,6 +233,27 @@ console.log('\n== drill-down filters match the clicked item (P7) ==');
     await closeModal();
   }
 
+  /* 1b — QA-6: a queue recent row opens that single call. */
+  requested.length = 0;
+  await goTo('Queues');
+  await flush(12);
+  const qOverviewTab = byText('.aa-tab', 'Overview');
+  if (qOverviewTab) await click(qOverviewTab);
+  await flush(12);
+  const openCallBtn = [...document.querySelectorAll('button')].find(b => /^Open$/.test((b.textContent || '').trim()));
+  check('a queue recent row offers Open', !!openCallBtn);
+  if (openCallBtn) {
+    await click(openCallBtn);
+    await flush(10);
+    const call = lastCall();
+    const body = JSON.parse(bodyOf(call) || '{}');
+    check('the queue recent row drills into that call (callId)',
+      body.callId === 'c1' && body.metric === 'total',
+      JSON.stringify(body));
+    check('the call modal opens for the queue recent row', !!modalEl());
+    await closeModal();
+  }
+
   /* 2 — Telephone Numbers: the interval row carries its own window. */
   requested.length = 0;
   await goTo('Telephone Numbers');
@@ -349,6 +370,35 @@ console.log('\n== agent KPI scope is the table it was clicked in ==');
   }
 }
 
+console.log('\n== error states: one look, one retry (QA-9) ==');
+{
+  /* Force the queue panel to fail, then let Retry put it back. */
+  const originalQueue = FIXTURES.queue;
+  await goTo('Dashboard');
+  await flush(4);
+  FIXTURES.queue = {__status: 502, error: 'Unable to load queues.'};
+  requested.length = 0;
+  await goTo('Queues');
+  await flush(10);
+
+  const alert = document.querySelector('[role="alert"]');
+  check('a failed panel shows the shared error block',
+    !!alert && /Unable to load queues/.test(alert.textContent),
+    alert && alert.textContent.slice(0, 120));
+  const retry = alert && [...alert.querySelectorAll('button')].find(b => /^Retry$/.test(b.textContent.trim()));
+  check('the error block offers a Retry button', !!retry, alert && alert.outerHTML.slice(0, 200));
+
+  FIXTURES.queue = originalQueue;
+  const before = requested.length;
+  if (retry) await click(retry);
+  await flush(10);
+  check('Retry re-requests the panel and recovers',
+    requested.length > before &&
+      requested.filter(r => r.endpoint === 'queue').length >= 2 &&
+      !document.querySelector('[role="alert"]'),
+    requested.map(r => r.endpoint).slice(-4));
+}
+
 console.log('\n== call modal: recording + sip flow (P7) ==');
 {
   /* The dashboard's Total calls KPI opens the modal with a row that has a
@@ -362,6 +412,17 @@ console.log('\n== call modal: recording + sip flow (P7) ==');
   if (kpiButton) await click(kpiButton);
   await flush(12);
 
+  /*
+   * QA-8: the dialog's wording is the server's (api/filters.php), not a
+   * map compiled into the bundle. FIXTURES.filters.metrics.total carries a
+   * sentinel title; the fallback would have printed the raw id.
+   */
+  const modalText = root().textContent;
+  check('the dialog title uses the server-served metric title (QA-8)',
+    modalText.includes('All calls (served by api/filters.php) call details') &&
+      !modalText.includes('total call details'),
+    modalText.slice(0, 160));
+
   const modalTable = [...tables].reverse().find(t => (t.options?.columns || []).some(c => c.title === 'Rec'));
   check('the drill-down table is built with a Rec column', !!modalTable,
     tables.map(t => (t.options?.columns || []).map(c => c.title).join('|')).slice(-3));
@@ -369,6 +430,10 @@ console.log('\n== call modal: recording + sip flow (P7) ==');
   const recCol = cols.find(c => c.title === 'Rec');
   const flowCol = cols.find(c => c.title === 'SIP flow');
   check('the drill-down table is built with a SIP flow column', !!flowCol,
+    cols.map(c => c.title).join('|'));
+  /* QA-11: the columns now live in call-modal-columns.js — pin the set. */
+  check('the drill-down table keeps its full column set and order',
+    cols.map(c => c.title).join('|') === 'Date|Time|Type|From Name|From|Dialed|To|Talk|Ring|Reason|Total|Rec|SIP flow',
     cols.map(c => c.title).join('|'));
   check('the Rec column is bound to hasRecordingHint and the flow column to hasFlowHint',
     !!recCol && recCol.field === 'hasRecordingHint' && !!flowCol && flowCol.field === 'hasFlowHint',
@@ -392,6 +457,31 @@ console.log('\n== call modal: recording + sip flow (P7) ==');
   check('SIP flow renders a disabled dash when it does not',
     !!flowOff && flowOff.textContent === '—' && flowOff.disabled && flowOff.className.includes('is-off'),
     flowOff && flowOff.outerHTML);
+
+  /*
+   * SEC-9 regression. Tabulator applies a string formatter result with
+   * `element.innerHTML = val` (dist/js/tabulator.js, _generateContents), so a
+   * formatter that echoes CDR text would execute a hostile caller-ID name as
+   * HTML. Mount each text column's output exactly the way Tabulator does.
+   */
+  const HOSTILE = '<img src=x onerror="window.__xss=1">';
+  const TEXT_FIELDS = ['from', 'fromNumber', 'dialed', 'to', 'disconnectReason'];
+  const mounted = [];
+  const leaks = [];
+  TEXT_FIELDS.forEach(field => {
+    const col = cols.find(c => c.field === field);
+    if (!col || typeof col.formatter !== 'function') return;
+    const out = col.formatter({getValue: () => HOSTILE, getRow: () => ({getData: () => ({})})});
+    const holder = document.createElement('td');
+    if (typeof out === 'string') holder.innerHTML = out;
+    else if (out && out.nodeType) holder.appendChild(out);
+    else holder.textContent = String(out == null ? '' : out);
+    mounted.push(field + '=' + (typeof out === 'string' ? 'string' : (out && out.nodeType ? 'node' : typeof out)));
+    if (holder.querySelector('img') || /<img/i.test(holder.innerHTML)) leaks.push(field);
+  });
+  check('every CDR text column escapes a hostile caller-ID value (SEC-9)',
+    mounted.length === TEXT_FIELDS.length && leaks.length === 0,
+    {mounted, leaks});
 
   /* Clicking Rec opens the tray (and resolves the recording lazily). */
   const before = errors.length;

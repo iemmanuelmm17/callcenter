@@ -513,6 +513,15 @@ try {
         $ids = $cdrIdBag($row);
         $origKey = trim((string)($row['call-orig-call-id'] ?? $row['call-parent-call-id'] ?? ''));
         $parentKey = $origKey !== '' ? $origKey : ($ids !== [] ? $ufFind($ids[0]) : '');
+        /*
+         * QA-6: the row's own CDR id, so the list can open that exact call
+         * (api/calls.php resolves it through callCallIds()). `parentId` below
+         * is an internal grouping key and was never usable for that.
+         */
+        $rowId = trim((string)($row['id'] ?? ''));
+        if ($rowId === '') {
+            $rowId = $parentKey;
+        }
         $legs = [];
         if ($origKey !== '' && isset($legsByOrig[$origKey])) {
             $legs = $legsByOrig[$origKey];
@@ -559,6 +568,7 @@ try {
             $pathParts[] = (string)$hop['label'];
         }
         $recent[] = [
+            'id' => $rowId,
             'caller' => (string)($row['namenumber'] ?? callFrom($row)),
             'agent' => $agentNames[$agentExt] ?? $agentExt,
             'wait' => $wait,

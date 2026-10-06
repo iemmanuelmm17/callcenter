@@ -48,6 +48,12 @@ function recordingSources(nsUrl) {
   return direct.concat(proxied);
 }
 
+/* Two players can be mounted for the same call at once (the modal's tray and
+ * an expanded Call-history row), so the id is a per-instance counter — a
+ * CDR-derived id collided between them and need not be a valid HTML id. The
+ * orig/term ids stay as data attributes for inspection. */
+let audioSeq = 0;
+
 function buildRecordingAudio(nsUrl, row) {
   const sources = recordingSources(nsUrl);
   if (!sources.length) return null;
@@ -55,7 +61,7 @@ function buildRecordingAudio(nsUrl, row) {
   const audio = document.createElement('audio');
   audio.className = 'cdraudio';
   audio.preload = 'auto';
-  audio.id = 'audio-' + String((row && (row.termCallId || row.origCallId || row.id)) || '');
+  audio.id = 'callscope-audio-' + (++audioSeq);
   if (row && row.origCallId) audio.setAttribute('data-orig-id', String(row.origCallId));
   if (row && row.termCallId) audio.setAttribute('data-term-id', String(row.termCallId));
 

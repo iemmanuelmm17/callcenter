@@ -98,11 +98,11 @@
     if (o === "missed") return { label: "Missed", tone: "bad" };
     return { label: "Unknown", tone: "dim" };
   }
-  var formatPhoneNumber = (value) => {
-    const digits = String(value || "").replace(/\D/g, "");
+  var formatPhoneNumber = (value2) => {
+    const digits = String(value2 || "").replace(/\D/g, "");
     if (digits.length === 10) return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
     if (digits.length === 11 && digits.startsWith("1")) return `(${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
-    return value || "";
+    return value2 || "";
   };
 
   // assets/js/src/lib/sla.js
@@ -169,7 +169,7 @@
   }
 
   // assets/js/src/components/ui.js
-  function SlaControl({ value, onChange }) {
+  function SlaControl({ value: value2, onChange }) {
     return h(
       "label",
       { className: "sla-control", title: "Answered within this many seconds of ringing meets SLA. Used system-wide." },
@@ -180,7 +180,7 @@
         max: 120,
         step: 1,
         className: "sla-control-input",
-        value,
+        value: value2,
         onChange: (e) => onChange(writeSlaSeconds(e.target.value))
       }),
       h("span", { className: "sla-control-unit" }, "sec")
@@ -419,12 +419,12 @@
       )
     );
   }
-  function SearchableSelect({ value, onChange, options, placeholder, accent }) {
+  function SearchableSelect({ value: value2, onChange, options, placeholder, accent }) {
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState("");
     const wrap = useRef(null);
     const input = useRef(null);
-    const selected = (options || []).find((o) => String(o.value) === String(value));
+    const selected = (options || []).find((o) => String(o.value) === String(value2));
     const q = query.trim().toLowerCase();
     const visible = (options || []).filter((o) => {
       if (!q) return true;
@@ -489,12 +489,31 @@
                 setOpen(false);
                 setQuery("");
               },
-              className: "cmp-select-option " + (String(o.value) === String(value) ? chip : "")
+              className: "cmp-select-option " + (String(o.value) === String(value2) ? chip : "")
             },
             h("span", { className: "block truncate text-slate-100" }, o.label),
             h("span", { className: "text-[10px] text-slate-500" }, o.value)
           ))
         )
+      ) : null
+    );
+  }
+  function ErrorState({ message, onRetry, className = "" }) {
+    return h(
+      "div",
+      {
+        role: "alert",
+        className: "border border-rose-900 bg-rose-950/30 p-3 text-xs text-rose-300 " + className
+      },
+      h("span", null, message || "Unable to load this panel."),
+      typeof onRetry === "function" ? h(
+        "button",
+        {
+          type: "button",
+          className: "ml-3 font-semibold text-rose-200 underline hover:text-rose-100",
+          onClick: onRetry
+        },
+        "Retry"
       ) : null
     );
   }
@@ -672,7 +691,7 @@
       )
     );
   }
-  function KpiCard({ label, value, hint, tooltip, onClick, accent, delta, icon, tone }) {
+  function KpiCard({ label, value: value2, hint, tooltip, onClick, accent, delta, icon, tone }) {
     const deltaNum = delta == null || delta === "" ? null : Number(delta);
     const deltaText = deltaNum == null || Number.isNaN(deltaNum) ? null : (deltaNum > 0 ? "+" : "") + deltaNum.toFixed(1) + "%";
     const deltaColor = deltaNum == null || Number.isNaN(deltaNum) || Math.abs(deltaNum) < 0.05 ? "text-slate-500" : deltaNum > 0 ? "text-emerald-400" : "text-rose-400";
@@ -704,7 +723,7 @@
       h(
         "div",
         { className: "kpi-valrow" },
-        h("div", { className: "kpi-value " + valCls + " " + (accent || "") }, typeof value === "number" ? fmtNum(value) : value),
+        h("div", { className: "kpi-value " + valCls + " " + (accent || "") }, typeof value2 === "number" ? fmtNum(value2) : value2),
         deltaText ? h("span", { className: "kpi-delta " + deltaColor }, deltaText) : null
       ),
       hint ? h("div", { className: "kpi-hint" }, h("span", { className: "truncate" }, hint)) : null
@@ -753,12 +772,12 @@
     );
     return (asUtc - utc) / 6e4;
   };
-  var parseCallInstant = (value) => {
-    if (!value && value !== 0) return null;
-    if (value instanceof Date) {
-      return Number.isNaN(value.getTime()) ? null : value;
+  var parseCallInstant = (value2) => {
+    if (!value2 && value2 !== 0) return null;
+    if (value2 instanceof Date) {
+      return Number.isNaN(value2.getTime()) ? null : value2;
     }
-    let raw = String(value).trim();
+    let raw = String(value2).trim();
     if (!raw) return null;
     if (/^\d{10}$/.test(raw)) return new Date(Number(raw) * 1e3);
     if (/^\d{13}$/.test(raw)) return new Date(Number(raw));
@@ -796,8 +815,8 @@
     const d = new Date(raw);
     return Number.isNaN(d.getTime()) ? null : d;
   };
-  var nsTimestampParts = (value) => {
-    const d = parseCallInstant(value);
+  var nsTimestampParts = (value2) => {
+    const d = parseCallInstant(value2);
     if (d) {
       const p = tzParts(d, APP_TZ);
       let hour2 = Number(p.hour);
@@ -808,7 +827,7 @@
         time: hour2 + ":" + p.minute + " " + ampm2
       };
     }
-    const raw = String(value || "");
+    const raw = String(value2 || "");
     const m = raw.match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
     if (!m) return { date: "", time: "" };
     let hour = Number(m[4]);
@@ -819,8 +838,8 @@
       time: hour + ":" + m[5] + " " + ampm
     };
   };
-  var formatCallDate = (value) => nsTimestampParts(value).date;
-  var formatCallTime = (value) => nsTimestampParts(value).time;
+  var formatCallDate = (value2) => nsTimestampParts(value2).date;
+  var formatCallTime = (value2) => nsTimestampParts(value2).time;
   var rangeDateTimes = (start, end) => {
     const zone = APP_TZ;
     return {
@@ -829,9 +848,9 @@
       datetimeEnd: String(end) + "T23:59:59Z[" + zone + "]"
     };
   };
-  function formatHistDate(value) {
-    if (!value) return "\u2014";
-    let raw = String(value).trim();
+  function formatHistDate(value2) {
+    if (!value2) return "\u2014";
+    let raw = String(value2).trim();
     const named = /\[[^\]]+\]$/.test(raw);
     raw = raw.replace(/\[[^\]]*\]$/, "");
     if (named) raw = raw.replace(/[zZ]$/, "");
@@ -845,7 +864,7 @@
       minute = Number(m[5]);
     } else {
       const d = new Date(raw.replace(" ", "T"));
-      if (Number.isNaN(d.getTime())) return String(value);
+      if (Number.isNaN(d.getTime())) return String(value2);
       month = d.getMonth() + 1;
       day = d.getDate();
       hour = d.getHours();
@@ -859,11 +878,11 @@
     const s = Math.max(0, Math.floor(Number(n) || 0));
     return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
   }
-  function histDayKey(value) {
-    const raw = String(value || "");
+  function histDayKey(value2) {
+    const raw = String(value2 || "");
     const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (m) return m[1] + "-" + m[2] + "-" + m[3];
-    const d = formatHistDate(value);
+    const d = formatHistDate(value2);
     return d.split(",")[0] || d;
   }
   function histDayLabel(key) {
@@ -872,8 +891,8 @@
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     return months[Number(m[2]) - 1] + " " + Number(m[3]) + ", " + m[1];
   }
-  function histTimeOnly(value) {
-    const d = formatHistDate(value);
+  function histTimeOnly(value2) {
+    const d = formatHistDate(value2);
     const i = d.lastIndexOf(",");
     return i >= 0 ? d.slice(i + 1).trim() : d;
   }
@@ -918,10 +937,10 @@
       "Fr",
       "Sa"
     ];
-    const formatDate = (value) => {
-      if (!value) return "";
+    const formatDate = (value2) => {
+      if (!value2) return "";
       const d = /* @__PURE__ */ new Date(
-        value + "T00:00:00"
+        value2 + "T00:00:00"
       );
       return d.toLocaleDateString(
         "en-US",
@@ -1019,15 +1038,15 @@
       setHoverDate("");
       setSelecting("start");
     };
-    const isSelected = (value) => value === tempStart || value === tempEnd;
-    const isInRange = (value) => {
+    const isSelected = (value2) => value2 === tempStart || value2 === tempEnd;
+    const isInRange = (value2) => {
       if (tempStart && tempEnd) {
-        return value >= tempStart && value <= tempEnd;
+        return value2 >= tempStart && value2 <= tempEnd;
       }
       if (selecting === "end" && tempStart && !tempEnd && hoverDate) {
         const from = tempStart < hoverDate ? tempStart : hoverDate;
         const to = tempStart < hoverDate ? hoverDate : tempStart;
-        return value >= from && value <= to;
+        return value2 >= from && value2 <= to;
       }
       return false;
     };
@@ -1343,14 +1362,14 @@
                     }
                   );
                 }
-                const value = dateString(d);
+                const value2 = dateString(d);
                 const selected = isSelected(
-                  value
+                  value2
                 );
                 const inRange = isInRange(
-                  value
+                  value2
                 );
-                const isHovering = selecting === "end" && tempStart && !tempEnd && hoverDate === value;
+                const isHovering = selecting === "end" && tempStart && !tempEnd && hoverDate === value2;
                 const isPreview = selecting === "end" && tempStart && !tempEnd && hoverDate && inRange;
                 const todayValue = dateString(
                   /* @__PURE__ */ new Date()
@@ -1374,18 +1393,18 @@
                   color = "#a5f3fc";
                 } else if (inRange) {
                   color = "#a5f3fc";
-                } else if (value === todayValue) {
+                } else if (value2 === todayValue) {
                   color = "#22d3ee";
                 }
                 let fontWeight = "400";
-                if (isHovering || selected || value === todayValue) {
+                if (isHovering || selected || value2 === todayValue) {
                   fontWeight = "600";
                 }
-                const isFuture = value > maxDate;
+                const isFuture = value2 > maxDate;
                 return h(
                   "button",
                   {
-                    key: value,
+                    key: value2,
                     type: "button",
                     disabled: isFuture,
                     onClick: () => handleDateClick(
@@ -1400,7 +1419,7 @@
                     onMouseEnter: () => {
                       if (selecting === "end" && tempStart && !tempEnd) {
                         setHoverDate(
-                          value
+                          value2
                         );
                       }
                     },
@@ -1756,9 +1775,9 @@
       link.click();
       URL.revokeObjectURL(url);
     };
-    const kpi = (label, value, accent, onClick, tip, icon) => h(KpiCard, {
+    const kpi = (label, value2, accent, onClick, tip, icon) => h(KpiCard, {
       label,
-      value,
+      value: value2,
       onClick,
       tooltip: tip,
       icon,
@@ -2812,9 +2831,9 @@
   }
 
   // assets/js/src/components/simultaneous.js
-  function simClock(value) {
-    const match = String(value == null ? "" : value).match(/^(\d{1,2}):(\d{2})/);
-    if (!match) return String(value == null ? "" : value) || "\u2014";
+  function simClock(value2) {
+    const match = String(value2 == null ? "" : value2).match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return String(value2 == null ? "" : value2) || "\u2014";
     const hour = Number(match[1]) % 24;
     const am = hour >= 12 ? "PM" : "AM";
     return (hour % 12 || 12) + ":" + match[2] + " " + am;
@@ -2830,6 +2849,7 @@
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
+    const [reload, setReload2] = useState(0);
     const [intervalMinutes, setIntervalMinutes] = useState(15);
     const [search, setSearch] = useState("");
     const [minPeak, setMinPeak] = useState("");
@@ -2862,14 +2882,14 @@
       }).catch((err) => {
         if (cancelled) return;
         setData(null);
-        setError(err && err.message ? err.message : "Failed to load simultaneous calls.");
+        setError(err && err.message ? err.message : "Unable to load simultaneous calls.");
       }).finally(() => {
         if (!cancelled) setLoading(false);
       });
       return () => {
         cancelled = true;
       };
-    }, [filters?.start, filters?.end, filters?.department, filters?.site, intervalMinutes]);
+    }, [filters?.start, filters?.end, filters?.department, filters?.site, intervalMinutes, reload]);
     const summary = data && data.summary ? data.summary : {};
     const intervals = Array.isArray(data?.intervals) ? data.intervals : [];
     const byHour = Array.isArray(data?.byHour) ? data.byHour : [];
@@ -3075,7 +3095,7 @@
         histDayLabel(row.date),
         simClock(row.time),
         simClock(row.endTime)
-      ].some((value) => String(value == null ? "" : value).toLowerCase().includes(term));
+      ].some((value2) => String(value2 == null ? "" : value2).toLowerCase().includes(term));
     }), [intervals, term, minValue]);
     const sorted = useMemo(() => {
       const copy = filtered.slice();
@@ -3138,7 +3158,7 @@
           Number(row.simultaneous || 0),
           Number(row.average || 0).toFixed(2),
           Number(row.started || 0)
-        ].map((value) => '"' + String(value == null ? "" : value).replace(/"/g, '""') + '"').join(","));
+        ].map((value2) => '"' + String(value2 == null ? "" : value2).replace(/"/g, '""') + '"').join(","));
       });
       const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
       const anchor = document.createElement("a");
@@ -3147,7 +3167,7 @@
       anchor.click();
       URL.revokeObjectURL(anchor.href);
     };
-    const kpi = (label, value, sub, icon, tone, tip, onClick) => {
+    const kpi = (label, value2, sub, icon, tone, tip, onClick) => {
       const Tag = onClick ? "button" : "div";
       return h(
         Tag,
@@ -3168,7 +3188,7 @@
             h("span", { className: "cursor-help border-b border-dotted border-slate-600 text-[10px]" }, "?")
           ) : null
         ),
-        h("div", { className: "tn-kpi-mini-value" }, typeof value === "number" ? fmtNum(value) : value),
+        h("div", { className: "tn-kpi-mini-value" }, typeof value2 === "number" ? fmtNum(value2) : value2),
         sub ? h("div", { className: "sim-kpi-sub" }, sub) : null
       );
     };
@@ -3176,7 +3196,7 @@
       return h(
         "section",
         { className: "min-w-0 flex-1 overflow-auto" },
-        h("section", { className: "border border-red-900 bg-slate-900 p-4 text-xs text-red-400" }, error)
+        h(ErrorState, { message: error, onRetry: () => setReload2((n) => n + 1), className: "bg-slate-900 text-xs" })
       );
     }
     if (loading) {
@@ -3274,7 +3294,7 @@
             className: "tn-type-filter"
           },
           ...SIM_INTERVAL_CHOICES.map(
-            ([value, label]) => h("option", { key: value, value }, label)
+            ([value2, label]) => h("option", { key: value2, value: value2 }, label)
           )
         ),
         h("input", {
@@ -3366,9 +3386,9 @@
                 { colSpan: 5, className: "sim-empty" },
                 intervals.length === 0 ? "No inbound calls in this range." : "No intervals match these filters."
               )) : pageRows.map((row, index) => {
-                const value = Number(row.simultaneous || 0);
-                const peakRow = value > 0 && value === peakValue;
-                const share = peakValue > 0 ? Math.max(0, Math.min(1, value / peakValue)) : 0;
+                const value2 = Number(row.simultaneous || 0);
+                const peakRow = value2 > 0 && value2 === peakValue;
+                const share = peakValue > 0 ? Math.max(0, Math.min(1, value2 / peakValue)) : 0;
                 return h(
                   "tr",
                   {
@@ -3396,7 +3416,7 @@
                     h(
                       "span",
                       { className: "sim-value" },
-                      fmtNum(value),
+                      fmtNum(value2),
                       peakRow ? h("span", { className: "sim-chip-peak", title: "Busiest interval in this range" }, "Peak") : null
                     ),
                     h(
@@ -3464,29 +3484,29 @@
 
   // assets/js/src/components/telephone-numbers.js
   function telephoneDestinationType(application) {
-    const value = String(application || "").trim().toLowerCase();
-    if (value === "to-user" || value === "to-user-residential" || value === "to-user-add-header") {
+    const value2 = String(application || "").trim().toLowerCase();
+    if (value2 === "to-user" || value2 === "to-user-residential" || value2 === "to-user-add-header") {
       return "User";
     }
-    if (value === "to-device-add-header") {
+    if (value2 === "to-device-add-header") {
       return "Device";
     }
-    if (value === "to-callqueue" || value === "call queuing add header" || value === "to-callqueue-announce-count-callers-ahead") {
+    if (value2 === "to-callqueue" || value2 === "call queuing add header" || value2 === "to-callqueue-announce-count-callers-ahead") {
       return "Queue";
     }
-    if (value === "available-number") {
+    if (value2 === "available-number") {
       return "Available";
     }
-    if (value === "to-single-device") {
+    if (value2 === "to-single-device") {
       return "Conference";
     }
-    if (value === "to-voicemail" || value === "to-voicemail-residential") {
+    if (value2 === "to-voicemail" || value2 === "to-voicemail-residential") {
       return "Voicemail";
     }
-    if (value === "to-connection-add-header-update-cdr-by-user") {
+    if (value2 === "to-connection-add-header-update-cdr-by-user") {
       return "PSTN";
     }
-    return value;
+    return value2;
   }
   function displayTnExtension(name, ext) {
     const junk = (v) => {
@@ -3655,7 +3675,7 @@
     return h(
       "section",
       { className: "border border-slate-700 bg-slate-900" },
-      error ? h("div", { className: "border-b border-rose-900 bg-rose-950/30 p-2 text-[11px] text-rose-300" }, error) : null,
+      error ? h(ErrorState, { message: error, onRetry: () => setReload((n) => n + 1), className: "border-x-0 border-t-0 p-2 text-[11px]" }) : null,
       h(
         "div",
         { className: "overflow-x-auto" },
@@ -3995,16 +4015,6 @@
       };
     }, [duration.map((d) => d.count).join("|")]);
     const topMax = Math.max(1, ...top.map((n) => n.calls));
-    const formatTopNumber = (value) => {
-      const digits = String(value || "").replace(/\D/g, "");
-      if (digits.length === 10) {
-        return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
-      }
-      if (digits.length === 11 && digits.startsWith("1")) {
-        return `(${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
-      }
-      return value || "";
-    };
     const panel = (title, hint, body, extra) => h(
       "section",
       { className: "border border-slate-700 bg-slate-900 p-2 " + (extra || "") },
@@ -4081,11 +4091,11 @@
               {
                 key: n.number,
                 type: "button",
-                title: "Open the inbound calls to " + formatTopNumber(n.number),
+                title: "Open the inbound calls to " + formatPhoneNumber(n.number),
                 onClick: () => onNumberClick && onNumberClick(n.number),
                 className: "flex w-full cursor-pointer items-center gap-2 text-left"
               },
-              h("span", { className: "w-24 shrink-0 truncate font-mono text-[10px] text-slate-400" }, formatTopNumber(n.number)),
+              h("span", { className: "w-24 shrink-0 truncate font-mono text-[10px] text-slate-400" }, formatPhoneNumber(n.number)),
               h(
                 "span",
                 { className: "min-w-0 flex-1" },
@@ -4155,6 +4165,7 @@
     const [typeFilter, setTypeFilter] = useState("all");
     const [hideZeroCalls, setHideZeroCalls] = useState(false);
     const [tnView, setTnView] = useState("inventory");
+    const [reload, setReload2] = useState(0);
     useEffect(() => {
       let cancelled = false;
       setLoading(true);
@@ -4170,14 +4181,14 @@
       }).catch((err) => {
         if (cancelled) return;
         setNumbers([]);
-        setError(err?.message || "Failed to load telephone numbers.");
+        setError(err?.message || "Unable to load telephone numbers.");
       }).finally(() => {
         if (!cancelled) setLoading(false);
       });
       return () => {
         cancelled = true;
       };
-    }, [filters?.start, filters?.end, filters?.department, filters?.site]);
+    }, [filters?.start, filters?.end, filters?.department, filters?.site, reload]);
     const term = search.toLowerCase().trim();
     const unusedCount = numbers.filter((p) => tnCallVolume(p) === 0).length;
     const visibleNumbers = useMemo(() => numbers.filter((phone) => {
@@ -4189,7 +4200,7 @@
       const route = tnRouteMeta(phone);
       return [phone.number, phone.type, tnTypeLabel(phone.type), d.name, d.extension, d.department, d.site, route.label].some((v) => String(v || "").toLowerCase().includes(term));
     }), [numbers, hideZeroCalls, typeFilter, term]);
-    const kpi = (label, value, icon, tone, onClick, tip) => {
+    const kpi = (label, value2, icon, tone, onClick, tip) => {
       const Tag = onClick ? "button" : "div";
       return h(
         Tag,
@@ -4206,14 +4217,14 @@
           h("span", { className: "tn-kpi-mini-label" }, label),
           tip ? h(Tooltip, { text: tip }, h("span", { className: "cursor-help border-b border-dotted border-slate-600 text-[10px]" }, "?")) : null
         ),
-        h("div", { className: "tn-kpi-mini-value" }, typeof value === "number" ? fmtNum(value) : value)
+        h("div", { className: "tn-kpi-mini-value" }, typeof value2 === "number" ? fmtNum(value2) : value2)
       );
     };
     if (error) {
       return h(
         "section",
         { className: "min-w-0 flex-1 overflow-auto p-3" },
-        h("section", { className: "border border-red-900 bg-slate-900 p-4 text-xs text-red-400" }, error)
+        h(ErrorState, { message: error, onRetry: () => setReload2((n) => n + 1), className: "bg-slate-900 text-xs" })
       );
     }
     if (loading) {
@@ -4844,12 +4855,12 @@
     const searchTerm = term.trim().toLowerCase();
     const visible = autoAttendants.filter(
       (aa) => {
-        const value = String(
+        const value2 = String(
           aa.name || ""
         ) + " " + String(
           aa.extension || ""
         );
-        return value.toLowerCase().includes(
+        return value2.toLowerCase().includes(
           searchTerm
         );
       }
@@ -5188,6 +5199,67 @@
     return ReactDOM.createPortal(sheet, document.body);
   }
 
+  // assets/js/src/lib/aa-call-fields.js
+  var value = (call, ...keys) => {
+    for (const key of keys) {
+      if (call[key] !== void 0 && call[key] !== null && String(call[key]).trim() !== "") {
+        return call[key];
+      }
+    }
+    return "";
+  };
+  var getCaller = (call) => value(
+    call,
+    "caller",
+    "origCaller",
+    "call-orig-caller-id"
+  );
+  var getCase = (call) => String(
+    value(call, "case")
+  ).trim();
+  var getAdditionalTier = (call) => String(
+    value(call, "additionalTier")
+  ).trim();
+  var getAdditionalPrompt = (call) => String(
+    value(call, "additionalPrompt")
+  ).trim();
+  var getAdditionalCase = (call) => String(
+    value(call, "additionalCase")
+  ).trim();
+  var getQueue = (call) => String(
+    value(call, "queue")
+  ).trim();
+  var getDestination = (call) => String(
+    value(call, "destination")
+  ).trim();
+  var getStart = (call) => value(
+    call,
+    "start",
+    "call-start-datetime"
+  );
+  var getTalkSeconds = (call) => Number(
+    value(
+      call,
+      "talkSeconds",
+      "call-talking-duration-seconds"
+    )
+  ) || 0;
+  var getTotalSeconds = (call) => Number(
+    value(
+      call,
+      "totalSeconds",
+      "call-total-duration-seconds"
+    )
+  ) || 0;
+  var getDisconnectReason = (call) => String(
+    value(
+      call,
+      "disconnectReason",
+      "call-disconnect-reason-text"
+    )
+  ).trim();
+  var isAdditionalTier = (call) => getAdditionalTier(call) !== "";
+
   // assets/js/src/components/auto-attendant-report.js
   function AutoAttendantReport({
     data,
@@ -5218,82 +5290,6 @@
         String(call.extension || "")
       )
     ) : [];
-    const value = (call, ...keys) => {
-      for (const key of keys) {
-        if (call[key] !== void 0 && call[key] !== null && String(call[key]).trim() !== "") {
-          return call[key];
-        }
-      }
-      return "";
-    };
-    const getCaller = (call) => value(
-      call,
-      "caller",
-      "origCaller",
-      "call-orig-caller-id"
-    );
-    const getCase = (call) => String(
-      value(call, "case")
-    ).trim();
-    const getAdditionalTier = (call) => String(
-      value(call, "additionalTier")
-    ).trim();
-    const getAdditionalPrompt = (call) => String(
-      value(call, "additionalPrompt")
-    ).trim();
-    const getAdditionalCase = (call) => String(
-      value(call, "additionalCase")
-    ).trim();
-    const getQueue = (call) => String(
-      value(call, "queue")
-    ).trim();
-    const getDestination = (call) => String(
-      value(call, "destination")
-    ).trim();
-    const getStart = (call) => value(
-      call,
-      "start",
-      "call-start-datetime"
-    );
-    const getAnswer = (call) => value(
-      call,
-      "answer",
-      "call-answer-datetime"
-    );
-    const getEnd = (call) => value(
-      call,
-      "end",
-      "call-disconnect-datetime"
-    );
-    const getTalkSeconds = (call) => Number(
-      value(
-        call,
-        "talkSeconds",
-        "call-talking-duration-seconds"
-      )
-    ) || 0;
-    const getTotalSeconds = (call) => Number(
-      value(
-        call,
-        "totalSeconds",
-        "call-total-duration-seconds"
-      )
-    ) || 0;
-    const getDisconnectReason = (call) => String(
-      value(
-        call,
-        "disconnectReason",
-        "call-disconnect-reason-text"
-      )
-    ).trim();
-    const getDirection = (call) => Number(
-      value(
-        call,
-        "direction",
-        "call-direction"
-      )
-    );
-    const isAdditionalTier = (call) => getAdditionalTier(call) !== "";
     const additionalTierCalls = calls.filter(isAdditionalTier);
     const totalCalls = calls.length;
     const uniqueCallers = new Set(
@@ -6526,13 +6522,14 @@
     });
     return direct.concat(proxied);
   }
+  var audioSeq = 0;
   function buildRecordingAudio(nsUrl, row) {
     const sources = recordingSources(nsUrl);
     if (!sources.length) return null;
     const audio = document.createElement("audio");
     audio.className = "cdraudio";
     audio.preload = "auto";
-    audio.id = "audio-" + String(row && (row.termCallId || row.origCallId || row.id) || "");
+    audio.id = "callscope-audio-" + ++audioSeq;
     if (row && row.origCallId) audio.setAttribute("data-orig-id", String(row.origCallId));
     if (row && row.termCallId) audio.setAttribute("data-term-id", String(row.termCallId));
     sources.forEach((source) => {
@@ -6798,6 +6795,7 @@
     const [insight, setInsight] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
+    const [reload, setReload2] = useState(0);
     const [openRec, setOpenRec] = useState(null);
     const [flow, setFlow] = useState(null);
     const [exporting, setExporting] = useState(false);
@@ -6842,7 +6840,7 @@
       return () => {
         cancelled = true;
       };
-    }, [filters, callerQ, calledQ, agentQ, outcome, page, size, callTypes]);
+    }, [filters, callerQ, calledQ, agentQ, outcome, page, size, callTypes, reload]);
     const toggleRec = (row, ev) => {
       if (ev) ev.stopPropagation();
       const id = String(row.id || row.origCallId || "");
@@ -6950,11 +6948,11 @@
       if (!last || last.key !== key) grouped.push({ key, rows: [row] });
       else last.rows.push(row);
     });
-    const tile = (label, value, sub, tone, tip) => h(
+    const tile = (label, value2, sub, tone, tip) => h(
       "div",
       { className: "hist-stat" + (tone ? " is-" + tone : ""), title: tip || "" },
       h("div", { className: "hist-stat-label" }, label),
-      h("div", { className: "hist-stat-value" + (tone === "bad" ? " is-bad" : "") }, value),
+      h("div", { className: "hist-stat-value" + (tone === "bad" ? " is-bad" : "") }, value2),
       sub ? h("div", { className: "hist-stat-sub" }, sub) : null
     );
     const field = (label, node) => h("label", { className: "hist-filter" }, h("span", null, label), node);
@@ -7022,7 +7020,7 @@
           disabled: exporting || loading || total === 0
         }, exporting ? "Exporting\u2026" : "Export CSV")
       ),
-      error ? h("div", { className: "border border-rose-900 bg-rose-950/30 p-3 text-sm text-rose-300" }, error) : null,
+      error ? h(ErrorState, { message: error, onRetry: () => setReload2((n) => n + 1), className: "mb-2 text-sm" }) : null,
       h(
         "div",
         { className: "q-table-wrap hist-table-wrap" },
@@ -7239,8 +7237,275 @@
     );
   }
 
+  // assets/js/src/components/call-modal-columns.js
+  var asText = (value2) => document.createTextNode(
+    String(
+      value2 == null ? "" : value2
+    )
+  );
+  function buildCallColumns({ slaSeconds, playingRef, onPlay, onFlow }) {
+    return [
+      /*
+       * DATE
+       */
+      {
+        title: "Date",
+        field: "startedAt",
+        minWidth: 85,
+        formatter: (cell) => {
+          const v = cell.getValue();
+          const formatted = formatCallDate(v);
+          return formatted || "";
+        }
+      },
+      /*
+       * TIME
+       */
+      {
+        title: "Time",
+        field: "startedAt",
+        minWidth: 85,
+        formatter: (cell) => {
+          const formatted = formatCallTime(cell.getValue());
+          return formatted || "";
+        }
+      },
+      /*
+       * TYPE
+       */
+      {
+        title: "Type",
+        field: "type",
+        minWidth: 52,
+        hozAlign: "center",
+        headerHozAlign: "center",
+        formatter: (cell) => {
+          const t = String(cell.getValue() || "").toLowerCase();
+          const phone = "M1.885.511a1.745 1.745 0 0 1 2.612.163L6.29 2.98c.329.423.445.974.315 1.494l-.547 2.19a.678.678 0 0 0 .178.643l2.457 2.457a.678.678 0 0 0 .644.178l2.189-.547a1.745 1.745 0 0 1 1.494.315l2.306 1.794c.829.645.905 1.87.163 2.611l-1.034 1.034c-.74.74-1.846 1.065-2.877.702a18.634 18.634 0 0 1-7.01-4.42 18.634 18.634 0 0 1-4.42-7.009c-.362-1.03-.037-2.137.703-2.877L1.885.511z";
+          const inboundArrow = "M15.854.146a.5.5 0 0 1 0 .708L11.707 5H14.5a.5.5 0 0 1 0 1h-4a.5.5 0 0 1-.5-.5v-4a.5.5 0 0 1 1 0v2.793L15.146.146a.5.5 0 0 1 .708 0z";
+          const outboundArrow = "M11.5 1a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0V2.707l-4.146 4.147a.5.5 0 0 1-.708-.708L14.293 2H12a.5.5 0 0 1-.5-.5z";
+          const missed = "M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.57 17.57 0 0 0 4.168 6.608 17.57 17.57 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.678.678 0 0 0-.58-.122l-2.19.547a1.745 1.745 0 0 1-1.657-.459L5.482 8.062a1.745 1.745 0 0 1-.46-1.657l.548-2.19a.678.678 0 0 0-.122-.58L3.654 1.328zM13.78.22a.75.75 0 0 1 0 1.06L4.28 10.78a.75.75 0 1 1-1.06-1.06L12.72.22a.75.75 0 0 1 1.06 0z";
+          let color = "#94a3b8";
+          let label = String(cell.getValue() || "");
+          let paths = [phone];
+          if (t === "inbound" || t === "incoming") {
+            color = "#38bdf8";
+            label = "Inbound";
+            paths = [phone, inboundArrow];
+          } else if (t === "outbound" || t === "outgoing") {
+            color = "#34d399";
+            label = "Outbound";
+            paths = [phone, outboundArrow];
+          } else if (t === "missed") {
+            color = "#f87171";
+            label = "Missed";
+            paths = [missed];
+          } else if (t === "onnet") {
+            color = "#a78bfa";
+            label = "On-net";
+            paths = [phone];
+          }
+          const wrap = document.createElement("span");
+          wrap.title = label;
+          wrap.style.cssText = "display:inline-flex;align-items:center;justify-content:center;width:100%;color:" + color;
+          const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+          svg.setAttribute("width", "16");
+          svg.setAttribute("height", "16");
+          svg.setAttribute("viewBox", "0 0 16 16");
+          svg.setAttribute("fill", "currentColor");
+          svg.setAttribute("aria-hidden", "true");
+          paths.forEach((d) => {
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.setAttribute("d", d);
+            svg.appendChild(path);
+          });
+          wrap.appendChild(svg);
+          return wrap;
+        }
+      },
+      /*
+       * FROM NAME
+       */
+      {
+        title: "From Name",
+        field: "from",
+        minWidth: 120,
+        formatter: (cell) => asText(
+          cell.getValue()
+        )
+      },
+      /*
+       * FROM
+       */
+      {
+        title: "From",
+        field: "fromNumber",
+        minWidth: 100,
+        formatter: (cell) => asText(
+          formatPhoneNumber(
+            cell.getValue()
+          )
+        )
+      },
+      /*
+       * DIALED
+       */
+      {
+        title: "Dialed",
+        field: "dialed",
+        minWidth: 100,
+        formatter: (cell) => asText(
+          formatPhoneNumber(
+            cell.getValue()
+          )
+        )
+      },
+      /*
+       * TO
+       */
+      {
+        title: "To",
+        field: "to",
+        minWidth: 90,
+        formatter: (cell) => asText(
+          formatPhoneNumber(
+            cell.getValue()
+          )
+        )
+      },
+      {
+        title: "Talk",
+        field: "talking",
+        minWidth: 70,
+        formatter: (cell) => fmt(cell.getValue())
+      },
+      {
+        title: "Ring",
+        field: "ringing",
+        minWidth: 70,
+        formatter: (cell) => slaRingHtml(cell.getValue(), slaSeconds)
+      },
+      {
+        title: "Reason",
+        field: "disconnectReason",
+        minWidth: 140,
+        formatter: (cell) => asText(cell.getValue())
+      },
+      /*
+       * TOTAL
+       */
+      {
+        title: "Total",
+        field: "total",
+        minWidth: 80,
+        formatter: (cell) => fmt(
+          cell.getValue()
+        )
+      },
+      /*
+       * RECORDING
+       *
+       * The cell knows only whether the CDR points at a
+       * recording (hasRecordingHint, decided server-side by
+       * callHasRecordingHint()). Clicking resolves it —
+       * api/recording.php walks every PBX server, so the
+       * table never pays for that unless asked — and the
+       * player opens in the tray under the table.
+       */
+      {
+        title: "Rec",
+        field: "hasRecordingHint",
+        minWidth: 58,
+        hozAlign: "center",
+        headerHozAlign: "center",
+        formatter: (cell) => {
+          const row = cell.getRow().getData() || {};
+          const has = !!row.hasRecordingHint;
+          const id = String(row.id || row.origCallId || "");
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "cm-attach-btn" + (has ? "" : " is-off") + (has && playingRef.current === id ? " is-on" : "");
+          btn.disabled = !has;
+          btn.title = has ? "Play the recording of this call" : "No recording was stored for this call";
+          btn.setAttribute("aria-label", has ? "Play recording" : "No recording available");
+          btn.textContent = has ? "\u25B6" : "\u2014";
+          btn.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            if (has) onPlay(row);
+          });
+          return btn;
+        }
+      },
+      /*
+       * SIP FLOW
+       *
+       * Opens the same cradle-to-grave dialog Call history
+       * uses (components/call-flow-dialog.js) for this call.
+       */
+      {
+        title: "SIP flow",
+        field: "hasFlowHint",
+        minWidth: 72,
+        hozAlign: "center",
+        headerHozAlign: "center",
+        formatter: (cell) => {
+          const row = cell.getRow().getData() || {};
+          const has = !!row.hasFlowHint;
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "cm-attach-btn" + (has ? "" : " is-off");
+          btn.disabled = !has;
+          btn.title = has ? "Open the cradle-to-grave SIP flow for this call" : "No SIP trace was recorded for this call";
+          btn.setAttribute("aria-label", has ? "Open SIP flow" : "No SIP flow available");
+          btn.textContent = has ? "Flow" : "\u2014";
+          btn.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            if (has) onFlow(row);
+          });
+          return btn;
+        }
+      }
+    ];
+  }
+
+  // assets/js/src/lib/metrics.js
+  var cached = null;
+  var inFlight = null;
+  var loadMetricCatalog = () => {
+    if (cached) return Promise.resolve(cached);
+    if (!inFlight) {
+      inFlight = api("filters").then((r) => {
+        const metrics = r && typeof r.metrics === "object" && r.metrics ? r.metrics : {};
+        if (Object.keys(metrics).length) cached = metrics;
+        return metrics;
+      }).catch(() => ({})).finally(() => {
+        inFlight = null;
+      });
+    }
+    return inFlight;
+  };
+  var useMetricCatalog = () => {
+    const [catalog, setCatalog] = useState(cached || {});
+    useEffect(() => {
+      let active = true;
+      if (!cached) {
+        loadMetricCatalog().then((metrics) => {
+          if (active && metrics && Object.keys(metrics).length) setCatalog(metrics);
+        });
+      }
+      return () => {
+        active = false;
+      };
+    }, []);
+    return catalog;
+  };
+
   // assets/js/src/components/call-modal.js
   function CallModal({ metric, hour, timeFrom, timeTo, agent, callId, phoneNumber, callerNumber, queue, queuesOnly, filters, callTypes, slaSeconds, onClose }) {
+    const catalog = useMetricCatalog();
+    const metricMeta = catalog[metric] || null;
+    const metricLabel = metricMeta ? metricMeta.label || metricMeta.title || metric : metric;
+    const metricWording = metricMeta ? metricMeta.title || metricMeta.label || metric : metric;
     const ref = useRef(null);
     const table = useRef(null);
     const [records, setRecords] = useState([]);
@@ -7378,209 +7643,12 @@
             headerSort: true,
             resizable: true
           },
-          columns: [
-            /*
-             * DATE
-             */
-            {
-              title: "Date",
-              field: "startedAt",
-              minWidth: 85,
-              formatter: (cell) => {
-                const v = cell.getValue();
-                const formatted = formatCallDate(v);
-                return formatted || "";
-              }
-            },
-            /*
-             * TIME
-             */
-            {
-              title: "Time",
-              field: "startedAt",
-              minWidth: 85,
-              formatter: (cell) => {
-                const formatted = formatCallTime(cell.getValue());
-                return formatted || "";
-              }
-            },
-            /*
-             * TYPE
-             */
-            {
-              title: "Type",
-              field: "type",
-              minWidth: 52,
-              hozAlign: "center",
-              headerHozAlign: "center",
-              formatter: (cell) => {
-                const t = String(cell.getValue() || "").toLowerCase();
-                const phone = "M1.885.511a1.745 1.745 0 0 1 2.612.163L6.29 2.98c.329.423.445.974.315 1.494l-.547 2.19a.678.678 0 0 0 .178.643l2.457 2.457a.678.678 0 0 0 .644.178l2.189-.547a1.745 1.745 0 0 1 1.494.315l2.306 1.794c.829.645.905 1.87.163 2.611l-1.034 1.034c-.74.74-1.846 1.065-2.877.702a18.634 18.634 0 0 1-7.01-4.42 18.634 18.634 0 0 1-4.42-7.009c-.362-1.03-.037-2.137.703-2.877L1.885.511z";
-                const inboundArrow = "M15.854.146a.5.5 0 0 1 0 .708L11.707 5H14.5a.5.5 0 0 1 0 1h-4a.5.5 0 0 1-.5-.5v-4a.5.5 0 0 1 1 0v2.793L15.146.146a.5.5 0 0 1 .708 0z";
-                const outboundArrow = "M11.5 1a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0V2.707l-4.146 4.147a.5.5 0 0 1-.708-.708L14.293 2H12a.5.5 0 0 1-.5-.5z";
-                const missed = "M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.57 17.57 0 0 0 4.168 6.608 17.57 17.57 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.678.678 0 0 0-.58-.122l-2.19.547a1.745 1.745 0 0 1-1.657-.459L5.482 8.062a1.745 1.745 0 0 1-.46-1.657l.548-2.19a.678.678 0 0 0-.122-.58L3.654 1.328zM13.78.22a.75.75 0 0 1 0 1.06L4.28 10.78a.75.75 0 1 1-1.06-1.06L12.72.22a.75.75 0 0 1 1.06 0z";
-                let color = "#94a3b8";
-                let label = String(cell.getValue() || "");
-                let paths = [phone];
-                if (t === "inbound" || t === "incoming") {
-                  color = "#38bdf8";
-                  label = "Inbound";
-                  paths = [phone, inboundArrow];
-                } else if (t === "outbound" || t === "outgoing") {
-                  color = "#34d399";
-                  label = "Outbound";
-                  paths = [phone, outboundArrow];
-                } else if (t === "missed") {
-                  color = "#f87171";
-                  label = "Missed";
-                  paths = [missed];
-                } else if (t === "onnet") {
-                  color = "#a78bfa";
-                  label = "On-net";
-                  paths = [phone];
-                }
-                const wrap = document.createElement("span");
-                wrap.title = label;
-                wrap.style.cssText = "display:inline-flex;align-items:center;justify-content:center;width:100%;color:" + color;
-                wrap.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' + paths.map((d) => '<path d="' + d + '"/>').join("") + "</svg>";
-                return wrap;
-              }
-            },
-            /*
-             * FROM NAME
-             */
-            {
-              title: "From Name",
-              field: "from",
-              minWidth: 120,
-              formatter: (cell) => cell.getValue() || ""
-            },
-            /*
-             * FROM
-             */
-            {
-              title: "From",
-              field: "fromNumber",
-              minWidth: 100,
-              formatter: (cell) => formatPhoneNumber(
-                cell.getValue()
-              )
-            },
-            /*
-             * DIALED
-             */
-            {
-              title: "Dialed",
-              field: "dialed",
-              minWidth: 100,
-              formatter: (cell) => formatPhoneNumber(
-                cell.getValue()
-              )
-            },
-            /*
-             * TO
-             */
-            {
-              title: "To",
-              field: "to",
-              minWidth: 90,
-              formatter: (cell) => formatPhoneNumber(
-                cell.getValue()
-              )
-            },
-            {
-              title: "Talk",
-              field: "talking",
-              minWidth: 70,
-              formatter: (cell) => fmt(cell.getValue())
-            },
-            {
-              title: "Ring",
-              field: "ringing",
-              minWidth: 70,
-              formatter: (cell) => slaRingHtml(cell.getValue(), slaSeconds)
-            },
-            {
-              title: "Reason",
-              field: "disconnectReason",
-              minWidth: 140,
-              formatter: (cell) => cell.getValue() || ""
-            },
-            /*
-             * TOTAL
-             */
-            {
-              title: "Total",
-              field: "total",
-              minWidth: 80,
-              formatter: (cell) => fmt(
-                cell.getValue()
-              )
-            },
-            /*
-             * RECORDING
-             *
-             * The cell knows only whether the CDR points at a
-             * recording (hasRecordingHint, decided server-side by
-             * callHasRecordingHint()). Clicking resolves it —
-             * api/recording.php walks every PBX server, so the
-             * table never pays for that unless asked — and the
-             * player opens in the tray under the table.
-             */
-            {
-              title: "Rec",
-              field: "hasRecordingHint",
-              minWidth: 58,
-              hozAlign: "center",
-              headerHozAlign: "center",
-              formatter: (cell) => {
-                const row = cell.getRow().getData() || {};
-                const has = !!row.hasRecordingHint;
-                const id = String(row.id || row.origCallId || "");
-                const btn = document.createElement("button");
-                btn.type = "button";
-                btn.className = "cm-attach-btn" + (has ? "" : " is-off") + (has && playingRef.current === id ? " is-on" : "");
-                btn.disabled = !has;
-                btn.title = has ? "Play the recording of this call" : "No recording was stored for this call";
-                btn.setAttribute("aria-label", has ? "Play recording" : "No recording available");
-                btn.textContent = has ? "\u25B6" : "\u2014";
-                btn.addEventListener("click", (ev) => {
-                  ev.stopPropagation();
-                  if (has) setPlaying(row);
-                });
-                return btn;
-              }
-            },
-            /*
-             * SIP FLOW
-             *
-             * Opens the same cradle-to-grave dialog Call history
-             * uses (components/call-flow-dialog.js) for this call.
-             */
-            {
-              title: "SIP flow",
-              field: "hasFlowHint",
-              minWidth: 72,
-              hozAlign: "center",
-              headerHozAlign: "center",
-              formatter: (cell) => {
-                const row = cell.getRow().getData() || {};
-                const has = !!row.hasFlowHint;
-                const btn = document.createElement("button");
-                btn.type = "button";
-                btn.className = "cm-attach-btn" + (has ? "" : " is-off");
-                btn.disabled = !has;
-                btn.title = has ? "Open the cradle-to-grave SIP flow for this call" : "No SIP trace was recorded for this call";
-                btn.setAttribute("aria-label", has ? "Open SIP flow" : "No SIP flow available");
-                btn.textContent = has ? "Flow" : "\u2014";
-                btn.addEventListener("click", (ev) => {
-                  ev.stopPropagation();
-                  if (has) openFlow(row);
-                });
-                return btn;
-              }
-            }
-          ]
+          columns: buildCallColumns({
+            slaSeconds,
+            playingRef,
+            onPlay: setPlaying,
+            onFlow: openFlow
+          })
         }
       );
       return () => {
@@ -7606,8 +7674,8 @@
       } catch (e) {
       }
     }, [playing]);
-    const changePageSize = (value) => {
-      const size = Number(value);
+    const changePageSize = (value2) => {
+      const size = Number(value2);
       setPageSize(size);
       setPage(1);
     };
@@ -7706,30 +7774,7 @@
         setExporting(false);
       }
     };
-    const metricLabels = {
-      total: "All calls",
-      incoming: "Inbound + missed",
-      offered: "Offered",
-      inbound: "Inbound",
-      outbound: "Outbound",
-      missed: "Missed",
-      onnet: "On-net",
-      answered: "Answered",
-      abandoned: "Abandoned",
-      sla: "Within SLA",
-      sla_missed: "SLA missed",
-      handled: "Handled",
-      voicemail: "Voicemail",
-      /* The missed breakdown and the queue scopes used to show their raw
-       * metric id ("missed_noanswer") in the title and the View chip. */
-      missed_abandon: "Abandoned",
-      missed_noanswer: "Missed \u2014 no answer",
-      missed_voicemail: "Missed \u2014 voicemail",
-      missed_no_abandon: "Missed (not abandoned)",
-      queue_abandoned: "Abandoned in queue",
-      queue_offered: "Offered to queue"
-    };
-    const title = callId ? "Call " + callId + " details" : `${metric === "total" ? "All" : metric === "incoming" || metric === "offered" ? "Inbound + missed" : metric === "sla_missed" ? "SLA missed (ring over target)" : metric === "sla" ? "Answered within SLA" : metricLabels[metric] || metric} call details`;
+    const title = callId ? "Call " + callId + " details" : metricWording + " call details";
     const filterChips = [];
     const f = filters || {};
     if (f.start && f.end) {
@@ -7745,7 +7790,7 @@
       filterChips.push({ k: "Types", v: on.length === keys.length ? "All" : on.length ? on.join(", ") : "None" });
     }
     if (metric) {
-      filterChips.push({ k: "View", v: metricLabels[metric] || String(metric) });
+      filterChips.push({ k: "View", v: metricLabel });
     }
     if (callId) filterChips.push({ k: "Call", v: callId });
     if (phoneNumber) filterChips.push({ k: "Number", v: formatPhoneNumber(phoneNumber) });
@@ -8749,7 +8794,7 @@
       return ((parts[0][0] || "") + (parts[1] ? parts[1][0] : "")).toUpperCase();
     };
     const pulse = skelPanel("h-32");
-    const sysTile = ({ label, value, hint, tip, icon, chip, routeId }) => {
+    const sysTile = ({ label, value: value2, hint, tip, icon, chip, routeId }) => {
       const can = (allowedRoutes || []).includes(routeId);
       return h(
         "button",
@@ -8765,7 +8810,7 @@
           "span",
           { className: "min-w-0" },
           h("span", { className: "ops-sys-k flex items-center gap-1" }, label, qHelp(tip)),
-          h("span", { className: "ops-sys-n block" }, value),
+          h("span", { className: "ops-sys-n block" }, value2),
           h("span", { className: "ops-sys-h block truncate" }, hint)
         )
       );
@@ -9096,7 +9141,7 @@
   }
 
   // assets/js/src/components/queue.js
-  function QueueDashboard({ filters, slaSeconds, slaPct, abandonPct, onSlaChange, onCallClick, paused, initialQueue }) {
+  function QueueDashboard({ filters, slaSeconds, slaPct, abandonPct, onSlaChange, onCallClick, initialQueue }) {
     const hourCanvas = useRef(null);
     const hourChart = useRef(null);
     const [term, setTerm] = useState("");
@@ -9118,11 +9163,8 @@
     const [statsSite, setStatsSite] = useState("");
     const [hideInactive, setHideInactive] = useState(true);
     const [sideCollapsed, setSideCollapsed] = useState(false);
+    const [reload, setReload2] = useState(0);
     useEffect(() => {
-      if (paused) {
-        setLoading(true);
-        return;
-      }
       let active = true;
       setLoading(true);
       setError("");
@@ -9140,7 +9182,7 @@
       return () => {
         active = false;
       };
-    }, [filters.start, filters.end, filters.site, filters.department, selected, slaSeconds, paused, tab]);
+    }, [filters.start, filters.end, filters.site, filters.department, selected, slaSeconds, tab, reload]);
     useEffect(() => {
       setPage(1);
       setExpanded("");
@@ -9549,7 +9591,7 @@
         h(
           "div",
           { className: "mb-2 flex items-center justify-between gap-2" },
-          h("div", { className: "dash-label mb-0" }, "Recent calls", qHelp("Click a row to load the Sky cradle path (queues then answering agent). Ring is wait-to-answer.")),
+          h("div", { className: "dash-label mb-0" }, "Recent calls", qHelp("Click a row to load the Sky cradle path (queues then answering agent). Ring is wait-to-answer. Use Open to open that one call \u2014 recording and SIP flow.")),
           h("button", {
             type: "button",
             disabled: !recent.length,
@@ -9568,12 +9610,13 @@
               "tr",
               null,
               h("th", null, ""),
-              ...[["Caller", "Originating caller"], ["Agent", "call-term-user when that extension is not a queue"], ["Path", "Cradle hop"], ["Ring", "Ring / wait before answer"], ["Talk", "Talking duration"], ["Sentiment", "Ending sentiment"], ["Reason", "Disconnect reason"], ["Time", "Queue start (US/Eastern)"]].map(([lab, t]) => h("th", { key: lab }, tip(t, h("span", { className: "cursor-help border-b border-dotted border-slate-600" }, lab))))
+              ...[["Caller", "Originating caller"], ["Agent", "call-term-user when that extension is not a queue"], ["Path", "Cradle hop"], ["Ring", "Ring / wait before answer"], ["Talk", "Talking duration"], ["Sentiment", "Ending sentiment"], ["Reason", "Disconnect reason"], ["Time", "Queue start (US/Eastern)"]].map(([lab, t]) => h("th", { key: lab }, tip(t, h("span", { className: "cursor-help border-b border-dotted border-slate-600" }, lab)))),
+              h("th", { key: "open" }, tip("Open the single call", h("span", { className: "cursor-help border-b border-dotted border-slate-600" }, "Call")))
             )),
             h(
               "tbody",
               null,
-              slice.length === 0 ? h("tr", null, h("td", { colSpan: 8, className: "px-2 py-8 text-center text-slate-500" }, "No queue calls in this range.")) : slice.flatMap((c, i) => {
+              slice.length === 0 ? h("tr", null, h("td", { colSpan: 10, className: "px-2 py-8 text-center text-slate-500" }, "No queue calls in this range.")) : slice.flatMap((c, i) => {
                 const key = String(c.cradle && c.cradle.orig || c.parentId || i) + ":" + i;
                 const open = expanded === key;
                 const hops = cradleHops[key] || c.hops || [];
@@ -9617,6 +9660,21 @@
                     "td",
                     { className: "text-slate-500 whitespace-nowrap" },
                     (formatCallDate(c.startedAt) + " " + formatCallTime(c.startedAt)).trim() || "\u2014"
+                  ),
+                  h(
+                    "td",
+                    null,
+                    c.id ? h("button", {
+                      type: "button",
+                      className: "cursor-pointer rounded border border-slate-700 px-1.5 py-0.5 text-[10px] text-cyan-300 hover:border-cyan-500",
+                      title: "Open this call: recording and SIP flow",
+                      /* The row itself expands the cradle path, so this
+                       * must not also toggle it. */
+                      onClick: (e) => {
+                        if (e && e.stopPropagation) e.stopPropagation();
+                        if (typeof onCallClick === "function") onCallClick({ metric: "total", callId: String(c.id) });
+                      }
+                    }, "Open") : "\u2014"
                   )
                 )];
                 if (open) {
@@ -9626,7 +9684,7 @@
                     { key: key + "-path" },
                     h(
                       "td",
-                      { colSpan: 9, className: "q-path-cell" },
+                      { colSpan: 10, className: "q-path-cell" },
                       cradleBusy === key ? h("div", { className: "text-xs text-slate-500" }, "Loading cradle path\u2026") : h(
                         "div",
                         { className: "q-path" },
@@ -9722,7 +9780,7 @@
         }, shown)
       );
     };
-    const qsKpi = (label, value, icon, tip2, tone, onClick, hint) => h(KpiCard, { label, value, icon, tooltip: tip2, hint, tone: tone === "bad" ? "bad" : tone === "ok" || tone === "good" ? "good" : null, onClick });
+    const qsKpi = (label, value2, icon, tip2, tone, onClick, hint) => h(KpiCard, { label, value: value2, icon, tooltip: tip2, hint, tone: tone === "bad" ? "bad" : tone === "ok" || tone === "good" ? "good" : null, onClick });
     const summary = h(
       "div",
       { className: "qs-page" },
@@ -10000,7 +10058,7 @@
             }, "Export CSV")
           )
         ),
-        error ? h("div", { className: "mb-2 border border-rose-900 bg-rose-950/30 p-3 text-xs text-rose-300" }, error) : null,
+        error ? h(ErrorState, { message: error, onRetry: () => setReload2((n) => n + 1), className: "mb-2" }) : null,
         loading && !data ? skeletonMain : tab === "summary" ? summary : overview
       )
     );
@@ -10323,6 +10381,14 @@
     const [aaRoster, setAaRoster] = useState([]);
     const [aaRosterLoading, setAaRosterLoading] = useState(false);
     const [aaError, setAaError] = useState("");
+    const [aaReload, setAaReload] = useState(0);
+    const retryAa = () => {
+      setAaError("");
+      setAaRoster([]);
+      setAaReport(null);
+      setAaStructures(null);
+      setAaReload((n) => n + 1);
+    };
     const [aaLoading, setAaLoading] = useState(false);
     const [cacheJob, setCacheJob] = useState(null);
     const rangeDayCount = (() => {
@@ -10560,7 +10626,7 @@
       return () => {
         active = false;
       };
-    }, [route, filters.start, filters.end, filters.department, filters.site]);
+    }, [route, filters.start, filters.end, filters.department, filters.site, aaReload]);
     useEffect(() => {
       setAaReport(null);
       setAaStructures(null);
@@ -10787,7 +10853,7 @@
               }, label)
             )
           ) : null,
-          aaError ? h("div", { className: "border border-rose-900 bg-rose-950/30 p-4 text-sm text-rose-300" }, aaError) : !aaHasSelection ? h(
+          aaError ? h(ErrorState, { message: aaError, onRetry: retryAa, className: "p-4 text-sm" }) : !aaHasSelection ? h(
             "div",
             { className: "aa-empty" },
             h(NavIcon, { name: "attendants", className: "aa-empty-icon" }),
@@ -10815,12 +10881,13 @@
         slaSeconds,
         slaPct: domainSettings.slaPct,
         abandonPct: domainSettings.abandonPct,
-        paused: false,
         initialQueue: focusQueue,
         onSlaChange: setSlaSeconds,
         onCallClick: (payload) => setModal({
           metric: payload.metric || "total",
           hour: payload.hour,
+          /* QA-6: a queue recent row stands for ONE call. */
+          callId: payload.callId,
           queue: payload.queue || null,
           queuesOnly: !!payload.queuesOnly,
           slaSeconds: payload.slaSeconds,
