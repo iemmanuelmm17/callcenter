@@ -8,7 +8,8 @@
  * rendered popup. tests/js/smoke.mjs drives the real popup on top of this.
  */
 import {
-  MAX_RANGE_DAYS, addDays, buildCalendarDays, clampEnd, dateString, daysInMonth, daysSpan, formatDate, monthNames, weekDays
+  MAX_RANGE_DAYS, MANAGER_MAX_RANGE_DAYS, addDays, buildCalendarDays, clampEnd, dateString, daysInMonth, daysSpan, formatDate,
+  maxRangeDaysFor, monthEnd, monthNames, monthStart, quarterStart, shiftMonths, weekStart, weekdayOf, weekDays, yearStart
 } from '../../assets/js/src/lib/date-range.js';
 
 const failures = [];
@@ -48,6 +49,50 @@ check('a future end is pulled back to today', clampEnd('2026-08-01', '2026-12-31
 check('exactly MAX_RANGE_DAYS is allowed', clampEnd('2026-08-01', '2026-08-31', '2026-12-31') === '2026-08-31', clampEnd('2026-08-01', '2026-08-31', '2026-12-31'));
 check('one day over the cap is trimmed to the cap', clampEnd('2026-08-01', '2026-09-01', '2026-12-31') === '2026-08-31', clampEnd('2026-08-01', '2026-09-01', '2026-12-31'));
 check('today still wins when the cap reaches past it', clampEnd('2026-12-20', '2027-12-31', '2026-12-25') === '2026-12-25');
+
+/* F2: the span cap is per role, and the two sides must agree.
+ * includes/auth.php authorizedFilters() clamps a supervisor to 31 days and an
+ * office manager to 366; if the picker offered more, the API would quietly trim
+ * the range and the numbers on screen would not be the range on the button. */
+check('the supervisor cap is the 31-day window', maxRangeDaysFor('supervisor') === MAX_RANGE_DAYS && MAX_RANGE_DAYS === 31);
+check('the office manager cap is a year plus the leap day', maxRangeDaysFor('office_manager') === MANAGER_MAX_RANGE_DAYS && MANAGER_MAX_RANGE_DAYS === 366);
+check('the cap is role-based, not role-string-lenient', maxRangeDaysFor('office-manager') === MAX_RANGE_DAYS && maxRangeDaysFor('') === MAX_RANGE_DAYS);
+check('a caller with a wider cap can select a quarter',
+  clampEnd('2026-01-01', '2026-03-31', '2026-12-31', MANAGER_MAX_RANGE_DAYS) === '2026-03-31',
+  clampEnd('2026-01-01', '2026-03-31', '2026-12-31', MANAGER_MAX_RANGE_DAYS));
+/* 1 Jan 2026 + 365 days = 1 Jan 2027: 366 days inclusive, the last span the
+ * manager cap allows. One day more trims back to exactly that. */
+check('the manager cap allows exactly 366 days',
+  clampEnd('2026-01-01', '2027-01-01', '2027-12-31', MANAGER_MAX_RANGE_DAYS) === '2027-01-01' &&
+  daysSpan('2026-01-01', clampEnd('2026-01-01', '2027-01-01', '2027-12-31', MANAGER_MAX_RANGE_DAYS)) === 366,
+  clampEnd('2026-01-01', '2027-01-01', '2027-12-31', MANAGER_MAX_RANGE_DAYS));
+check('a day past the manager cap is trimmed to the same 366 days',
+  clampEnd('2026-01-01', '2027-01-02', '2027-12-31', MANAGER_MAX_RANGE_DAYS) === '2027-01-01' &&
+  daysSpan('2026-01-01', clampEnd('2026-01-01', '2027-01-02', '2027-12-31', MANAGER_MAX_RANGE_DAYS)) === 366,
+  clampEnd('2026-01-01', '2027-01-02', '2027-12-31', MANAGER_MAX_RANGE_DAYS));
+check('the default cap is unchanged for a caller that passes nothing',
+  clampEnd('2026-01-01', '2026-03-31', '2026-12-31') === '2026-01-31',
+  clampEnd('2026-01-01', '2026-03-31', '2026-12-31'));
+
+/* F2: the preset boundaries. Every one is string arithmetic on a calendar
+ * date, so the date a preset asks for cannot depend on the reader's timezone:
+ * "This month" is the 1st of the month the desk is currently in. */
+console.log('\n== F2: calendar boundaries are dates, not instants ==');
+check('a month starts at the 1st', monthStart('2026-10-06') === '2026-10-01' && monthStart('2026-02-28') === '2026-02-01');
+check('a month ends at the last day it really has', monthEnd('2026-10-06') === '2026-10-31' && monthEnd('2026-02-10') === '2026-02-28' && monthEnd('2028-02-10') === '2028-02-29');
+check('subtracting a month clamps the day, like the API does',
+  shiftMonths('2026-03-31', -1) === '2026-02-28' && shiftMonths('2026-01-31', -1) === '2025-12-31',
+  [shiftMonths('2026-03-31', -1), shiftMonths('2026-01-31', -1)]);
+check('a year earlier clamps a leap day', shiftMonths('2028-02-29', -12) === '2027-02-28', shiftMonths('2028-02-29', -12));
+check('weekday 0 is Sunday and 6 is Saturday', weekdayOf('2026-10-04') === 0 && weekdayOf('2026-10-10') === 6);
+check('the week starts on Monday', weekStart('2026-10-06') === '2026-10-05' && weekStart('2026-10-04') === '2026-09-28' && weekStart('2026-10-05') === '2026-10-05');
+check('the quarter starts on a quarter boundary',
+  quarterStart('2026-10-06') === '2026-10-01' && quarterStart('2026-01-01') === '2026-01-01' &&
+  quarterStart('2026-03-31') === '2026-01-01' && quarterStart('2026-12-31') === '2026-10-01',
+  [quarterStart('2026-10-06'), quarterStart('2026-03-31'), quarterStart('2026-12-31')]);
+check('the year starts on 1 January', yearStart('2026-10-06') === '2026-01-01' && yearStart('2026-01-01') === '2026-01-01');
+check('a rolling 90-day window is 90 days inclusive',
+  daysSpan(addDays('2026-10-06', -89), '2026-10-06') === 90, daysSpan(addDays('2026-10-06', -89), '2026-10-06'));
 
 console.log('\n== the month grid ==');
 const october = buildCalendarDays(new Date(2026, 9, 1));

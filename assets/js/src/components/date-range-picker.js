@@ -8,7 +8,13 @@ import { h, useEffect, useRef, useState } from '../lib/react.js';
 import { today } from '../lib/time.js';
 import { MAX_RANGE_DAYS, buildCalendarDays, clampEnd, dateString, daysSpan, formatDate, monthNames, weekDays } from '../lib/date-range.js';
 
-function DateRangePicker({start, end, onChange, disabled}) {
+function DateRangePicker({start, end, onChange, disabled, maxRangeDays}) {
+    /*
+     * The span cap this role may pick (F2). Defaults to the 31-day window, so
+     * every caller that does not pass one keeps the old behaviour.
+     */
+    const spanCap = Number(maxRangeDays) > 0 ? Number(maxRangeDays) : MAX_RANGE_DAYS;
+
     const [open, setOpen] = useState(false);
 
     useEffect(() => {
@@ -109,7 +115,7 @@ function DateRangePicker({start, end, onChange, disabled}) {
          * Selecting end date
          */
         setTempEnd(
-            clampEnd(tempStart, selected, maxDate)
+            clampEnd(tempStart, selected, maxDate, spanCap)
         );
 
         setHoverDate('');
@@ -923,7 +929,7 @@ function DateRangePicker({start, end, onChange, disabled}) {
                                 !tempStart ||
                                 !tempEnd ||
                                 tempEnd > maxDate ||
-                                daysSpan(tempStart, tempEnd) > MAX_RANGE_DAYS,
+                                daysSpan(tempStart, tempEnd) > spanCap,
 
                             onClick:
                                 apply,

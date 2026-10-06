@@ -36,8 +36,8 @@ const setAuthExpiredHandler = handler => {
   };
 
 const ROLE_ROUTES = {
-    office_manager: ['dashboard', 'agents', 'queues', 'telephone_numbers', 'attendants', 'call_history'],
-    supervisor: ['dashboard', 'agents', 'queues', 'call_history'],
+    office_manager: ['dashboard', 'agents', 'queues', 'telephone_numbers', 'attendants', 'call_history', 'reports'],
+    supervisor: ['dashboard', 'agents', 'queues', 'call_history', 'reports'],
     agent: ['dashboard'],
     basic_user: ['dashboard']
   };

@@ -5,13 +5,14 @@
  * original source — the move is verified by declaration hash. */
 
 import { ThemeToggle } from './ui.js';
+import { ServiceSettings, normalizeHours, defaultBusinessHours, hoursHaveOpenDay } from './settings-service.js';
 import { api } from '../lib/api.js';
 import { h, useEffect, useEscape, useState } from '../lib/react.js';
 import { writeSlaSeconds } from '../lib/sla.js';
 
 function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClose, onSaved, onNotify}) {
   useEscape(true, onClose);
-  const DEFAULTS = { slaSeconds: 20, slaPct: 80, missedPct: 20, abandonPct: 10, ahtMinutes: 5, ahtOutboundMinutes: 5, topAgentAhtMinutes: 5, topAgentMinCalls: 20 };
+  const DEFAULTS = { slaSeconds: 20, slaPct: 80, missedPct: 20, abandonPct: 10, ahtMinutes: 5, ahtOutboundMinutes: 5, contactPct: 50, topAgentAhtMinutes: 5, topAgentMinCalls: 20 };
   /* QA-5: supervisors may read the thresholds, only managers change them. */
   const canSave = user.role === 'office_manager';
   const [form, setForm] = useState({
@@ -21,16 +22,35 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
     abandonPct: DEFAULTS.abandonPct,
     ahtMinutes: DEFAULTS.ahtMinutes,
     ahtOutboundMinutes: DEFAULTS.ahtOutboundMinutes,
+    contactPct: DEFAULTS.contactPct,
     topAgentAhtMinutes: DEFAULTS.topAgentAhtMinutes,
     topAgentMinCalls: DEFAULTS.topAgentMinCalls
   });
   const [live, setLive] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  /*
+   * The service-desk settings (opening hours, per-queue targets, roster) are
+   * held here with the thresholds so one Save writes one payload: a manager who
+   * edits both must not be able to save half of it.
+   */
+  const [service, setService] = useState(() => ({
+    businessHours: defaultBusinessHours(),
+    queueSla: {},
+    roster: []
+  }));
+  /* The lists the editors need (agents, queues) come with the filter payload
+   * every role already fetches on load. */
+  const [directory, setDirectory] = useState({ agents: [], queues: [] });
   useEffect(() => {
     api('settings').then(r => {
       const d = r && r.data ? r.data : r;
       if (!d) return;
+      setService({
+        businessHours: normalizeHours(d.businessHours),
+        queueSla: (d.queueSla && typeof d.queueSla === 'object') ? d.queueSla : {},
+        roster: Array.isArray(d.roster) ? d.roster : []
+      });
       setForm({
         slaSeconds: Number(d.slaSeconds || DEFAULTS.slaSeconds),
         slaPct: Number(d.slaPct || DEFAULTS.slaPct),
@@ -38,10 +58,22 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
         abandonPct: Number(d.abandonPct || DEFAULTS.abandonPct),
         ahtMinutes: Number(d.ahtMinutes || DEFAULTS.ahtMinutes),
         ahtOutboundMinutes: Number(d.ahtOutboundMinutes || d.ahtMinutes || DEFAULTS.ahtOutboundMinutes),
+        contactPct: Number(d.contactPct || DEFAULTS.contactPct),
         topAgentAhtMinutes: Number(d.topAgentAhtMinutes || d.ahtMinutes || DEFAULTS.topAgentAhtMinutes),
         topAgentMinCalls: Number(d.topAgentMinCalls ?? DEFAULTS.topAgentMinCalls)
       });
     }).catch(() => {});
+  }, []);
+  useEffect(() => {
+    api('filters')
+      .then(r => {
+        const data = r && r.data ? r.data : r;
+        setDirectory({
+          agents: Array.isArray(data?.agents) ? data.agents : [],
+          queues: Array.isArray(data?.queues) ? data.queues : []
+        });
+      })
+      .catch(() => {});
   }, []);
   useEffect(() => {
     if (!filters || !filters.start) return;
@@ -65,13 +97,19 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
           missedPct,
           abandonPct,
           ahtMinutes: ahtSec / 60,
-          ahtOutboundMinutes: ahtOutSec / 60
+          ahtOutboundMinutes: ahtOutSec / 60,
+          /* Sprint B: the contact-rate chip reads the outbound panel's own
+           * connects ÷ attempts, so the modal quotes no rate the report does
+           * not also publish. */
+          ob: Number(outbound.count || 0),
+          obConnected: Number(outbound.connected || 0),
+          contactPct: Number(outbound.connectPct || 0)
         });
       })
       .catch(() => setLive(null));
   }, [filters && filters.start, filters && filters.end, form.slaSeconds]);
   const clamp = (key, v) => {
-    const spec = { slaSeconds: [5, 120, 1], slaPct: [1, 100, 0.5], missedPct: [1, 100, 0.5], abandonPct: [1, 100, 0.5], ahtMinutes: [1, 120, 0.5], ahtOutboundMinutes: [1, 120, 0.5], topAgentAhtMinutes: [0.5, 120, 0.5], topAgentMinCalls: [0, 10000, 1] }[key];
+    const spec = { slaSeconds: [5, 120, 1], slaPct: [1, 100, 0.5], missedPct: [1, 100, 0.5], abandonPct: [1, 100, 0.5], ahtMinutes: [1, 120, 0.5], ahtOutboundMinutes: [1, 120, 0.5], contactPct: [1, 100, 0.5], topAgentAhtMinutes: [0.5, 120, 0.5], topAgentMinCalls: [0, 10000, 1] }[key];
     const n = Number(v);
     if (!Number.isFinite(n)) return form[key];
     const [min, max, step] = spec;
@@ -80,7 +118,7 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
   };
   const setKey = (key, v) => setForm(f => ({ ...f, [key]: clamp(key, v) }));
   const stepKey = (key, dir) => {
-    const step = { slaSeconds: 1, slaPct: 0.5, missedPct: 0.5, abandonPct: 0.5, ahtMinutes: 0.5, ahtOutboundMinutes: 0.5, topAgentAhtMinutes: 0.5, topAgentMinCalls: 1 }[key];
+    const step = { slaSeconds: 1, slaPct: 0.5, missedPct: 0.5, abandonPct: 0.5, ahtMinutes: 0.5, ahtOutboundMinutes: 0.5, contactPct: 0.5, topAgentAhtMinutes: 0.5, topAgentMinCalls: 1 }[key];
     setKey(key, Number(form[key]) + dir * step);
   };
   const save = async () => {
@@ -94,9 +132,22 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
         abandonPct: clamp('abandonPct', form.abandonPct),
         ahtMinutes: clamp('ahtMinutes', form.ahtMinutes),
         ahtOutboundMinutes: clamp('ahtOutboundMinutes', form.ahtOutboundMinutes),
+        contactPct: clamp('contactPct', form.contactPct),
         topAgentAhtMinutes: clamp('topAgentAhtMinutes', form.topAgentAhtMinutes),
-        topAgentMinCalls: clamp('topAgentMinCalls', form.topAgentMinCalls)
+        topAgentMinCalls: clamp('topAgentMinCalls', form.topAgentMinCalls),
+        /*
+         * The service-desk block. A calendar that is switched on with no open
+         * day is refused by the server on purpose (it would report zero calls),
+         * so the client does not send one and says why instead of appearing to
+         * save.
+         */
+        businessHours: service.businessHours,
+        queueSla: service.queueSla,
+        roster: service.roster
       };
+      if (payload.businessHours && payload.businessHours.enabled && !hoursHaveOpenDay(payload.businessHours)) {
+        throw new Error('Opening hours need at least one open day before they can be switched on.');
+      }
       const saved = await api('settings', payload);
       const d = saved && saved.data ? saved.data : saved;
       onSlaChange(writeSlaSeconds(d.slaSeconds));
@@ -229,6 +280,15 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
             ? liveChip('Current outbound: ' + Number(live.ahtOutboundMinutes || 0).toFixed(1) + ' min', ahtOutOver)
             : h('span', { className: 'set-live is-na' }, 'Current: —')
         }),
+        row({
+          key: 'contactPct', tone: 'good', icon: 'fa-solid fa-phone-arrow-up-right',
+          title: 'Outbound contact rate (at least)',
+          desc: 'Outbound calls a human answered ÷ outbound attempts. The agent table marks a rate below this red — a floor, where every other threshold here is a ceiling.',
+          unit: '%',
+          liveNode: live
+            ? liveChip('Current outbound connects: ' + Number(live.obConnected || 0) + ' of ' + Number(live.ob || 0) + ' attempts', false)
+            : h('span', { className: 'set-live is-na' }, 'Current: —')
+        }),
         h('div', { className: 'set-sec-label' }, 'Top agent qualification'),
         h('div', { className: 'set-row-desc', style: { margin: '-2px 0 8px', opacity: .85 } },
           'Applies to the "Lowest AHT" ranking on the Operations overview. An agent qualifies for the podium only when both conditions are met. Agents that miss the bar are still listed, ranked below.'),
@@ -262,6 +322,14 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
       ),
       h('div', { className: 'set-foot' },
         h('div', { className: 'set-foot-left' },
+      h(ServiceSettings, {
+        value: service,
+        onChange: setService,
+        canSave,
+        agents: directory.agents,
+        queues: directory.queues
+      }),
+
           canSave ? h('button', { type: 'button', className: 'set-reset', onClick: () => setForm({ ...DEFAULTS }) }, 'Reset to defaults') : null,
           h('div', { className: 'set-scope' }, 'Applies to this PBX domain only')
         ),

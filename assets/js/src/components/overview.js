@@ -5,11 +5,13 @@
  * original source — the move is verified by declaration hash. */
 
 import { splineArea } from './charts.js';
+import { WeekHourHeatmap } from './heatmap.js';
+import { SentimentCard } from './sentiment.js';
 import { SlaControl, Tooltip, skelPanel } from './ui.js';
 import { fmt, fmtNum } from '../lib/format.js';
-import { h, useEffect, useRef, useState } from '../lib/react.js';
+import { h, keyActivate, useEffect, useRef, useState } from '../lib/react.js';
 
-function OverviewDashboard({loading, report, filters, inventory, inventoryReady, slaSeconds, onSlaChange, onMetric, onHourClick, onDayClick, onAgentClick, onNavigate, allowedRoutes, topAgentQual}) {
+function OverviewDashboard({loading, report, filters, inventory, inventoryReady, slaSeconds, onSlaChange, onMetric, onHourClick, onDayClick, onAgentClick, onNavigate, allowedRoutes, topAgentQual, compare, onCompareChange, onSentimentOnly}) {
   const canvas = useRef(null);
   const chart = useRef(null);
   const ready = inventoryReady || {};
@@ -102,7 +104,49 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
   const inbound = report?.summary?.inbound || {};
   const sl = report?.summary?.serviceLevel || {};
   const mb = report?.summary?.missedBreakdown || {};
+  /* Sprint A: the wait bands, the hold nobody used to see, and the links layer
+   * (transfers, returned calls, repeat callers). */
+  const waitBuckets = report?.summary?.waitBuckets || {};
+  const missedWaitBuckets = report?.summary?.missedWaitBuckets || {};
+  const abandonWaitBuckets = report?.summary?.abandonWaitBuckets || {};
+  const hold = report?.summary?.hold || {};
+  const links = report?.links || null;
+  /*
+   * AHT by hour (Sprint A). Only the hours that saw traffic are shown: a quiet
+   * desk has twelve empty rows and listing them pushes the busy ones off the
+   * card. The totals line is the period's own weighted AHT (total talk ÷
+   * answered inbound), so it agrees with the KPI above rather than averaging
+   * 24 hourly averages.
+   */
+  const hourly = Array.isArray(report?.summary?.hourly) ? report.summary.hourly : [];
+  const hourlyBusy = hourly.filter(row => Number(row.calls || 0) > 0);
+  const hourlyTotals = hourlyBusy.reduce((acc, row) => {
+    acc.calls += Number(row.calls || 0);
+    acc.answered += Number(row.answered || 0);
+    acc.missed += Number(row.missed || 0);
+    acc.talkSeconds += Number(row.talkSeconds || 0);
+    return acc;
+  }, { calls: 0, answered: 0, missed: 0, talkSeconds: 0 });
+  const waitTotal = Object.values(waitBuckets).reduce((a, b) => a + Number(b || 0), 0);
   const prevCounts = report?.comparison?.previous?.counts || {};
+  /*
+   * F3/§5.3: the baseline is named, not implied. "vs last period" is a claim
+   * the reader cannot check; "vs previous 7 days (Jul 25 - Jul 31)" is one they
+   * can. The label and the dates come from the server that fetched them.
+   */
+  const compareMode = report?.comparison?.mode || compare || 'previous';
+  const compareLabel = report?.comparison?.label
+    || (compareMode === 'weekday' ? 'same weekday last week'
+      : compareMode === 'month' ? 'same dates last month'
+        : compareMode === 'mtd' ? 'same point last month'
+          : compareMode === 'year' ? 'same dates last year'
+            : 'previous period');
+  const prevSpan = report?.comparison?.previous?.start && report?.comparison?.previous?.end
+    ? (report.comparison.previous.start === report.comparison.previous.end
+      ? report.comparison.previous.start
+      : report.comparison.previous.start + ' \u2013 ' + report.comparison.previous.end)
+    : '';
+  const baselineText = 'vs ' + compareLabel + (prevSpan ? ' (' + prevSpan + ')' : '');
   /* True between phase 1 painting and phase 2 landing. */
   const comparisonPending = report?.comparison?.pending === true;
   const total = Number(c.total || 0);
@@ -308,7 +352,7 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
     } else if (!comparisonPending && pctDelta(missed, prevCounts.missed) > 15 && missed > 0) {
       insight = {
         bad: false,
-        title: 'Missed calls are up ' + pctDelta(missed, prevCounts.missed).toFixed(1) + '% vs last period',
+        title: 'Missed calls are up ' + pctDelta(missed, prevCounts.missed).toFixed(1) + '% ' + baselineText,
         body: fmtNum(missed) + ' missed this range versus ' + fmtNum(prevCounts.missed || 0) + ' previously.',
         link: 'Open missed calls',
         metric: 'missed'
@@ -346,9 +390,32 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
     h('div', {className:'ops-head'},
       h('div', null,
         h('h1', {className:'ops-title'}, 'Operations overview'),
-        h('p', {className:'ops-sub'}, 'Scan for missed calls, SLA breaches, and agent load. Compare to the previous period of the same length.')
+        h('p', {className:'ops-sub'},
+          'Scan for missed calls, SLA breaches, and agent load. Deltas compare ' + baselineText + '.')
       ),
       h('div', {className:'flex shrink-0 items-center gap-2'},
+        /*
+         * The baseline switch (F3). A dashboard control rather than a filter-bar
+         * one: it changes what the numbers are compared AGAINST, not which calls
+         * are counted.
+         */
+        h('div', {className:'ops-compare'},
+          h('label', {className:'ops-compare-label', htmlFor:'ops-compare-select'}, 'Compare'),
+          h('select', {
+            id: 'ops-compare-select',
+            className: 'ops-compare-select',
+            value: compareMode,
+            title: 'Which period the trend arrows and deltas compare against',
+            onChange: e => onCompareChange && onCompareChange(e.target.value)
+          },
+            h('option', {value: 'previous'}, 'Previous period'),
+            h('option', {value: 'weekday'}, 'Same weekday last week'),
+            h('option', {value: 'mtd'}, 'Same point last month'),
+            h('option', {value: 'month'}, 'Same dates last month'),
+            h('option', {value: 'year'}, 'Same dates last year')
+          ),
+          h('span', {className:'ops-compare-hint'}, prevSpan ? 'baseline ' + prevSpan : 'baseline not fetched')
+        ),
         h(SlaControl, {value: slaSeconds, onChange: onSlaChange}),
         reportReady ? h('button', {
           type:'button',
@@ -370,7 +437,7 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
     h('div', {className:'ops-top'},
       reportReady
         ? h('section', {className:'ops-card'},
-            h('div', {className:'ops-total-k flex items-center gap-1'}, 'Total calls', qHelp('All calls in the selected range. Click the number to open the call list. Delta is versus the previous period of the same length (' + fmtNum(prevCounts.total || 0) + ').')),
+            h('div', {className:'ops-total-k flex items-center gap-1'}, 'Total calls', qHelp('All calls in the selected range. Click the number to open the call list. The delta compares against ' + baselineText + ': ' + fmtNum(prevCounts.total || 0) + ' calls.')),
             h('div', {className:'ops-total-h'}, 'All directions · selected range'),
             h('button', {type:'button', className:'ops-total-n', onClick: () => onMetric && onMetric('total')}, fmtNum(total)),
             /*
@@ -379,10 +446,10 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
              * would invent a -100% swing out of missing data.
              */
             comparisonPending
-              ? h('div', {className: 'ops-total-delta is-flat'}, 'Comparing to last period…')
+              ? h('div', {className: 'ops-total-delta is-flat'}, 'Comparing…')
               : h('div', {className: 'ops-total-delta ' + (Math.abs(totalDelta) < 0.05 ? 'is-flat' : (totalDelta > 0 ? 'is-up' : 'is-down'))},
                   (totalDelta > 0 ? '▲ ' : (totalDelta < 0 ? '▼ ' : '')) +
-                  Math.abs(totalDelta).toFixed(1) + '% vs last period (' + fmtNum(prevCounts.total || 0) + ')'
+                  Math.abs(totalDelta).toFixed(1) + '% ' + baselineText + ' (' + fmtNum(prevCounts.total || 0) + ')'
                 ),
             sparkline(dayList.map(d => Number(days[d] || 0)))
           )
@@ -450,15 +517,197 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
 
     h('div', {className:'ops-split'},
       reportReady
+        ? h('section', {className:'ops-card ops-wait'},
+            h('div', {className:'ops-label'}, 'How long callers waited', qHelp('Every answered inbound call, banded by how long it rang before somebody picked up. p50 is the middle caller and p90 the slow tenth — the numbers a manager quotes, computed with the same percentile method as a spreadsheet (PERCENTILE.INC). Click a band to open exactly those calls.')),
+            h('div', {className:'ops-wait-head'},
+              h('div', {className:'ops-wait-stat'},
+                h('span', {className:'ops-wait-k'}, 'p50 wait'),
+                h('span', {className:'ops-wait-v'}, (sl.p50Wait || 0) + 's')
+              ),
+              h('div', {className:'ops-wait-stat'},
+                h('span', {className:'ops-wait-k'}, 'p90 wait'),
+                h('span', {className:'ops-wait-v'}, (sl.p90Wait || 0) + 's')
+              ),
+              h('div', {className:'ops-wait-stat'},
+                h('span', {className:'ops-wait-k'}, 'Hold'),
+                h('span', {className:'ops-wait-v'}, (hold.totalSeconds ? Math.round(hold.totalSeconds / 60) + 'm' : '0m')),
+                h('span', {className:'ops-wait-hint'}, fmtNum(hold.calls || 0) + ' calls held')
+              ),
+              h('div', {className:'ops-wait-stat'},
+                h('span', {className:'ops-wait-k'}, 'In SLA'),
+                h('span', {className:'ops-wait-v'}, (sl.sla || 0) + '%'),
+                h('span', {className:'ops-wait-hint'},
+                  sl.perQueue
+                    ? 'per queue, avg target ' + (sl.avgTargetSeconds || sl.slaSeconds || 20) + 's'
+                    : 'within ' + (sl.slaSeconds || slaSeconds || 20) + 's')
+              )
+            ),
+            h('div', {className:'ops-wait-bars'},
+              ...[['0-30', 'under 30s', C.good], ['31-60', '31–60s', C.warn], ['61-120', '61–120s', C.warn], ['120+', 'over 120s', C.bad]].map(([band, label, color]) => {
+                const value = Number(waitBuckets[band] || 0);
+                const pct = waitTotal ? (value / waitTotal) * 100 : 0;
+                return h('button', {
+                  key: band,
+                  type: 'button',
+                  className: 'ops-wait-row',
+                  title: value + ' call(s) waited ' + label,
+                  onClick: () => onMetric && onMetric('inbound', { waitBucket: band })
+                },
+                  h('span', {className:'ops-wait-name'}, label),
+                  h('span', {className:'ops-wait-track'},
+                    h('span', {className:'ops-wait-fill', style:{width: pct.toFixed(1) + '%', background: color}})
+                  ),
+                  h('span', {className:'ops-wait-val'}, fmtNum(value)),
+                  h('span', {className:'ops-wait-pct'}, pct.toFixed(0) + '%')
+                );
+              })
+            ),
+            h('div', {className:'ops-hint'},
+              'Abandons by how long the caller waited: ' +
+              fmtNum(abandonWaitBuckets.lt5 || 0) + ' under 5s (usually misdials) · ' +
+              fmtNum(abandonWaitBuckets['5-30'] || 0) + ' 5–30s · ' +
+              fmtNum(abandonWaitBuckets.gt30 || 0) + ' over 30s (a staffing failure)'
+            ),
+            /*
+             * Sprint B (§3): the miss rate inside each wait band, with the band's
+             * own base in brackets. The bands partition every arrival, so the
+             * three counts add up to the period's offered calls.
+             */
+            h('div', {className:'ops-hint ops-wait-miss'},
+              'Missed within each wait band: ' +
+              (report?.summary?.waitBandMix || []).map(b =>
+                b.label + ' ' + Number(b.missPct || 0).toFixed(1) + '% (' +
+                fmtNum(b.missed || 0) + ' of ' + fmtNum(b.offered || 0) + ')'
+              ).join(' · ')
+            )
+          )
+        : pulse,
+      reportReady && links
+        ? h('section', {className:'ops-card ops-links'},
+            h('div', {className:'ops-label'}, 'Follow-ups', qHelp('Transfers: how often a call was handed to a different agent (a call routed through three agents counts as two hand-offs but one transferred call). Callbacks: missed calls an outbound call to the same number came after, within 24 hours — matched on the customer number, so a return call from a softphone counts. Repeat callers: the same number calling in twice or more.')),
+            h('button', {type:'button', className:'ops-link-row', title: 'Open the calls that were not returned',
+              onClick: () => onMetric && onMetric('inbound', { callbackState: 'unreturned' })
+            },
+              h('span', {className:'ops-link-k'}, 'Missed calls not returned'),
+              h('span', {className:'ops-link-v'}, fmtNum(links.callbacks?.unreturned || 0)),
+              h('span', {className:'ops-link-h'}, (links.callbacks?.ratePct || 0) + '% of ' + fmtNum(links.callbacks?.missed || 0) + ' were')
+            ),
+            h('button', {type:'button', className:'ops-link-row', title: 'Open the returned calls',
+              onClick: () => onMetric && onMetric('inbound', { callbackState: 'returned' })
+            },
+              h('span', {className:'ops-link-k'}, 'Returned within 24h'),
+              h('span', {className:'ops-link-v'}, fmtNum(links.callbacks?.returned || 0)),
+              h('span', {className:'ops-link-h'},
+                links.callbacks?.avgReturnSeconds
+                  ? 'avg back in ' + Math.round(links.callbacks.avgReturnSeconds / 60) + ' min'
+                  : 'none yet')
+            ),
+            h('div', {className:'ops-link-row is-static'},
+              h('span', {className:'ops-link-k'}, 'Transfer rate'),
+              h('span', {className:'ops-link-v'}, (links.transfers?.ratePct || 0) + '%'),
+              h('span', {className:'ops-link-h'},
+                fmtNum(links.transfers?.count || 0) + ' hand-offs in ' + fmtNum(links.transfers?.handled || 0) + ' handled')
+            ),
+            h('div', {className:'ops-link-row is-static'},
+              h('span', {className:'ops-link-k'}, 'Repeat callers (24h)'),
+              h('span', {className:'ops-link-v'}, (links.repeat?.rate24Pct || 0) + '%'),
+              h('span', {className:'ops-link-h'},
+                fmtNum(links.repeat?.repeat24 || 0) + ' of ' + fmtNum(links.repeat?.callers || 0) + ' callers')
+            ),
+            (links.transfers?.agentPairs || []).length
+              ? h('div', {className:'ops-link-pairs'},
+                  h('div', {className:'ops-hint'}, 'Most common hand-offs'),
+                  ...links.transfers.agentPairs.slice(0, 3).map((pair, i) =>
+                    h('div', {key: i, className:'ops-link-pair'},
+                      h('span', null, pair.from + ' → ' + pair.to),
+                      h('span', {className:'ops-link-v'}, fmtNum(pair.count))
+                    ))
+                )
+              : h('div', {className:'ops-hint'}, 'No transfers in this period.')
+          )
+        : pulse
+    ),
+
+    /*
+     * Sprint B: the period's sentiment, beside the wait card - the two figures
+     * a weekly huddle reads together ("we were slow AND they were unhappy").
+     */
+    reportReady
+      ? h(SentimentCard, {
+          sentiment: report?.summary?.sentiment,
+          loading: false,
+          /* Scopes the whole dashboard to the negative calls, which is the
+           * filter the bar offers - not a drill that would open a list the
+           * numbers above it were not computed from. */
+          onNegativeClick: () => onSentimentOnly && onSentimentOnly()
+        })
+      : null,
+
+    h('div', {className:'ops-split'},
+      reportReady
         ? h('section', {className:'ops-card ops-hour'},
             h('div', {className:'ops-label'}, 'Call volume by hour', qHelp('Calls started in each hour, summed across the range. Ghost bars are the previous period when present. Click a bar to open those calls.')),
             h('div', {className:'ops-hint'},
               hoursPrev && hoursPrev.length === 24
-                ? 'This period vs previous period. Click a bar to open those calls.'
+                ? 'This period vs ' + compareLabel + '. Click a bar to open those calls.'
                 : 'Click a bar to open those calls. Previous-period hourly data is not in this report — totals still compare above.'
             ),
-            h('div', {className:'ops-hour-chart cursor-pointer'}, h('canvas', {ref: canvas}))
+            h('div', {className:'ops-hour-chart cursor-pointer'}, h('canvas', {ref: canvas})),
+            /*
+             * The chart says when it is busy; this says what the busy hours cost
+             * — how long calls took and how many were missed. It is also the
+             * table the month-end staffing estimate is built from, which is why
+             * the column order is hour, volume, missed, then AHT.
+             */
+            hourlyBusy.length > 0
+              ? h('div', {className:'ops-hour-detail'},
+                  h('table', {className:'ops-hour-table'},
+                    h('thead', null,
+                      h('tr', null,
+                        h('th', null, 'Hour'),
+                        h('th', {className:'ops-hour-num'}, 'Calls'),
+                        h('th', {className:'ops-hour-num'}, 'Answered'),
+                        h('th', {className:'ops-hour-num'}, 'Missed'),
+                        h('th', {className:'ops-hour-num'}, 'AHT')
+                      )
+                    ),
+                    h('tbody', null,
+                      ...hourlyBusy.map(row => h('tr', {
+                        key: row.hour,
+                        className: 'ops-hour-row cursor-pointer',
+                        /* A clickable row is a control: keyboard users get the
+                         * same drill through Enter/Space. */
+                        role: 'button',
+                        tabIndex: 0,
+                        title: 'Open the calls that started at ' + String(row.hour).padStart(2, '0') + ':00',
+                        onClick: () => onHourClick && onHourClick(row.hour),
+                        onKeyDown: keyActivate(() => onHourClick && onHourClick(row.hour))
+                      },
+                        h('td', {className:'ops-hour-cell'}, String(row.hour).padStart(2, '0') + ':00'),
+                        h('td', {className:'ops-hour-num'}, fmtNum(row.calls)),
+                        h('td', {className:'ops-hour-num'}, fmtNum(row.answered)),
+                        h('td', {className:'ops-hour-num'}, fmtNum(row.missed)),
+                        h('td', {className:'ops-hour-num'}, row.answered > 0 ? fmt(row.aht) : '—')
+                      )),
+                      h('tr', {className:'grid-totals'},
+                        h('td', {className:'ops-hour-cell'}, 'All ' + hourlyBusy.length + ' hours'),
+                        h('td', {className:'ops-hour-num'}, fmtNum(hourlyTotals.calls)),
+                        h('td', {className:'ops-hour-num'}, fmtNum(hourlyTotals.answered)),
+                        h('td', {className:'ops-hour-num'}, fmtNum(hourlyTotals.missed)),
+                        h('td', {className:'ops-hour-num'}, hourlyTotals.answered > 0
+                          ? fmt(hourlyTotals.talkSeconds / hourlyTotals.answered)
+                          : '—')
+                      )
+                    )
+                  )
+                )
+              : null
           )
+        : h('section', {className:'ops-card'}, pulse),
+      /* Sprint B: the weekday x hour grid, beside the hourly table it extends -
+       * the hour table says what the busy hours cost, this says WHICH DAY. */
+      reportReady
+        ? h(WeekHourHeatmap, {heatmap: report?.summary?.heatmap, loading: false})
         : h('section', {className:'ops-card'}, pulse),
       h('section', {className:'ops-card'},
         h('div', {className:'ops-label'}, 'Top agents', qHelp(

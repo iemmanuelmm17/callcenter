@@ -21,7 +21,7 @@ const check = (label, condition, extra) => {
 };
 
 const harness = await createHarness();
-const { window, document, root, flush, click, press, byText, containing, errors, warnings, requested, tables, charts, act } = harness;
+const { window, document, root, flush, click, press, byText, containing, errors, warnings, requested, tables, charts, act, typeInto } = harness;
 
 console.log('\n== boot ==');
 await flush(10);
@@ -46,7 +46,8 @@ const routes = [
   ['Queues', ['Queue']],
   ['Telephone Numbers', ['Where each DID routes']],
   ['Auto-Attendants', ['auto attendant', 'Select an auto attendant']],
-  ['Call History', ['Caller']]
+  ['Call History', ['Caller']],
+  ['Reports', ['Month-end report']]
 ];
 
 for (const [label, landmarks] of routes) {
@@ -57,6 +58,68 @@ for (const [label, landmarks] of routes) {
   const hit = landmarks.some(l => text.toLowerCase().includes(l.toLowerCase()));
   check(`route "${label}" renders (${landmarks[0]})`, hit, text.slice(0, 200));
   check(`route "${label}" threw nothing`, errors.length === before, errors.slice(before).join(' | '));
+}
+
+/*
+ * Sprint C: the month-end pack. The page is one printable report, and every
+ * figure on it is server-computed - so this asserts the two things the CLIENT
+ * is responsible for: that a rate is printed with its base, and that the
+ * assumptions (occupancy, baseline, scoring) are stated on the page rather
+ * than left to the reader.
+ */
+/*
+ * Sprint B, §3: the wait card's miss-rate line - every band prints its rate WITH
+ * the counts it came from, and the three bases add up to the arrivals.
+ */
+await goTo('Dashboard');
+await flush(8);
+{
+  const text = root().textContent;
+  check('the wait card prints the miss rate per band with its base',
+    /Missed within each wait band: under 5s 50\.0% \(1 of 2\)/.test(text)
+      && /5-30s 33\.3% \(1 of 3\)/.test(text)
+      && /over 30s 66\.7% \(2 of 3\)/.test(text),
+    text.slice(0, 400));
+}
+
+await goTo('Reports');
+await flush(10);
+{
+  const text = root().textContent;
+  const packRequest = [...requested].reverse().find(r => r.endpoint === 'report');
+  check('the reports route fetches the pack and the baseline in one request',
+    /* The harness records the raw body string, so read it as JSON. */
+    (() => {
+      try { return Number(JSON.parse(packRequest.body || '{}').baseline) === 1; } catch { return false; }
+    })(),
+    packRequest ? JSON.stringify(packRequest.body).slice(0, 200) : 'no report request');
+  check('the queue table prints the queue target beside the SLA and its base',
+    text.includes('Sales queue') && text.includes('15 s') && text.includes('50.0 % (2)'), text.slice(0, 300));
+  check('an idle queue is on the page as a zero row, not omitted',
+    text.includes('Idle queue'), text.includes('Idle queue'));
+  check('a rate never travels without its base: the missed share prints its base',
+    text.includes('50.0 % (4)'), text.slice(0, 300));
+  check('the DID table carries the abandon base (the missed calls)',
+    text.includes('50.0 % (2)'), text.slice(0, 300));
+  check('the two DID flags are printed, not just computed',
+    text.includes('zero traffic') && text.includes('high abandon'), text.slice(0, 400));
+  check('the staffing estimate states its occupancy beside the numbers',
+    text.includes('85.0 %') && /no roster/i.test(text), text.slice(0, 400));
+  check('the estimate is labelled a baseline rather than a forecast',
+    /baseline, not a forecast/i.test(text), text.slice(0, 400));
+  check('the baseline section prints its window and refuses a 0 % day with no history',
+    text.includes('2026-07-05 – 2026-08-01') && text.includes('no prior weeks'), text.slice(0, 400));
+  check('the data-quality appendix prints counts with their bases',
+    text.includes('Legs with no disconnect reason') && text.includes('100.0 %'), text.slice(0, 400));
+  check('the sentiment line states the scored base',
+    /Base: 3 scored calls, 1 negative-led/.test(text), text.slice(0, 400));
+  check('the page offers print and the CSVs',
+    document.querySelectorAll('.rep-btn').length === 2, document.querySelectorAll('.rep-btn').length);
+  check('the action row is marked no-print',
+    !!document.querySelector('.rep-actions'), 'no .rep-actions node');
+  check('the shell chrome carries the print-hiding classes',
+    !!document.querySelector('.app-nav') && !!document.querySelector('.app-header'),
+    'missing .app-nav / .app-header');
 }
 
 console.log('\n== telephone numbers tabs ==');
@@ -88,6 +151,388 @@ console.log('\n== settings modal ==');
   }
   const close = document.querySelector('.ap-cols-btn') || byText('button', 'Cancel') || byText('button', 'Close');
   if (close) await click(close);
+}
+
+/*
+ * Sprint A service settings: the opening-hours grid, the per-queue targets and
+ * the roster all render inside the dialog, and saving writes them in the same
+ * payload as the thresholds (one Save, one payload — a manager who edits both
+ * must not be able to save half of it).
+ */
+console.log('\n== service settings: opening hours, targets, roster ==');
+{
+  const before = errors.length;
+  const settingsBtn = containing('.nav-item', 'Settings');
+  if (settingsBtn) await click(settingsBtn);
+  await flush(6);
+
+  const days = document.querySelectorAll('.set-day');
+  check('the opening-hours grid shows all seven days', days.length === 7, days.length);
+  check('the Mon-Fri grid is pre-filled from the server',
+    document.querySelector('.set-day.is-open') !== null,
+    document.querySelector('.set-day.is-open')?.textContent);
+  check('the closed weekend shows as closed',
+    root().textContent.includes('closed'), root().textContent.slice(0, 120));
+
+  check('the per-queue target rows come from the queue list',
+    document.querySelectorAll('.set-target-row').length >= 1,
+    document.querySelectorAll('.set-target-row').length);
+  check('the roster renders the stored row',
+    document.querySelectorAll('.set-roster-row').length === 1
+      && document.querySelector('.set-roster-row').textContent.includes('Ada'),
+    document.querySelector('.set-roster-row')?.textContent);
+  check('the roster row shows its weekdays',
+    document.querySelectorAll('.set-weekdays label.is-on').length === 5,
+    document.querySelectorAll('.set-weekdays label.is-on').length);
+
+  /*
+   * Nudge queue 700's target up with the stepper (15 -> 16) and switch the
+   * roster row to the other agent, then save: both controls send real React
+   * events, and the payload below proves the dialog owns one state and posts it.
+   */
+  const step = document.querySelector('.set-target-row button[data-step=up]');
+  check('a queue target stepper exists', !!step);
+  if (step) await click(step);
+  const save = byText('button', 'Save') || byText('button', 'Save settings');
+  check('the save button exists', !!save);
+  if (save) {
+    await click(save);
+    await flush(6);
+  }
+  const posted = [...requested].reverse().find(r => r.endpoint === 'settings' && r.method !== 'GET');
+  let body = {};
+  try { body = posted ? JSON.parse(posted.body) : {}; } catch { body = {}; }
+  check('saving posts the service-desk block with the thresholds',
+    posted !== undefined && body.businessHours !== undefined && body.queueSla !== undefined
+      && body.roster !== undefined, posted ? posted.body : 'no POST');
+  check("the stepped queue target is in the payload (15 -> 16)",
+    Number(body.queueSla && body.queueSla['700']) === 16, JSON.stringify(body.queueSla));
+  check('the roster row is in the payload',
+    Array.isArray(body.roster) && body.roster.length === 1
+      && body.roster[0].extension === '6080', body.roster);
+  check('opening hours are still off (the fixture) and carry the full grid',
+    body.businessHours && body.businessHours.enabled === false
+      && Object.keys(body.businessHours.days || {}).length === 7, body.businessHours);
+  check('the service settings block threw nothing', errors.length === before, errors.slice(before).join(' | '));
+}
+
+/*
+ * Sprint A dashboard cards: the wait bands and the follow-ups, and the drill
+ * that has to carry the band it was opened from (a band nobody can drill into
+ * is a number nobody can act on).
+ */
+/*
+ * Totals rows (review §5.1/§5.2): the row must be on screen, it must add up
+ * from the ROWS THE PAGE IS SHOWING, and a rate must be recomputed rather than
+ * averaged. The numbers below are hand-computed from the fixture:
+ *
+ *   Agent stats:  missed (mc + ab) 24+16+20+15 = 75 of offered 240+185 = 425
+ *                 -> 17.6 %, where the mean of 16.7 % and 18.9 % would be 17.8 %
+ *                 AHT 210 s on 200 calls and 190 s on 150 -> weighted 201 s
+ *                 (the plain mean would be 200 s; the third agent below makes
+ *                 the difference visible: 60 s on 1 call vs 120 s on 99, 119 s)
+ *   Queues:       totals row above the queue stats, SLA recomputed from weight
+ *   DIDs:         missed 143 + 12 = 155, abandoned 58 + 2 = 60, talk 41230 + 8040
+ */
+console.log('\n== totals rows on every grid (review 5.1) ==');
+{
+  await goTo('Agents');
+  await flush(8);
+  const statsTab = byText('.aa-tab', 'Agent stats');
+  if (statsTab) await click(statsTab);
+  await flush(8);
+  const agentSection = [...document.querySelectorAll('section')].find(s => /Agent stats/.test(s.textContent));
+  const agentTotals = agentSection ? agentSection.querySelector('tbody tr.grid-totals') : null;
+  check('the agent grid has a totals row as the first body row',
+    !!agentTotals && agentSection.querySelector('tbody tr') === agentTotals,
+    agentTotals && agentTotals.textContent.slice(0, 200));
+  const agentText = agentTotals ? agentTotals.textContent : '';
+  check('the totals row sums the calls of the agents on screen (245 + 185 = 430)',
+    /430/.test(agentText), agentText.slice(0, 200));
+  check('the totals row shows the agent count, not just a label',
+    /2 agents/.test(agentText), agentText.slice(0, 200));
+  check('the missed rate is recomputed (75 of 425 = 17.6 %), not the mean of 16.7 and 18.9',
+    /17\.6%/.test(agentText) && !/17\.8%/.test(agentText), agentText.slice(0, 260));
+  check('the AHT is weighted by inbound volume (201 s, not the 200 s plain mean)',
+    /20:?0?1|201|3:21/.test(agentText) || /03:21/.test(agentText), agentText.slice(0, 260));
+  check('the totals row is a real row, not a footer that scrolls away',
+    !!agentTotals && agentTotals.parentElement.tagName === 'TBODY');
+  /*
+   * Sprint B: the contact rate and hold, per agent. Ada dialled 40 and connected
+   * 29 (72.5 %); Alan dialled 20 and connected 8 (40 %, under the 50 % floor, so
+   * his cell is marked). The totals row is connects ÷ attempts over the table —
+   * (29 + 8) / (40 + 20) = 61.7 % — not the mean of the two rates (56.3 %), and
+   * hold averages over the calls that held: (900 + 120) / (30 + 4) = 30 s.
+   */
+  check('the agent table offers the outbound contact rate and hold columns',
+    /Contact/i.test(agentSection ? agentSection.textContent : '') &&
+    /Hold/.test(agentSection ? agentSection.textContent : ''),
+    (agentSection ? agentSection.textContent : '').slice(0, 200));
+  check('the agent totals row recomputes the contact rate (37 of 60 = 61.7 %, not the 56.3 % mean)',
+    /61\.7%/.test(agentText) && !/56\.3%/.test(agentText), agentText.slice(0, 320));
+  check('the agent totals row sums hold seconds (900 + 120 = 1,020 s)',
+    /00:17:00/.test(agentText), agentText.slice(0, 320));
+  check('the agent totals row averages hold over the calls that held (1,020 / 34 = 30 s)',
+    /00:00:30/.test(agentText), agentText.slice(0, 320));
+
+  await goTo('Queues');
+  await flush(10);
+  const qTab = byText('.aa-tab', 'Queue stats');
+  if (qTab) await click(qTab);
+  await flush(10);
+  const queueTotals = document.querySelector('tbody tr.grid-totals');
+  check('the queue grid has a totals row', !!queueTotals,
+    queueTotals && queueTotals.textContent.slice(0, 200));
+  const queueText = queueTotals ? queueTotals.textContent : '';
+  check('the queue totals row counts the queues it summarises',
+    /2 queues/.test(queueText), queueText.slice(0, 160));
+  check('the queue totals row sums the calls behind the filters (100 + 60 = 160)',
+    /160/.test(queueText), queueText.slice(0, 200));
+  check('the queue totals row sums the abandons (10 + 5 = 15)',
+    /15/.test(queueText), queueText.slice(0, 220));
+  check('the queue SLA rate is recomputed from the weighted rows (83.8 %, not 85 %)',
+    /83\.8%/.test(queueText) && !/85\.0%/.test(queueText), queueText.slice(0, 240));
+  check('the queue averages are weighted by handled calls (16 s, not the 15 s mean)',
+    /00:00:16/.test(queueText) && !/00:00:15/.test(queueText), queueText.slice(0, 260));
+  check('the queue totals row sums total talk time (20,000 + 8,000 = 28,000 s)',
+    /07:46:40/.test(queueText), queueText.slice(0, 300));
+  /*
+   * Sprint B: hold, per queue and per agent. Queue 700 held 270 s over 6 calls
+   * (avg 45 s); queue 701 never held. The totals row must average over the calls
+   * that held (45 s, NOT the 22.5 s mean of 45 and 0) and sum the seconds.
+   */
+  check('the queue totals row averages hold over the calls that held (45 s, not 22.5 s)',
+    /00:00:45/.test(queueText) && !/00:00:22/.test(queueText), queueText.slice(0, 320));
+  check('the queue totals row sums hold seconds (270 + 0)',
+    /00:04:30/.test(queueText), queueText.slice(0, 320));
+
+  await goTo('Telephone Numbers');
+  await flush(10);
+  const didTotals = document.querySelector('tbody tr.grid-totals');
+  check('the DID grid has a totals row', !!didTotals,
+    didTotals && didTotals.textContent.slice(0, 200));
+  const didText = didTotals ? didTotals.textContent : '';
+  check('the DID totals row adds the missed and abandoned columns',
+    /155/.test(didText) && /60/.test(didText), didText.slice(0, 200));
+  check('the DID grid states the abandon share of missed as a base (60 of the 155)',
+    /60 of the 155/.test(document.body.textContent),
+    document.body.textContent.match(/60 of the 155[^<]{0,20}/)?.[0]);
+}
+
+/*
+ * Service level by interval (review §3, the 09:00 spike). The card exists so a
+ * period average cannot hide the quarter-hour that failed, so the test checks
+ * the row it would hide behind: the 09:00 interval's own SLA, the weighted
+ * totals, and the drill carrying the window into the call list.
+ */
+/*
+ * The call list's own sort control (review F5). It must be on screen, offer the
+ * five orders the endpoint supports, and the direction toggle must actually
+ * re-request from the server — sorting the 25 rows in the browser would sort
+ * the page, not the result set.
+ */
+/*
+ * F3: the comparison baseline is a control, and the screen always says which
+ * period the deltas are against. The mode travels in the request, so the second
+ * (comparison) request has to carry it back to the server.
+ */
+console.log('\n== dashboard: the comparison baseline ==');
+{
+  await goTo('Dashboard');
+  await flush(10);
+  const picker = document.getElementById('ops-compare-select');
+  check('the dashboard has a comparison-baseline control', !!picker);
+  check('it offers the five modes the endpoint supports',
+    !!picker && [...picker.options].map(o => o.value).join(',') === 'previous,weekday,mtd,month,year',
+    picker && [...picker.options].map(o => o.value));
+  check('the screen states the baseline it is using (vs previous 5 days, with the dates)',
+    /vs previous 5 days/.test(document.body.textContent)
+      && /2026-07-27 – 2026-07-31/.test(document.body.textContent),
+    document.body.textContent.match(/vs previous 5 days[^.]{0,40}/)?.[0]);
+  check('the hour chart caption names the baseline instead of "previous period"',
+    /This period vs previous 5 days/.test(document.body.textContent),
+    document.body.textContent.match(/This period vs[^.]{0,40}/)?.[0]);
+  const before3 = errors.length;
+  /*
+   * The select's own change handler cannot be driven from this harness (the
+   * same React-controlled-input limitation the Settings steppers exist to work
+   * around), so the wiring it feeds is asserted by booting a second app with the
+   * mode in the URL — which is also how a shared link arrives.
+   */
+  const linked = await createHarness({search: 'compare=year'});
+  await linked.flush(14);
+  const linkedReqs = linked.requested.filter(r => r.endpoint === 'report');
+  const linkedModes = linkedReqs.map(r => (String(r.body).match(/"compare":"([a-z]+)"/) || [])[1]);
+  check('a URL that names a baseline sends it on every report request',
+    linkedModes.length > 0 && linkedModes.every(m => m === 'year'), linkedModes);
+  /*
+   * The control shows the baseline the SERVER reported, not the one the URL
+   * asked for — if the two ever differ (a server-side default, a mode that was
+   * dropped), the screen must label the numbers that are actually on it. The
+   * stub always answers 'previous', so that is what the control must show while
+   * the request itself carried 'year' (asserted above).
+   */
+  check('the control shows the baseline the numbers came from, not the one asked for',
+    linked.document.getElementById('ops-compare-select')?.value === 'previous',
+    linked.document.getElementById('ops-compare-select')?.value);
+  check('the baseline control threw nothing', errors.length === before3, errors.slice(before3).join(' | '));
+}
+
+console.log('\n== call list: the sort control ==');
+{
+  await goTo('Dashboard');
+  await flush(10);
+  const inbox = [...document.querySelectorAll('.ops-card, section')]
+    .find(c => /Missed/.test(c.textContent) && c.querySelector('button'));
+  if (inbox) await click(inbox.querySelector('button'));
+  await flush(10);
+  const modal = document.querySelector('.call-modal');
+  check('a call list is open to sort', !!modal);
+  const sortSelect = modal ? [...modal.querySelectorAll('select')].find(sel => [...sel.options].some(o => o.value === 'talk')) : null;
+  check('the call list has a sort control', !!sortSelect);
+  check('the sort control offers the five orders the endpoint supports (newest/oldest/wait/talk/hold)',
+    !!sortSelect && [...sortSelect.options].map(o => o.value).join(',') === 'newest,oldest,wait,talk,hold',
+    sortSelect && [...sortSelect.options].map(o => o.value));
+  const dirBtn = modal ? modal.querySelector('.call-modal-dir') : null;
+  check('the sort direction is a control of its own', !!dirBtn, dirBtn && dirBtn.textContent);
+  if (dirBtn) {
+    await click(dirBtn);
+    await flush(10);
+  }
+  const sorted = [...requested].reverse().find(r => r.endpoint === 'calls');
+  let sortedBody = {};
+  try { sortedBody = sorted ? JSON.parse(sorted.body) : {}; } catch { sortedBody = {}; }
+  check('flipping the direction re-requests the whole list from the server',
+    sortedBody.dir === 'asc' && sortedBody.sort === 'oldest',
+    [sortedBody.sort, sortedBody.dir]);
+  check('the direction button relabels itself (never "Newest ascending")',
+    !!dirBtn && /asc/i.test(dirBtn.textContent), dirBtn && dirBtn.textContent);
+  await press(document, 'Escape');
+  await flush(4);
+}
+
+console.log('\n== queues: service level by interval ==');
+{
+  await goTo('Queues');
+  await flush(12);
+  /* The interval card lives on the per-queue Overview tab, not the stats grid. */
+  const overviewTab = byText('.aa-tab', 'Overview');
+  if (overviewTab) await click(overviewTab);
+  await flush(12);
+  const cards = [...document.querySelectorAll('section.dash-card')];
+  const intervalCard = cards.find(c => /Service level by interval/.test(c.textContent));
+  check('the queue overview has a service-level-by-interval card', !!intervalCard);
+  if (intervalCard) {
+    const rows = [...intervalCard.querySelectorAll('tbody tr')].filter(r => !r.className.includes('grid-totals'));
+    check('the card lists the busy intervals only', rows.length === 2, rows.length);
+    check('the 09:00 interval states its own SLA (80 %) rather than the period average',
+      /80%/.test(intervalCard.textContent) && /50%/.test(intervalCard.textContent),
+      intervalCard.textContent.slice(0, 240));
+    const totals = intervalCard.querySelector('tbody tr.grid-totals');
+    check('the interval card has a totals line', !!totals, totals && totals.textContent);
+    check('the interval totals sum offered / answered / abandoned (8 / 7 / 1)',
+      !!totals && /8/.test(totals.textContent) && /7/.test(totals.textContent) && /1/.test(totals.textContent),
+      totals && totals.textContent);
+    check('the interval totals recompute SLA ((7 - 2) / 7 = 71.4 %, not the 65 % mean)',
+      !!totals && /71\.4%/.test(totals.textContent) && !/65\.0%/.test(totals.textContent),
+      totals && totals.textContent);
+    const before2 = errors.length;
+    if (rows.length) {
+      await click(rows[1]);
+      await flush(10);
+    }
+    const intervalPost = [...requested].reverse().find(r => r.endpoint === 'calls');
+    let intervalBody = {};
+    try { intervalBody = intervalPost ? JSON.parse(intervalPost.body) : {}; } catch { intervalBody = {}; }
+    check('clicking an interval opens the calls inside that window',
+      intervalBody.timeFrom === '10:00' && intervalBody.timeTo === '11:00',
+      [intervalBody.timeFrom, intervalBody.timeTo, intervalBody.queue]);
+    await press(document, 'Escape');
+    await flush(4);
+    check('the interval card threw nothing', errors.length === before2, errors.slice(before2).join(' | '));
+  }
+}
+
+console.log('\n== dashboard: wait bands and follow-ups ==');
+{
+  const before = errors.length;
+  await goTo('Dashboard');
+  await flush(8);
+
+  const bands = [...document.querySelectorAll('.ops-wait-row')];
+  check('the wait card shows four bands', bands.length === 4, bands.length);
+  check('the wait card reports p50/p90 wait',
+    /p50 wait/.test(root().textContent) && /p90 wait/.test(root().textContent),
+    root().textContent.match(/p50 wait[^A-Z]{0,20}/)?.[0]);
+  check('the abandon split by wait time is stated',
+    /staffing failure/.test(root().textContent),
+    root().textContent.match(/Abandons by[^\n]{0,80}/)?.[0]);
+  check('the follow-ups card renders its rows',
+    document.querySelectorAll('.ops-link-row').length === 4,
+    document.querySelectorAll('.ops-link-row').length);
+
+  const over = bands.find(b => b.textContent.includes('over 120s'));
+  check('the over-120s band exists', !!over);
+  if (over) {
+    await click(over);
+    await flush(8);
+  }
+  const posted = [...requested].reverse().find(r => r.endpoint === 'calls');
+  let body = {};
+  try { body = posted ? JSON.parse(posted.body) : {}; } catch { body = {}; }
+  check('clicking a band opens the calls behind that band',
+    body.waitBucket === '120+', body.waitBucket);
+  check('the modal states the band it is showing',
+    /Waited/.test(document.body.textContent), document.body.textContent.slice(0, 120));
+  const closeOne = byText('button', 'Close');
+  if (closeOne) await click(closeOne);
+  await press(document, 'Escape');
+  await flush(4);
+
+  /*
+   * AHT by hour: the table under the volume chart, its hand-computed totals
+   * line, and the fact that a row drills into that hour.
+   */
+  const hourRows = [...document.querySelectorAll('.ops-hour-row')];
+  check('the hour table lists only the busy hours (2 of 24)', hourRows.length === 2, hourRows.length);
+  const hourTable = document.querySelector('.ops-hour-table');
+  check('the hour table shows AHT per hour', !!hourTable && /AHT/.test(hourTable.textContent));
+  check('hour 09 AHT is 60 s of inbound talk (outbound talk stays out)',
+    !!hourTable && /00:01:00/.test(hourTable.textContent), hourTable && hourTable.textContent.slice(0, 300));
+  const hourTotals = hourTable ? hourTable.querySelector('tr.grid-totals') : null;
+  check('the hour table has a totals line', !!hourTotals, hourTotals && hourTotals.textContent);
+  check('the hour totals line sums calls and answers (7 calls, 3 answered, 2 missed)',
+    !!hourTotals && /7/.test(hourTotals.textContent) && /3/.test(hourTotals.textContent),
+    hourTotals && hourTotals.textContent);
+  check('the hour totals line is the weighted AHT, not the mean of 150 s and 60 s (105 s)',
+    !!hourTotals && /00:02:00/.test(hourTotals.textContent) && !/00:01:45/.test(hourTotals.textContent),
+    hourTotals && hourTotals.textContent);
+  if (hourRows.length) {
+    await click(hourRows[1]);
+    await flush(8);
+  }
+  const hourPost = [...requested].reverse().find(r => r.endpoint === 'calls');
+  let hourBody = {};
+  try { hourBody = hourPost ? JSON.parse(hourPost.body) : {}; } catch { hourBody = {}; }
+  check('clicking an hour row opens the calls that started in it',
+    hourBody.hour === 9, hourBody.hour);
+  await press(document, 'Escape');
+  await flush(4);
+
+  const unreturned = [...document.querySelectorAll('.ops-link-row')]
+    .find(r => r.textContent.includes('not returned'));
+  if (unreturned) {
+    await click(unreturned);
+    await flush(8);
+  }
+  const posted2 = [...requested].reverse().find(r => r.endpoint === 'calls');
+  let body2 = {};
+  try { body2 = posted2 ? JSON.parse(posted2.body) : {}; } catch { body2 = {}; }
+  check('the returned-call worklist drills with its own filter',
+    body2.callbackState === 'unreturned', body2.callbackState);
+  await press(document, 'Escape');
+  await flush(4);
+  check('the dashboard cards threw nothing', errors.length === before, errors.slice(before).join(' | '));
 }
 
 console.log('\n== call modal (dashboard KPI drill-down) ==');
@@ -793,6 +1238,160 @@ console.log('\n== filter date-range picker (calendar popup) ==');
     check('the picker left no calendar behind in the DOM', !popup());
   }
   check('the date-range picker threw nothing', errors.length === 0, errors.slice(0, 2));
+}
+
+console.log('\n== Sprint B: the sentiment scope and the period block ==');
+{
+  await goTo('Dashboard');
+  await flush(8);
+  const sentimentSelect = [...document.querySelectorAll('.filters-bar select')]
+    .find(s => (s.getAttribute('title') || '').includes('sentiment'));
+  check('the filter bar offers a sentiment scope', !!sentimentSelect,
+    [...document.querySelectorAll('.filters-bar select')].map(s => s.getAttribute('title')).join('|'));
+  check('the scope offers any / negative / positive',
+    sentimentSelect && sentimentSelect.options.length === 3
+      && sentimentSelect.options[1].value === 'negative' && sentimentSelect.options[2].value === 'positive',
+    sentimentSelect ? [...sentimentSelect.options].map(o => o.value).join(',') : '');
+
+  /* The reported block prints its own base, like every other rate on the page:
+   * three scored calls, one of them negative. */
+  const body = document.body.textContent;
+  check('the dashboard states the sentiment base it averaged over',
+    /3 scored|of 3 scored|scored calls/i.test(body), body.slice(0, 120));
+  check('the negative count is shown with its base, not on its own',
+    /1 negative|negative\D{0,12}1\b/.test(body), body.slice(0, 160));
+  check('the three shares are the server\'s, printed with one decimal',
+    /43\.3%/.test(body) && /38\.3%/.test(body) && /25\.0%/.test(body), body.slice(0, 200));
+  check('the topics are listed with their counts',
+    /billing · 2/.test(body), body.slice(0, 200));
+
+  /* The negative worklist must scope the app, and the request must say so. */
+  const before = requested.filter(r => r.endpoint === 'report').length;
+  const openNeg = [...document.querySelectorAll('.ops-sent-link')][0];
+  check('the card offers a negative worklist', !!openNeg);
+  if (openNeg) {
+    await click(openNeg);
+    await flush(8);
+    const fresh = requested.filter(r => r.endpoint === 'report').slice(before);
+    const carried = fresh.some(r => /"sentiment":"negative"/.test(String(r.body || '')));
+    check('opening the negative calls scopes the next report request to sentiment=negative',
+      carried, fresh.map(r => String(r.body || '').slice(0, 120)));
+    const barSelect = [...document.querySelectorAll('.filters-bar select')]
+      .find(sel => (sel.getAttribute('title') || '').includes('sentiment'));
+    check('the filter bar agrees with the worklist it was opened from',
+      barSelect && barSelect.value === 'negative', barSelect ? barSelect.value : '');
+
+    /*
+     * The stale-whitelist bug this phase found: the fetch effects listed filter
+     * fields by hand, so a NEW control (or one added in Sprint A) changed the
+     * select without refetching - the numbers on screen kept describing the old
+     * scope. The key must carry every narrowing filter.
+     */
+    check('the scope reaches the agents table too, not just the dashboard numbers',
+      requested.filter(r => r.endpoint === 'report').some(r => /"sentiment":"negative"/.test(String(r.body || ''))),
+      requested.filter(r => r.endpoint === 'report').map(r => String(r.body || '').slice(0, 90)).slice(-3));
+  }
+}
+
+console.log('\n== Sprint B: the weekday x hour heatmap ==');
+{
+  /*
+   * The grid must be the calendar's, not a shifted list. The fixture puts 12
+   * offered calls (10 answered, 2 missed) in Monday 09:00 and 1 in Sunday
+   * 09:00; a Monday-first index reads 1 in the wrong cell.
+   */
+  await goTo('Dashboard');
+  await flush(10);
+  const heat = document.querySelector('.ops-heat');
+  check('the dashboard has a weekday x hour card', !!heat, root().textContent.slice(0, 120));
+  if (heat) {
+    const rows = heat.querySelectorAll('tbody tr');
+    check('the grid has one row per weekday', rows.length === 7, rows.length);
+    const cellsOf = row => [...row.querySelectorAll('.ops-heat-cell')];
+    check('every row has 24 hour cells', [...rows].every(r => cellsOf(r).length === 24),
+      [...rows].map(r => cellsOf(r).length).join(','));
+    const monday = cellsOf(rows[1]);
+    const sunday = cellsOf(rows[0]);
+    check('Monday 09:00 shows the 12 calls, in the Monday row',
+      (monday[9].textContent || '').trim() === '12', monday[9].textContent);
+    check('Sunday 09:00 shows its own single call, in the Sunday row',
+      (sunday[9].textContent || '').trim() === '1', sunday[9].textContent);
+    check('a cell with calls states its own base in the tooltip',
+      /offered/.test(monday[9].getAttribute('title') || '')
+      && /missed/.test(monday[9].getAttribute('title') || ''),
+      monday[9].getAttribute('title'));
+    check('the foot line totals the grid (13 offered, 11 answered, 2 missed)',
+      /13 offered/.test(heat.textContent) && /11 answered/.test(heat.textContent)
+      && /2 missed/.test(heat.textContent), heat.textContent.slice(0, 200));
+
+    /* The missed view: the same grid, the missed numbers, and the share with
+     * its base in the foot line. */
+    const missedTab = [...heat.querySelectorAll('button')].find(b => (b.textContent || '').trim() === 'Missed');
+    check('the heatmap offers a missed view', !!missedTab);
+    if (missedTab) {
+      await click(missedTab);
+      await flush(4);
+      const mondayMissed = cellsOf(heat.querySelectorAll('tbody tr')[1])[9];
+      check('the missed view shows the missed count in the same cell',
+        (mondayMissed.textContent || '').trim() === '2', mondayMissed.textContent);
+      check('the missed foot line states the share with its base',
+        /2 missed of 13 offered/.test(heat.textContent) && /15\.4%/.test(heat.textContent),
+        heat.textContent.slice(0, 220));
+    }
+  }
+  check('the heatmap threw nothing', errors.length === 0, errors.slice(0, 2));
+}
+
+console.log('\n== F2: long-range presets and the warming banner ==');
+{
+  /*
+   * The manager is the role the longer window exists for (authorizedFilters()
+   * gives office_manager 366 days, everyone else 31). The presets must appear
+   * for them and must ask for the range their label names.
+   */
+  await goTo('Dashboard');
+  await flush(8);
+  const preset = label => [...document.querySelectorAll('.filters-bar button')]
+    .find(b => (b.textContent || '').trim() === label);
+  const today = new Date();
+  const ymd = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+
+  check('the manager is offered the long presets',
+    !!preset('Last 90 days') && !!preset('Quarter to date') && !!preset('Year to date'),
+    [...document.querySelectorAll('.filters-bar button')].map(b => (b.textContent || '').trim()).join('|'));
+
+  const beforeYtd = requested.filter(r => r.endpoint === 'report').length;
+  const ytd = preset('Year to date');
+  if (ytd) {
+    await click(ytd);
+    await flush(8);
+    const fresh = requested.filter(r => r.endpoint === 'report').slice(beforeYtd);
+    const body = fresh.length ? JSON.parse(fresh[fresh.length - 1].body || '{}') : null;
+    check('Year to date asks for 1 January of the current year through today',
+      !!body && body.start === today.getFullYear() + '-01-01' && body.end === ymd(today),
+      body && [body.start, body.end, ymd(today)]);
+  }
+
+  /*
+   * The warming banner reports the batch, so a 366-day range reads as steady
+   * progress rather than a stall. A fresh app booted on a one-year URL is what
+   * makes the range long enough for the banner to appear.
+   */
+  const cacheFixture = FIXTURES.cache_job;
+  FIXTURES.cache_job = {
+    complete: false, ready: 7, total: 366, percent: 2, next: '2026-08-09',
+    start: '2026-01-01', end: '2026-12-31', warming: true,
+    batch: { attempted: 5, warmed: 5, days: [], stopped: 'days' }
+  };
+  const banner = await createHarness({search: 'start=2026-01-01&end=2026-12-31'});
+  await banner.flush(12);
+  const rail = banner.document.querySelector('.cache-job');
+  const railText = rail ? rail.textContent : '';
+  check('an incomplete range shows the warming banner', !!rail, banner.root().textContent.slice(0, 160));
+  check('the banner counts the range out of the whole', /7 of 366 days cached/.test(railText), railText.slice(0, 160));
+  check('the banner names the day being fetched', /fetching 2026-08-09/.test(railText), railText.slice(0, 160));
+  check('the banner reports the batch size', /5 days per pass/.test(railText), railText.slice(0, 160));
+  FIXTURES.cache_job = cacheFixture;
 }
 
 console.log('\n== global error budget ==');

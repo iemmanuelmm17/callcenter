@@ -7,7 +7,17 @@
 import { DateRangePicker } from './date-range-picker.js';
 import { api } from '../lib/api.js';
 import { h, useEffect, useState } from '../lib/react.js';
-import { date, today } from '../lib/time.js';
+import { today } from '../lib/time.js';
+import {
+  MAX_RANGE_DAYS,
+  addDays,
+  daysSpan,
+  monthStart,
+  quarterStart,
+  shiftMonths,
+  weekStart,
+  yearStart
+} from '../lib/date-range.js';
 
 function CallTypeFilters({callTypes,setCallTypes}) {
 
@@ -135,8 +145,10 @@ function CallTypeFilters({callTypes,setCallTypes}) {
     );
 }
 
-function Filters({filters,setFilters,role,rangeLocked}) {
+function Filters({filters,setFilters,role,rangeLocked,maxRangeDays}) {
   const [departments,setDepartments] = useState([]);
+  const [sites,setSites] = useState([]);
+  const [hoursConfigured,setHoursConfigured] = useState(false);
   const [loadingDepartments,setLoadingDepartments] = useState(false);
 
   useEffect(() => {
@@ -156,6 +168,21 @@ function Filters({filters,setFilters,role,rangeLocked}) {
           Array.isArray(r.departments)
             ? r.departments
             : []
+        );
+
+        setSites(
+          Array.isArray(r.sites)
+            ? r.sites
+            : []
+        );
+
+        /*
+         * The hours scope is only offered when a calendar exists: an "Opening
+         * hours" option that silently returns everything would be worse than no
+         * option at all. `configured` is the server's own answer.
+         */
+        setHoursConfigured(
+          !!(r.businessHours && r.businessHours.configured)
         );
       })
       .catch(() => {
@@ -193,43 +220,39 @@ function Filters({filters,setFilters,role,rangeLocked}) {
       label
     );
 
-  const now = new Date();
+  /*
+   * Every preset boundary is calendar arithmetic on today's Eastern date (F2).
+   * See lib/date-range.js: building these as Date objects from the browser's
+   * local midnight and labelling them with the app's formatter is how "This
+   * month" ends up asking for the last day of the previous month.
+   */
+  const yesterday = addDays(today, -1);
 
-  const wk = new Date(now);
+  const wk = weekStart(today);
+  const lastWk = addDays(wk, -7);
+  const lastWkEnd = addDays(wk, -1);
 
-  wk.setDate(
-    now.getDate() -
-    ((now.getDay() + 6) % 7)
-  );
+  const thisMonth = monthStart(today);
+  const lastMonth = shiftMonths(thisMonth, -1);
+  const lastMonthEnd = addDays(thisMonth, -1);
 
-  const lastWk = new Date(wk);
-
-  lastWk.setDate(
-    wk.getDate() - 7
-  );
-
-const thisMonth = new Date(
-  now.getFullYear(),
-  now.getMonth(),
-  1
-);
-
-
-// =========================
-// Last Month
-// =========================
-
-const lastMonth = new Date(
-  now.getFullYear(),
-  now.getMonth() - 1,
-  1
-);
-
-const lastMonthEnd = new Date(
-  now.getFullYear(),
-  now.getMonth(),
-  0
-);
+/*
+ * F2 presets. Quarter-to-date and year-to-date start on the calendar boundary;
+ * "Last 90 days" is a rolling window, which is what a trend question actually
+ * means. Each is clamped to the role's span cap the same way a calendar pick is
+ * (see maxRangeDaysFor) so a preset can never ask for a range the API refuses.
+ */
+const spanCap = Number(maxRangeDays) > 0 ? Number(maxRangeDays) : MAX_RANGE_DAYS;
+const last90Start = addDays(today, -89);
+const qtdStart = quarterStart(today);
+const ytdStart = yearStart(today);
+/*
+ * A preset is offered only when its WHOLE span fits the role's cap. A "Last 90
+ * days" button that quietly means 31 days is worse than no button: the label is
+ * the range. Quarter-to-date on 5 October genuinely is five days, so it is
+ * offered whenever the calendar boundary is the real start.
+ */
+const fits = start => daysSpan(start, today) <= spanCap;
 
   return h(
     'div',
@@ -270,45 +293,40 @@ const lastMonthEnd = new Date(
 
     range(
       'Yesterday',
-      date(
-        new Date(
-          Date.now() - 864e5
-        )
-      ),
-      date(
-        new Date(
-          Date.now() - 864e5
-        )
-      )
+      yesterday,
+      yesterday
     ),
 
     range(
       'This week',
-      date(wk),
+      wk,
       today
     ),
 
     range(
       'Last week',
-      date(lastWk),
-      date(
-        new Date(
-          wk.getTime() - 864e5
-        )
-      )
+      lastWk,
+      lastWkEnd
     ),
 
 	range(
 	  'This month',
-	  date(thisMonth),
+	  thisMonth,
 	  today
 	),
 
 	range(
 	  'Last month',
-	  date(lastMonth),
-	  date(lastMonthEnd)
+	  lastMonth,
+	  lastMonthEnd
 	),
+
+    fits(last90Start) &&
+      range('Last 90 days', last90Start, today),
+
+    fits(qtdStart) && range('Quarter to date', qtdStart, today),
+
+    fits(ytdStart) && range('Year to date', ytdStart, today),
 
     role === 'office_manager' &&
       h(
@@ -350,7 +368,113 @@ const lastMonthEnd = new Date(
               department
             )
           )
-      )
+      ),
+
+    /*
+     * SITE (the review's F4). The server has scoped reports by site all along
+     * (authorizedFilters + callSite), and app-shell already carries the value —
+     * there was simply no control to set it, so a multi-site tenant could not
+     * ask "how did the Albany office do?".
+     *
+     * Manager-only, because it is the only role that is offered more than one
+     * site to choose from: api/filters.php returns the whole directory's sites
+     * to a manager and just the viewer's own site to anyone else, and a
+     * one-option dropdown whose two entries mean the same thing is worse than
+     * no dropdown.
+     */
+    role === 'office_manager' && sites.length > 0 &&
+      h(
+        'select',
+        {
+          value: filters.site || '',
+          disabled: loadingDepartments,
+          onChange: e =>
+            setFilters({
+              ...filters,
+              site: e.target.value
+            }),
+          className:
+            'border border-slate-700 bg-slate-950 px-2 py-1 text-xs outline-none focus:border-cyan-400 disabled:opacity-60',
+          title: 'Restrict every report to one site'
+        },
+        h('option', { value: '' }, 'All Sites'),
+        ...sites
+          .sort((a,b) => a.localeCompare(b))
+          .map(site => h('option', { key: site, value: site }, site))
+      ),
+
+    /*
+     * OPENING HOURS (Sprint A). Only shown once a calendar is configured, and
+     * it defaults to the server's own default (`business`), so a manager who
+     * turns opening hours on sees published numbers by default while the
+     * after-hours view stays one click away.
+     */
+    hoursConfigured &&
+      h(
+        'select',
+        {
+          value: filters.hours || 'business',
+          onChange: e =>
+            setFilters({
+              ...filters,
+              hours: e.target.value
+            }),
+          className:
+            'border border-slate-700 bg-slate-950 px-2 py-1 text-xs outline-none focus:border-cyan-400',
+          title: 'Opening hours were set in Settings: choose which calls to count'
+        },
+        h('option', { value: 'business' }, 'Opening hours'),
+        h('option', { value: 'after' }, 'After hours'),
+        h('option', { value: 'all' }, 'All hours')
+      ),
+
+    /*
+     * SENTIMENT (Sprint B): the call-intelligence fields were rendered only on
+     * the live Queues donut, so "who was unhappy this week" could not be asked
+     * of a period. Negative means the call's negative share beats its positive
+     * share and the call was scored at all - see callIsNegative().
+     */
+    h(
+      'select',
+      {
+        value: filters.sentiment || '',
+        onChange: e =>
+          setFilters({
+            ...filters,
+            sentiment: e.target.value
+          }),
+        className:
+          'border border-slate-700 bg-slate-950 px-2 py-1 text-xs outline-none focus:border-cyan-400',
+        title: 'Scope every figure to calls whose sentiment came out one way'
+      },
+      h('option', { value: '' }, 'Any sentiment'),
+      h('option', { value: 'negative' }, 'Negative only'),
+      h('option', { value: 'positive' }, 'Positive only')
+    ),
+
+    /*
+     * OUTCOME (Sprint A): the canonical vocabulary, so "show me only the
+     * abandons" does not require reading a column and guessing.
+     */
+    h(
+      'select',
+      {
+        value: filters.outcome || '',
+        onChange: e =>
+          setFilters({
+            ...filters,
+            outcome: e.target.value
+          }),
+        className:
+          'border border-slate-700 bg-slate-950 px-2 py-1 text-xs outline-none focus:border-cyan-400',
+        title: 'Filter by how the call ended'
+      },
+      h('option', { value: '' }, 'Any outcome'),
+      h('option', { value: 'answered' }, 'Answered'),
+      h('option', { value: 'abandoned' }, 'Abandoned'),
+      h('option', { value: 'voicemail' }, 'Voicemail'),
+      h('option', { value: 'noanswer' }, 'No answer')
+    )
   );
 }
 

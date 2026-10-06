@@ -111,12 +111,65 @@ function ringSeconds(array $row): int
     $begin = $ringAt instanceof DateTimeImmutable ? $ringAt : $startAt;
     $end = $answerAt instanceof DateTimeImmutable ? $answerAt : $endAt;
     if ($begin instanceof DateTimeImmutable && $end instanceof DateTimeImmutable) {
-        return max(0, $end->getTimestamp() - $begin->getTimestamp());
+        if ($end->getTimestamp() >= $begin->getTimestamp()) {
+            return $end->getTimestamp() - $begin->getTimestamp();
+        }
+        /*
+         * The two timestamps belong to different legs: a transfer, a re-queue
+         * or a hunt-group leg means this row's ringing began after the answer
+         * was already recorded elsewhere. The naive pair then reports a
+         * zero-second ring for a call that obviously waited, which is the
+         * worst kind of wrong - a real wait silently published as "instant".
+         *
+         * When this row's own leg started before it was answered, that
+         * start-to-answer gap is the honest wait. (When both timestamps come
+         * from one leg this branch is never taken, so every value that was
+         * right before is unchanged.)
+         */
+        if ($startAt instanceof DateTimeImmutable && $answerAt instanceof DateTimeImmutable
+            && $answerAt->getTimestamp() > $startAt->getTimestamp()) {
+            return $answerAt->getTimestamp() - $startAt->getTimestamp();
+        }
+        return 0;
     }
 
     return 0;
 }
 
+/**
+ * How long the caller waited.
+ *
+ * For an answered call that is the time to answer (the ring); for an
+ * unanswered one it is the time before the caller gave up or the leg ended,
+ * which is what makes "<5s abandons" (a misdial) distinguishable from ">30s
+ * abandons" (a staffing failure) - the manager review's Sprint A requirement.
+ * It is deliberately ringSeconds(): one definition, so a bucket and the average
+ * beside it can never disagree.
+ */
+function waitSeconds(array $row): int
+{
+    return ringSeconds($row);
+}
+
+/** Hold time on a call: time the caller spent parked while the leg lasted. */
+function holdSeconds(array $row): int
+{
+    return seconds($row, 'call-batch-on-hold-duration-seconds');
+}
+
+/**
+ * The p-th percentile, rounded to whole seconds.
+ *
+ * This used to pick the element at round(p/100 * (n-1)) and publish it as the
+ * percentile. For an even count that is not the median: over six rings of
+ * 10, 20, 45, 100, 125 and 150 seconds it reported 100 s where the median is
+ * 72.5 s - a 38 % overstatement of the wait the desk actually made people
+ * endure, in the one number the review says is quoted at the daily huddle.
+ *
+ * It now interpolates between the two nearest values, which is the method every
+ * spreadsheet uses (Excel/LibreOffice PERCENTILE.INC, R's type 7), so a manager
+ * can reproduce the figure from an exported CSV without trusting us.
+ */
 function percentileInt(array $values, float $p): int
 {
     if ($values === []) {
@@ -124,14 +177,18 @@ function percentileInt(array $values, float $p): int
     }
     sort($values, SORT_NUMERIC);
     $n = count($values);
-    $idx = (int)round(($p / 100) * ($n - 1));
-    if ($idx < 0) {
-        $idx = 0;
+    if ($n === 1) {
+        return (int)$values[0];
     }
-    if ($idx > $n - 1) {
-        $idx = $n - 1;
+    $p = max(0.0, min(100.0, $p));
+    $rank = ($p / 100) * ($n - 1);
+    $lower = (int)floor($rank);
+    $upper = (int)ceil($rank);
+    if ($lower === $upper) {
+        return (int)round((float)$values[$lower]);
     }
-    return (int)$values[$idx];
+    $weight = $rank - $lower;
+    return (int)round((float)$values[$lower] + $weight * ((float)$values[$upper] - (float)$values[$lower]));
 }
 
 function callLocalDate(array $call): string
@@ -181,6 +238,44 @@ function appExceptionLog(string $context, Throwable $e): void
         $e->getLine(),
         $e->getMessage()
     ));
+}
+
+/**
+ * The one way this codebase turns a printed phone number into a key.
+ *
+ * Digits only, and a leading country code 1 dropped for 11-digit values, so
+ * "+1 (800) 555-1212", "18005551212" and "8005551212" are the same DID. It
+ * lives here (not in api/telephone_numbers.php, where it started) because the
+ * report's per-number rows must group numbers exactly the way the Telephone
+ * Numbers screen does - two normalisers is how one DID becomes two rows.
+ */
+function numberKey(string $number): string {
+    $digits = preg_replace('/\D+/', '', $number);
+
+    if ($digits === null || $digits === '') {
+        return '';
+    }
+
+    if (strlen($digits) === 11 && $digits[0] === '1') {
+        $digits = substr($digits, 1);
+    }
+
+    return $digits;
+}
+
+/**
+ * Is this DID live? The PBX spells the flag several ways ("yes", 1, true) and
+ * ABSENT means enabled, so this is an allow-list, never a deny-list: an
+ * unrecognised value (a typo, a new spelling) must not silently disable a
+ * number on the report. Shares its home with numberKey() for the same reason -
+ * one rule, one place.
+ */
+function numberIsEnabled($value): bool {
+    if ($value === true || $value === 1 || $value === '1' || $value === null) {
+        return true;
+    }
+    $text = strtolower(trim((string)$value));
+    return $text === 'yes' || $text === 'true';
 }
 
 function seconds(array $row, string $field): int { return max(0, (int)($row[$field] ?? 0)); }

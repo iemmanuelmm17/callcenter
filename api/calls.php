@@ -10,8 +10,19 @@ requireMethod('POST');
  * One call-detail row, exactly as the JSON page returns it. The CSV export
  * uses the same function so the table and the file cannot drift apart.
  */
-function callsRow(array $c): array
+function callsRow(array $c, array $context = []): array
 {
+    /*
+     * $context carries the per-request facts a single row cannot work out on its
+     * own: the leg index (to count transfers), the directory and queue list (to
+     * classify the outcome the same way the dashboard does), and the returned-miss
+     * set (to flag a callback). Without it the row fields are omitted rather than
+     * guessed, which is what the CSV path wants for a single row.
+     */
+    $outcomeArgs = [
+        (array)($context['directory'] ?? []),
+        (array)($context['queueIds'] ?? []),
+    ];
     $row = [
 
         /*
@@ -73,8 +84,47 @@ function callsRow(array $c): array
         'ringing' =>
             ringSeconds($c),
 
+        /*
+         * Sprint A: the wait the caller actually felt, the hold time nobody
+         * published, and whether this answered call was inside its target.
+         * `wait` is deliberately the same function as `ringing` (waitSeconds()
+         * -> ringSeconds()), so the column and the bucket beside it can never
+         * disagree; it exists because "wait" is the word a manager uses for an
+         * answered call.
+         */
+        'wait' =>
+            waitSeconds($c),
+
+        'hold' =>
+            holdSeconds($c),
+
         'disconnectReason' =>
             callDisconnectReason($c),
+
+        /*
+         * The canonical outcome (answered / abandoned / voicemail / noanswer),
+         * the same classifier the dashboard's missed breakdown uses. The table
+         * used to leave a user to infer this from the type column.
+         */
+        'outcome' =>
+            callOutcome($c, $outcomeArgs[0], $outcomeArgs[1]),
+
+        'missedBucket' =>
+            callMissedBucket($c, $outcomeArgs[0], $outcomeArgs[1]),
+
+        'transfers' =>
+            isset($context['legIndex']) ? cdrTransferCount($c, $context['legIndex'], $outcomeArgs[0]) : null,
+
+        /* True when this missed call's conversation was returned inside 24 h;
+         * null when the caller asked for a plain list without the links
+         * context, so a client can tell "not returned" from "not computed". */
+        'callback' => (static function (array $call) use ($context): ?bool {
+            if (!isset($context['returnedMisses'], $context['legIndex'])) {
+                return null;
+            }
+            $root = cdrRootKey($call, $context['legIndex']);
+            return isset($context['returnedMisses'][$root]);
+        })($c),
 
         'total' =>
             seconds(
@@ -187,6 +237,51 @@ try {
     );
 
     $queuesOnly = !empty($requested['queuesOnly']);
+
+    /*
+     * =========================================================
+     * SPRINT A CONTROLS
+     * =========================================================
+     *
+     * sort/dir, the wait bucket, "waited over", the outcome and the callback
+     * state. The bucket definition is copied from summary()'s waitBuckets on
+     * purpose: the number on the card and the list behind it must be the same
+     * population, or the drill-down is a different report wearing the card's
+     * title.
+     */
+    $sort = strtolower(trim((string)($requested['sort'] ?? 'newest')));
+    if (!in_array($sort, ['newest', 'oldest', 'wait', 'talk', 'hold'], true)) {
+        $sort = 'newest';
+    }
+    $dir = strtolower(trim((string)($requested['dir'] ?? '')));
+    if (!in_array($dir, ['asc', 'desc'], true)) {
+        /*
+         * Waiting, talking and holding are questions about large numbers
+         * ("longest first"), so those default to descending. The date column
+         * defaults to newest first - and `oldest` therefore means ascending,
+         * which is what the name says. (Before Sprint A the whole list was
+         * newest-first only, and this branch returned 'desc' either way, so
+         * `sort=oldest` alone was silently a no-op alias of `newest`.)
+         */
+        $dir = in_array($sort, ['wait', 'talk', 'hold'], true)
+            ? 'desc'
+            : ($sort === 'oldest' ? 'asc' : 'desc');
+    }
+    $waitBucket = strtolower(trim((string)($requested['waitBucket'] ?? '')));
+    if (!in_array($waitBucket, ['0-30', '31-60', '61-120', '120+'], true)) {
+        $waitBucket = '';
+    }
+    $waitedOver = $requested['waitedOver'] ?? null;
+    $waitedOver = ($waitedOver === null || $waitedOver === '') ? null : max(0, min(86400, (int)$waitedOver));
+    $outcomeFilter = strtolower(trim((string)($requested['outcome'] ?? '')));
+    if (!in_array($outcomeFilter, callOutcomeKinds(), true)) {
+        $outcomeFilter = '';
+    }
+    $callbackState = strtolower(trim((string)($requested['callbackState'] ?? '')));
+    if (!in_array($callbackState, ['returned', 'unreturned'], true)) {
+        $callbackState = '';
+    }
+    $callbackOnly = !empty($requested['callbackOnly']);
 
     /*
      * FUNC-16/FUNC-27: SLA window resolved by the shared helper
@@ -304,6 +399,28 @@ try {
             : $callTypes
     );
 
+
+    /*
+     * =========================================================
+     * PER-ROW CONTEXT (transfers, callbacks, outcome vocabulary)
+     * =========================================================
+     *
+     * Built here, on the loaded + scoped rows and BEFORE any drill-down
+     * narrowing, because this is the same set the dashboard's own `links` block
+     * is computed from. Narrowing first would make a single-call request report
+     * "not returned" for a call the dashboard counts as returned - the flag and
+     * the card would disagree about one call, which is exactly the class of bug
+     * this sprint exists to remove.
+     *
+     * Cost: one leg index and one callback index per request, both linear in the
+     * rows in scope, shared by every row the page returns and by the CSV export.
+     */
+    $rowContext = [
+        'legIndex' => cdrLegIndex($calls),
+        'returnedMisses' => cdrCallbacks($calls, 86400)['returned'],
+        'directory' => $directory,
+        'queueIds' => $queueIdsAll,
+    ];
 
     /*
      * =========================================================
@@ -524,6 +641,43 @@ try {
 
     /*
      * =========================================================
+     * SPRINT A FILTERS
+     * =========================================================
+     *
+     * Applied after every existing filter and before the hour window, so they
+     * narrow what the table shows without changing what any other control means.
+     */
+    if ($waitBucket !== '' || $waitedOver !== null) {
+        $calls = filterCallsByWait($calls, $waitBucket, $waitedOver);
+    }
+
+    if ($outcomeFilter !== '') {
+        $calls = filterCallsByOutcome($calls, $outcomeFilter, $directory, $queueIdsAll);
+    }
+
+    if ($callbackOnly || $callbackState !== '') {
+        /* The links index is over the loaded, scoped set (built above), so this
+         * still finds the returned/unreturned calls when combined with another
+         * filter. */
+        $allCallbacks = cdrCallbacks($calls, 86400);
+        $calls = filterCallsByCallback(
+            $calls,
+            $callbackState,
+            $rowContext['returnedMisses'],
+            $allCallbacks['unreturned'],
+            $rowContext['legIndex']
+        );
+        if ($callbackOnly && $callbackState === '') {
+            $callbackRoots = array_merge($rowContext['returnedMisses'], $allCallbacks['unreturned']);
+            $calls = array_values(array_filter(
+                $calls,
+                static fn(array $call): bool => isset($callbackRoots[cdrRootKey($call, $rowContext['legIndex'])])
+            ));
+        }
+    }
+
+    /*
+     * =========================================================
      * HOUR FILTER
      * =========================================================
      */
@@ -630,25 +784,38 @@ try {
      * =========================================================
      */
 
-    usort(
-        $calls,
-        static function (
-            array $a,
-            array $b
-        ): int {
-
-            return strcmp(
-                (string)(
-                    $b['call-start-datetime']
-                    ?? ''
-                ),
-                (string)(
-                    $a['call-start-datetime']
-                    ?? ''
-                )
-            );
+    /*
+     * The list was newest-first only. A supervisor looking for the calls that
+     * waited longest - the review's own "coaching list" - had to export the CSV
+     * and sort it in Excel. Ties always fall back to newest-first so pagination
+     * stays stable across pages (two rows with the same wait must not swap
+     * between page 1 and page 2, or a row could be missed entirely).
+     */
+    $valueOf = static function (array $call) use ($sort): int|string {
+        if ($sort === 'wait') {
+            return waitSeconds($call);
         }
-    );
+        if ($sort === 'talk') {
+            return seconds($call, 'call-talking-duration-seconds');
+        }
+        if ($sort === 'hold') {
+            return holdSeconds($call);
+        }
+        return (string)($call['call-start-datetime'] ?? '');
+    };
+    $direction = $dir === 'asc' ? 1 : -1;
+    usort($calls, static function (array $a, array $b) use ($valueOf, $direction): int {
+        $va = $valueOf($a);
+        $vb = $valueOf($b);
+        $cmp = is_int($va) && is_int($vb) ? ($va <=> $vb) : strcmp((string)$va, (string)$vb);
+        if ($cmp !== 0) {
+            return $direction * $cmp;
+        }
+        return strcmp(
+            (string)($b['call-start-datetime'] ?? ''),
+            (string)($a['call-start-datetime'] ?? '')
+        );
+    });
 
 
     /*
@@ -663,28 +830,34 @@ try {
 
         csvBegin('calls-' . $metric . '-' . ($filters['start'] ?? '') . '-' . ($filters['end'] ?? '') . '.csv');
         $out = csvOpen();
-        csvRow($out, ['date', 'time', 'type', 'from_name', 'from', 'dialed', 'to', 'agent', 'talk', 'ring', 'reason', 'total', 'recording', 'sip_flow']);
+        csvRow($out, ['date', 'time', 'type', 'outcome', 'from_name', 'from', 'dialed', 'to', 'agent', 'talk', 'wait', 'hold', 'reason', 'total', 'transfers', 'recording', 'sip_flow']);
 
         $written = 0;
         foreach ($calls as $c) {
             if ($written >= CSV_EXPORT_MAX_ROWS) {
                 break;
             }
-            $r = callsRow($c);
+            $r = callsRow($c, $rowContext);
             $stamp = csvStamp((string)($r['startedAt'] ?? ''));
             csvRow($out, [
                 $stamp['date'] !== '' ? $stamp['date'] : (string)($r['date'] ?? ''),
                 $stamp['time'] !== '' ? $stamp['time'] : (string)($r['time'] ?? ''),
                 $r['type'],
+                /* The canonical outcome, so a spreadsheet can pivot on the same
+                 * vocabulary the dashboard uses instead of re-deriving it. */
+                $r['outcome'],
                 $r['from'],
                 csvPhone($r['fromNumber']),
                 csvPhone($r['dialed']),
                 csvPhone($r['to']),
                 $r['agent'],
                 csvDuration($r['talking']),
-                csvDuration($r['ringing']),
+                csvDuration($r['wait']),
+                csvDuration($r['hold']),
                 $r['disconnectReason'],
                 csvDuration($r['total']),
+                /* Hand-offs inside this call's conversation. */
+                $r['transfers'] === null ? '' : (string)$r['transfers'],
                 /*
                  * The two columns the table gained. They say whether a
                  * recording / sip flow EXISTS for the call, not whether one
@@ -742,7 +915,7 @@ try {
      * =========================================================
      */
 
-    $rows = array_map('callsRow', $slice);
+    $rows = array_map(static fn(array $c): array => callsRow($c, $rowContext), $slice);
 
 
     /*

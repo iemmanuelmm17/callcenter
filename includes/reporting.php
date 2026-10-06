@@ -16,6 +16,7 @@ declare(strict_types=1);
  *   reporting/metrics.php   the one definition of the drill-down metric vocabulary
  *   reporting/cdr_fields.php per-CDR accessors and call classification
  *   reporting/rows.php      row sets, aggregation, SLA resolution, AA/inventory reads
+ *   reporting/links.php     call identity across legs: transfers, callbacks, repeats
  *   reporting/inventory.php PBX list caches, phone normalisation, user directory
  *   reporting/cradle.php    cradle path helpers (guarded: also defined elsewhere)
  *   reporting/settings.php  domain settings file handling
@@ -41,6 +42,9 @@ require_once __DIR__ . '/reporting/outcomes.php';
 require_once __DIR__ . '/reporting/metrics.php';
 require_once __DIR__ . '/reporting/cdr_fields.php';
 require_once __DIR__ . '/reporting/rows.php';
+require_once __DIR__ . '/reporting/links.php';
+require_once __DIR__ . '/reporting/dids.php';
+require_once __DIR__ . '/reporting/pack.php';
 require_once __DIR__ . '/reporting/inventory.php';
 require_once __DIR__ . '/reporting/cradle.php';
 require_once __DIR__ . '/reporting/settings.php';

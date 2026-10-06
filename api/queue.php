@@ -28,6 +28,47 @@ try {
      */
     $slaSeconds = resolveSlaSeconds($requested, $user);
 
+    /*
+     * =========================================================
+     * SERVICE TARGETS (Sprint A)
+     * =========================================================
+     *
+     * The review's question 3 settled on a target PER QUEUE with the domain
+     * value as the fallback, because a sales queue staffed for 15 seconds and a
+     * support queue staffed for 45 cannot be judged against one number. The
+     * report-level target the request carries (or the stored default) still wins
+     * over the stored default for a queue with no override - so a manager who
+     * types 25 seconds into the SLA box gets 25 seconds everywhere, except on a
+     * queue they have explicitly overridden.
+     *
+     * The resolved target travels with every figure that used it (kpis.slaSeconds
+     * is the request's target, each queue row carries its own, and
+     * avgTargetSeconds is the mean actually applied), so a screen never labels a
+     * mixed-period number with one queue's target.
+     */
+    $settings = loadDomainSettings((string)($user['domain'] ?? ''));
+    $queueSlaMap = is_array($settings['queueSla'] ?? null) ? $settings['queueSla'] : [];
+    $settingsForSla = array_merge($settings, ['slaSeconds' => $slaSeconds]);
+    $targetFor = static function (string $queue) use ($settingsForSla): int {
+        return resolveQueueSlaSeconds($settingsForSla, $queue);
+    };
+
+    /*
+     * ASA by interval (the review's "add ASA *by interval*, not just for the
+     * whole range"): the same buckets the volume chart uses, each with its own
+     * offered / answered / abandoned / average wait / SLA, so the 09:00 spike is
+     * visible as a spike instead of being averaged into the month.
+     */
+    $intervalMinutes = (int)($requested['intervalMinutes'] ?? 60);
+    if (!in_array($intervalMinutes, [15, 30, 60], true)) {
+        $intervalMinutes = 60;
+    }
+    $intervalCount = (int)(1440 / $intervalMinutes);
+    $intervalSla = array_fill(0, $intervalCount, [
+        'offered' => 0, 'answered' => 0, 'abandoned' => 0,
+        'waitSum' => 0, 'waitN' => 0, 'slaHit' => 0, 'slaMiss' => 0,
+    ]);
+
     $queues = cachedCallQueues($user);
     $allQueueIds = [];
     foreach ($queues as $q) {
@@ -70,39 +111,15 @@ try {
         return $value;
     };
 
-    $cdrIdBag = static function (array $row): array {
-        $ids = [];
-        foreach ([
-            'call-orig-call-id',
-            'call-parent-call-id',
-            'call-parent-cdr-id',
-            'call-through-call-id',
-            'call-term-call-id',
-            'call-id',
-            'cdr-id',
-            'id',
-        ] as $field) {
-            $v = trim((string)($row[$field] ?? ''));
-            if ($v !== '') {
-                $ids[$v] = true;
-            }
-        }
-        /*
-         * BUGFIX: array_map('strval', ...) is required.
-         *
-         * PHP silently casts numeric-string array keys to int, so a
-         * purely numeric call id like "20260115143022" comes back from
-         * array_keys() as an INT. Under declare(strict_types=1) that
-         * then fatals in the string-typed helpers below:
-         *
-         *   {closure}(): Argument #1 ($a) must be of type string,
-         *   int given  (queue.php line 213, called from line 233)
-         *
-         * Forcing every id back to string keeps $ufUnion/$ufFind and the
-         * id index working for both numeric and alphanumeric call ids.
-         */
-        return array_map('strval', array_keys($ids));
-    };
+    /*
+     * cdrIdBag() moved to includes/reporting/links.php: api/cradle.php had its
+     * own copy WITHOUT the numeric-id fix below, so the same call could be one
+     * interaction on the queue screen and several on the cradle. One definition
+     * now, in the reporting layer, next to the transfer/callback/repeat metrics
+     * that depend on it. (The strval fix it carries: PHP casts numeric-string
+     * array keys to int, which under strict_types fatals in string-typed
+     * helpers - a purely numeric call id hit exactly that.)
+     */
 
     $directory = userDirectory($user);
     $agentNames = [];
@@ -183,6 +200,8 @@ try {
     $talkSum = 0;
     $talkN = 0;
     $slaHit = 0;
+    $avgTargetSum = 0;
+    $avgTargetN = 0;
     $posSum = 0;
     $neuSum = 0;
     $negSum = 0;
@@ -252,7 +271,7 @@ try {
         if (!is_array($row)) {
             continue;
         }
-        $ids = $cdrIdBag($row);
+        $ids = cdrIdBag($row);
         if ($ids === []) {
             $ids[] = 'row:' . $i;
         }
@@ -272,7 +291,7 @@ try {
         if (!is_array($row)) {
             continue;
         }
-        $ids = $cdrIdBag($row);
+        $ids = cdrIdBag($row);
         $key = $ids !== [] ? $ufFind($ids[0]) : ('row:' . $i);
         $legsByRoot[$key][] = $row;
     }
@@ -295,7 +314,7 @@ try {
         if (!is_array($row)) {
             continue;
         }
-        foreach ($cdrIdBag($row) as $id) {
+        foreach (cdrIdBag($row) as $id) {
             $rowsById[$id][$i] = true;
         }
     }
@@ -307,7 +326,7 @@ try {
      */
     $relatedCdrs = static function (array $row) use ($raw, $rowsById, $cdrIdBag): array {
         $hits = [];
-        foreach ($cdrIdBag($row) as $id) {
+        foreach (cdrIdBag($row) as $id) {
             if (!isset($rowsById[$id])) {
                 continue;
             }
@@ -403,6 +422,7 @@ try {
             continue;
         }
         $queueStats[$through]['totalCalls']++;
+        $queueStats[$through]['slaSeconds'] = $targetFor($through);
         if ($answeredCall) {
             $queueStats[$through]['answered']++;
             $queueStats[$through]['waitSum'] += $wait;
@@ -410,7 +430,8 @@ try {
             if ($wait > (int)$queueStats[$through]['waitMax']) {
                 $queueStats[$through]['waitMax'] = $wait;
             }
-            if ($wait <= $slaSeconds) {
+            /* Each queue is judged against its own target. */
+            if ($wait <= $targetFor($through)) {
                 $queueStats[$through]['slaHit']++;
             } else {
                 $queueStats[$through]['slaMiss']++;
@@ -434,11 +455,14 @@ try {
         $answeredCall = callAnswered($row);
         $abandonedCall = callOutcome($row, $directory, $queueIds, $answeredCall) === 'abandoned';
 
+        $rowTarget = $targetFor($through);
+        $avgTargetSum += $rowTarget;
+        $avgTargetN++;
         if ($answeredCall) {
             $answered++;
             $waitSum += $wait;
             $waitN++;
-            if ($wait <= $slaSeconds) {
+            if ($wait <= $rowTarget) {
                 $slaHit++;
             }
             if ($talk > 0) {
@@ -455,6 +479,21 @@ try {
         $at = parseEasternDateTime($startRaw);
         if ($at instanceof DateTimeImmutable) {
             $hours[(int)$at->format('G')]++;
+            if ($abandonedCall) {
+                $intervalSla[intdiv((int)$at->format('G') * 60 + (int)$at->format('i'), $intervalMinutes)]['offered']++;
+                $intervalSla[intdiv((int)$at->format('G') * 60 + (int)$at->format('i'), $intervalMinutes)]['abandoned']++;
+            } elseif ($answeredCall) {
+                $slot = intdiv((int)$at->format('G') * 60 + (int)$at->format('i'), $intervalMinutes);
+                $intervalSla[$slot]['offered']++;
+                $intervalSla[$slot]['answered']++;
+                $intervalSla[$slot]['waitSum'] += $wait;
+                $intervalSla[$slot]['waitN']++;
+                if ($wait <= $rowTarget) {
+                    $intervalSla[$slot]['slaHit']++;
+                } else {
+                    $intervalSla[$slot]['slaMiss']++;
+                }
+            }
         }
 
         $pos = (float)($row['call-intelligence-percent-positive'] ?? 0);
@@ -510,7 +549,7 @@ try {
             $sentDot = 'negative';
         }
 
-        $ids = $cdrIdBag($row);
+        $ids = cdrIdBag($row);
         $origKey = trim((string)($row['call-orig-call-id'] ?? $row['call-parent-call-id'] ?? ''));
         $parentKey = $origKey !== '' ? $origKey : ($ids !== [] ? $ufFind($ids[0]) : '');
         /*
@@ -708,8 +747,34 @@ try {
                 'avgTalk' => $talkN ? (int)round($talkSum / $talkN) : 0,
                 'answerRate' => $offered ? round(($answered / $offered) * 100, 1) : 0,
                 'slaSeconds' => $slaSeconds,
+                /* The mean target actually applied when queues have their own
+                 * targets: printing the request's single number beside a mixed
+                 * period would be a half-truth. */
+                'avgTargetSeconds' => $avgTargetN > 0 ? (int)round($avgTargetSum / $avgTargetN) : $slaSeconds,
+                'perQueueTargets' => $queueSlaMap !== [],
             ],
             'hours' => $hours,
+            /* The interval size the rows below were bucketed at, so a reader
+             * never has to infer it from the row labels. */
+            'intervalMinutes' => $intervalMinutes,
+            'intervalSla' => array_values(array_map(
+                static function (array $b, int $index) use ($intervalMinutes): array {
+                    $start = $index * $intervalMinutes;
+                    $end = $start + $intervalMinutes;
+                    return [
+                        'from' => sprintf('%02d:%02d', intdiv($start, 60), $start % 60),
+                        'to' => sprintf('%02d:%02d', intdiv($end, 60) % 24, $end % 60),
+                        'offered' => $b['offered'],
+                        'answered' => $b['answered'],
+                        'abandoned' => $b['abandoned'],
+                        'asa' => $b['waitN'] > 0 ? (int)round($b['waitSum'] / $b['waitN']) : 0,
+                        'sla' => $b['waitN'] > 0 ? round(($b['slaHit'] / $b['waitN']) * 100, 1) : 0.0,
+                        'slaMiss' => $b['slaMiss'],
+                    ];
+                },
+                $intervalSla,
+                array_keys($intervalSla)
+            )),
             'outcomes' => [
                 'answered' => $answered,
                 'abandoned' => $abandoned,
@@ -750,6 +815,8 @@ try {
                     'avgTalk' => $talkN ? (int)round($st['talkSum'] / $talkN) : 0,
                     'maxTalk' => (int)$st['talkMax'],
                     'totalTalk' => (int)$st['talkSum'],
+                    /* The target this row's SLA was measured against. */
+                    'slaSeconds' => (int)($st['slaSeconds'] ?? $slaSeconds),
                 ];
             }, $queueStats)),
         ],

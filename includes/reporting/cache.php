@@ -412,6 +412,69 @@ function warmCdrDay(array $user, string $date): array
     ];
 }
 
+/*
+ * F2: warming a range longer than the 31-day supervisor window.
+ *
+ * One day per request is right for a week or a month, and wrong for the
+ * manager's year-to-date range: 366 round-trips at ~600 ms each is minutes of a
+ * progress bar, and the browser tab is the thing doing the pacing. This warms a
+ * BATCH per request instead - days in date order, so the reader's most recent
+ * (and most likely wanted) days land first - and stops on whichever of the
+ * limits comes first: the day budget, or the time budget.
+ *
+ * The time budget is what keeps a request inside the gateway's own timeout; when
+ * it trips, the response says so and the next request picks up at the same
+ * `next` day, so the loop is resumable and never repeats a finished day
+ * (warmCdrDay() is a no-op for a cached day).
+ */
+function warmCdrBatch(array $user, string $start, string $end, int $maxDays = 5, int $timeBudgetSeconds = 20): array
+{
+    $maxDays = max(1, min(31, $maxDays));
+    $budget = max(1, $timeBudgetSeconds);
+    $deadline = microtime(true) + $budget;
+    $status = cdrRangeCacheStatus($user, $start, $end);
+    $warmed = [];
+    $attempted = 0;
+    $reason = '';
+    while (count($warmed) < $maxDays) {
+        $status = cdrRangeCacheStatus($user, $start, $end);
+        if (!empty($status['complete']) || empty($status['next'])) {
+            break;
+        }
+        if (microtime(true) >= $deadline) {
+            $reason = 'time';
+            break;
+        }
+        $attempted++;
+        $day = warmCdrDay($user, (string)$status['next']);
+        if (!empty($day['complete'])) {
+            $warmed[] = (string)$day['date'];
+        } else {
+            /* The upstream fetch did not finish the day; stop rather than spin
+             * on it, and let the next request retry from its stored offset. */
+            $reason = 'partial';
+            break;
+        }
+    }
+    $status = cdrRangeCacheStatus($user, $start, $end);
+    if (!empty($status['complete'])) {
+        $stopped = 'complete';
+    } elseif ($reason !== '') {
+        $stopped = $reason;
+    } else {
+        /* The loop ran out of its day budget with work still pending. */
+        $stopped = 'days';
+    }
+    return [
+        'attempted' => $attempted,
+        'warmed' => count($warmed),
+        'days' => $warmed,
+        'stopped' => $stopped,
+        'seconds' => round(microtime(true) - ($deadline - $budget), 2),
+        'status' => $status,
+    ];
+}
+
 function cdrCacheKey(array $record, int $fallback): string {
     if (!empty($record['id'])) {
         return (string)$record['id'];

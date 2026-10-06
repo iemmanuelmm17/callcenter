@@ -69,6 +69,7 @@ if (
      */
     $directory = userDirectory($user);
     $queueIds = [];
+    $queueLabels = [];
     foreach (cachedCallQueues($user) as $qrow) {
         if (!is_array($qrow)) {
             continue;
@@ -76,6 +77,8 @@ if (
         $qid = trim((string)($qrow['callqueue'] ?? ''));
         if ($qid !== '') {
             $queueIds[$qid] = true;
+            $label = trim((string)($qrow['description'] ?? ''));
+            $queueLabels[$qid] = $label !== '' ? $label : $qid;
         }
     }
 
@@ -90,9 +93,22 @@ if (
      * queueIds as the main request (FUNC-23) so the two halves stay
      * comparable.
      */
+    /*
+     * F3: which baseline the comparison uses. `compare` is optional and an
+     * unknown value falls back to the previous equal-length period, so an old
+     * bookmarked URL behaves exactly as it did.
+     */
+    $compareMode = normalizeCompareMode($requested['compare'] ?? 'previous');
+
     if (!empty($requested['previousOnly'])) {
         $slaSeconds = resolveSlaSeconds($requested, $user);
-        $previousFilters = previousFilters($filters);
+        /* Per-queue targets apply to the comparison period too, otherwise the
+         * two halves of the dashboard would be judged by different rules. */
+        $settings = loadDomainSettings((string)($user['domain'] ?? ''));
+        $compare = comparePeriodFilters($filters, $compareMode);
+        $previousFilters = $filters;
+        $previousFilters['start'] = $compare['start'];
+        $previousFilters['end'] = $compare['end'];
 
         $previousCalls = filterCallsByLocalDate(
             reportingCdrRows($user, $previousFilters, $directory, $callTypes),
@@ -100,10 +116,14 @@ if (
             (string)$previousFilters['end']
         );
 
-        $previous = summary($previousCalls, $slaSeconds, $directory, $queueIds);
+        $previous = summary($previousCalls, $slaSeconds, $directory, $queueIds, $settings);
 
         jsonResponse([
             'comparison' => [
+                /* Which baseline this is, stated so the client can label it. */
+                'mode' => $compare['mode'],
+                'label' => $compare['label'],
+                'days' => $compare['days'],
                 'previous' => [
                     'start'  => $previousFilters['start'],
                     'end'    => $previousFilters['end'],
@@ -140,6 +160,57 @@ if (
         (string)$filters['end']
     );
 
+    /*
+     * The Sprint A narrowing filters, applied to the SAME row set every figure
+     * below is computed from. A filter bar that changes the colour of a card but
+     * not its number is worse than no filter, so these run before any aggregate
+     * - and through the shared helpers in rows.php, so the drill-down list and
+     * these KPIs cannot disagree about which calls are in scope.
+     */
+    $requestedOutcome = strtolower(trim((string)($requested['outcome'] ?? '')));
+    $calls = filterCallsByOutcome($calls, $requestedOutcome, $directory, $queueIds);
+
+    $requestedWaitBucket = strtolower(trim((string)($requested['waitBucket'] ?? '')));
+    if (!in_array($requestedWaitBucket, callWaitBuckets(), true)) {
+        $requestedWaitBucket = '';
+    }
+    $requestedWaitedOver = $requested['waitedOver'] ?? null;
+    $requestedWaitedOver = ($requestedWaitedOver === null || $requestedWaitedOver === '')
+        ? null
+        : max(0, min(86400, (int)$requestedWaitedOver));
+    $calls = filterCallsByWait($calls, $requestedWaitBucket, $requestedWaitedOver);
+
+    /*
+     * Sprint B: the sentiment filter, applied to the same row set as every
+     * other narrowing filter, so "negative only" numbers and the list behind
+     * them are the same calls.
+     */
+    $requestedSentiment = strtolower(trim((string)($requested['sentiment'] ?? '')));
+    $calls = filterCallsBySentiment($calls, $requestedSentiment);
+
+    $requestedCallbackState = strtolower(trim((string)($requested['callbackState'] ?? '')));
+    if (!in_array($requestedCallbackState, callCallbackStates(), true)) {
+        $requestedCallbackState = '';
+    }
+    if ($requestedCallbackState !== '' || !empty($requested['callbackOnly'])) {
+        $links = cdrCallbacks($calls, 86400);
+        $legIndexForCallback = cdrLegIndex($calls);
+        $calls = filterCallsByCallback(
+            $calls,
+            $requestedCallbackState,
+            $links['returned'],
+            $links['unreturned'],
+            $legIndexForCallback
+        );
+        if ($requestedCallbackState === '' && !empty($requested['callbackOnly'])) {
+            $callbackRoots = array_merge($links['returned'], $links['unreturned']);
+            $calls = array_values(array_filter(
+                $calls,
+                static fn(array $call): bool => isset($callbackRoots[cdrRootKey($call, $legIndexForCallback)])
+            ));
+        }
+    }
+
 	$agentPerformance = agentPerformance(
 		$calls,
 		$directory,
@@ -154,8 +225,57 @@ if (
      * settings default, clamped 1..120) — same as calls/queue/cradle.
      */
     $slaSeconds = resolveSlaSeconds($requested, $user);
+    $settings = loadDomainSettings((string)($user['domain'] ?? ''));
 
-    $current = summary($calls, $slaSeconds, $directory, $queueIds);
+    $current = summary($calls, $slaSeconds, $directory, $queueIds, $settings);
+
+    /*
+     * How complete the underlying data is. cdrRangeCacheStatus() says whether
+     * every day in the range is cached; the per-day detail adds the two facts a
+     * reader needs before quoting a number: how many records each day holds, and
+     * whether the fetch that filled it finished (a partial day is short).
+     */
+    $cacheStatus = cdrRangeCacheStatus(
+        $user,
+        (string)$filters['start'],
+        (string)$filters['end']
+    );
+    $dataQualityDays = [];
+    $incompleteDays = 0;
+    $emptyDays = 0;
+    foreach (reportingDateList((string)$filters['start'], (string)$filters['end']) as $date) {
+        $meta = cdrDayCacheMeta((string)($user['domain'] ?? ''), $date);
+        $complete = !empty($meta['complete']);
+        $records = (int)($meta['records'] ?? 0);
+        if (!$complete) {
+            $incompleteDays++;
+        }
+        if ($complete && $records === 0) {
+            $emptyDays++;
+        }
+        $dataQualityDays[$date] = [
+            'records' => $records,
+            'complete' => $complete,
+            'cached' => !empty($meta['exists']),
+        ];
+    }
+    $dataQuality = [
+        'days' => $dataQualityDays,
+        'incompleteDays' => $incompleteDays,
+        'emptyDays' => $emptyDays,
+        /* The scope the numbers were computed over, restated where a reader can
+         * see it without opening the filter bar. */
+        'hours' => (string)($filters['hours'] ?? 'all'),
+        'businessHoursConfigured' => businessHoursConfigured($settings),
+    ];
+
+    /*
+     * Sprint A: the links layer. Transfers, the returned-call worklist and the
+     * repeat callers are derived from the SAME scoped row set as every other
+     * number in this payload, so the hours filter, the department filter and the
+     * site filter move them together with the counts beside them.
+     */
+    $links = callLinkReport($calls, $directory);
 
     /*
      * Previous period.
@@ -171,7 +291,10 @@ if (
      * is on screen. Both flags are optional, so any caller that does not
      * send them keeps the original single-request behaviour.
      */
-    $previousFilters = previousFilters($filters);
+    $compare = comparePeriodFilters($filters, $compareMode);
+    $previousFilters = $filters;
+    $previousFilters['start'] = $compare['start'];
+    $previousFilters['end'] = $compare['end'];
     $skipPrevious = !empty($requested['skipPrevious']);
 
     if ($skipPrevious) {
@@ -199,7 +322,8 @@ if (
             $previousCalls,
             $slaSeconds,
             $directory,
-            $queueIds
+            $queueIds,
+            $settings
         );
     }
 
@@ -267,6 +391,14 @@ $comparison = [
 
         'counts' => $current['counts'],
     ],
+
+    /*
+     * The baseline, stated: which period it is and how long it is (review §5.3
+     * - "vs previous 7 days", with the length visible on monthly views).
+     */
+    'mode' => $compare['mode'],
+    'label' => $compare['label'],
+    'days' => $compare['days'],
 
     'previous' => [
         'start' => $previousFilters['start'],
@@ -351,6 +483,70 @@ $current['topAgents'] = $topAgents;
 
 
     /*
+     * Sprint C: the month-end pack's two row sets. Built here, from the same
+     * scoped $calls and through the same helpers as every figure above, so the
+     * printed page cannot disagree with the dashboard it came from. The
+     * inventory is passed in so a queue or number that saw NO traffic in the
+     * scope still gets a row (zeros are findings too), and so "zero traffic" is
+     * only ever claimed about a line the caller actually has.
+     */
+    $packInventory = reportingInventory($user, $directory, $calls);
+    $knownNumbers = [];
+    foreach (cachedPhoneNumbers($user) as $nrow) {
+        if (!is_array($nrow)) {
+            continue;
+        }
+        $number = trim((string)(
+            $nrow['phonenumber']
+            ?? $nrow['phone-number']
+            ?? $nrow['number']
+            ?? ''
+        ));
+        if ($number === '') {
+            continue;
+        }
+        /* Only live numbers are listed: a disabled-and-silent line is not a
+         * finding, and "zero traffic" must keep meaning "nobody called it". */
+        if (!numberIsEnabled($nrow['enabled'] ?? true)) {
+            continue;
+        }
+        $knownNumbers[$number] = true;
+    }
+    $packRows = [
+        'queues' => packQueueRows($calls, $directory, $queueIds, $settings, $queueLabels),
+        'numbers' => packNumberRows($calls, $directory, $queueIds, array_keys($knownNumbers)),
+        /* F7: trust the month before quoting it. Computed over the same scoped
+         * rows as every figure above, so the appendix describes the data behind
+         * these numbers and not another month's. */
+        'quality' => packQuality($calls),
+        /* The staffing estimate, with the occupancy assumption it used printed
+         * inside it (there is no roster in this system, so it is an assumption,
+         * not a measurement). */
+        'staffing' => packStaffing($current['hourly'] ?? []),
+    ];
+
+    /*
+     * The 4-week same-weekday baseline. It is a SECOND fetch (the prior 28
+     * days) and the review asked for it only on the pack, so it is computed when
+     * the caller asks for it (`baseline=1`) rather than on every dashboard load.
+     * Same scope as the period: a baseline built without the site/hours filters
+     * would compare two different businesses.
+     */
+    if (!empty($requested['baseline'])) {
+        $baselineEnd = date('Y-m-d', strtotime((string)$filters['start'] . ' 12:00:00 -1 day'));
+        $baselineStart = date('Y-m-d', strtotime($baselineEnd . ' 12:00:00 -27 days'));
+        $baselineFilters = $filters;
+        $baselineFilters['start'] = $baselineStart;
+        $baselineFilters['end'] = $baselineEnd;
+        $baselineCalls = filterCallsByLocalDate(
+            reportingCdrRows($user, $baselineFilters, $directory, $callTypes),
+            $baselineStart,
+            $baselineEnd
+        );
+        $packRows['baseline'] = packBaseline($calls, $baselineCalls, $baselineStart, $baselineEnd);
+    }
+
+    /*
      * Audit and return.
      */
     auditView(
@@ -367,13 +563,39 @@ $current['topAgents'] = $topAgents;
 		'trends' => $trends,
 		'topAgents' => $topAgents,
 		'agentPerformance' => $agentPerformance,
-		'inventory' => reportingInventory($user, $directory, $calls),
+		'links' => $links,
+		'inventory' => $packInventory,
+		/* The month-end pack's per-queue and per-number lines (Sprint C). */
+		'pack' => $packRows,
 		/*
 		 * QA-5: the effective domain thresholds ride along for EVERY role, so a
 		 * screen's red/green is the same red/green the manager sees without
 		 * handing non-privileged users the settings endpoint.
 		 */
-		'settings' => loadDomainSettings((string)($user['domain'] ?? '')),
+		/* The settings actually used for the numbers above, not a second read:
+		 * a file written between the two reads would have shipped a threshold
+		 * that did not colour these figures. */
+		/*
+		 * Data quality (the review's F7). Every published figure is only as good
+		 * as the day files behind it, and a day whose fetch stopped at the page
+		 * cap is silently short: the numbers understate and nothing on screen
+		 * says so. The appendix in Sprint C prints this; it ships here so the
+		 * fact is available wherever the numbers are.
+		 */
+		/*
+		 * The narrowing filters this response was actually computed with, so a
+		 * reader (or a saved link) can see why the numbers are what they are.
+		 */
+		'appliedFilters' => [
+			'outcome' => $requestedOutcome,
+			'waitBucket' => $requestedWaitBucket,
+			'waitedOver' => $requestedWaitedOver,
+			'callbackState' => $requestedCallbackState,
+			'sentiment' => in_array($requestedSentiment, callSentimentFilterKinds(), true) ? $requestedSentiment : '',
+		],
+		'cacheStatus' => $cacheStatus,
+		'dataQuality' => $dataQuality,
+		'settings' => $settings,
 		'timezone' => DEFAULT_TIMEZONE
 	]);
 

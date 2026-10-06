@@ -302,5 +302,52 @@ require TEST_TMP . '/tools/cdr-cache.php';
   check('--vacuum reclaims space even when nothing was pruned', /vacuum done/.test(pruned), pruned.slice(0, 300));
 }
 
+console.log('\n== F2: warming a long range happens in batches ==');
+{
+  /* A 12-day range with batch=4 must take exactly three warm calls, in date
+   * order, and the last one reports the range complete. The batch is what keeps
+   * a manager's >31-day range off a one-round-trip-per-day path. */
+  await useDriver('json');
+  const from = '2026-09-01';
+  const to = '2026-09-12';
+  const warm = await run(`
+$out['batches'] = [];
+for ($i = 0; $i < 4; $i++) {
+    $status = cdrRangeCacheStatus($user, '${from}', '${to}');
+    if (!empty($status['complete'])) break;
+    $batch = warmCdrBatch($user, '${from}', '${to}', 4, 20);
+    $out['batches'][] = ['warmed' => $batch['warmed'], 'days' => $batch['days'], 'stopped' => $batch['stopped'], 'ready' => $batch['status']['ready'], 'complete' => $batch['status']['complete']];
+}
+$out['final'] = cdrRangeCacheStatus($user, '${from}', '${to}');
+$out['cached_probe'] = cdrDayIsCached($user, '2026-09-03');
+`);
+  if (warm) {
+    check('each batch fills exactly its day budget', warm.batches.length === 3 && warm.batches.every(b => b.warmed === 4), JSON.stringify(warm.batches));
+    check('the batches stop on the day budget while work remains',
+      warm.batches[0].stopped === 'days' && warm.batches[0].complete === false && warm.batches[1].complete === false,
+      JSON.stringify(warm.batches.map(b => b.stopped)));
+    check('the batches run in date order and never repeat a day',
+      JSON.stringify(warm.batches[0].days) === JSON.stringify(['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04']) &&
+      JSON.stringify(warm.batches[2].days) === JSON.stringify(['2026-09-09', '2026-09-10', '2026-09-11', '2026-09-12']),
+      JSON.stringify(warm.batches.map(b => b.days)));
+    check('the range is complete after the last batch', warm.final.complete === true && warm.final.pending === 0, JSON.stringify(warm.final));
+    check('a warmed day is on the cache afterwards', warm.cached_probe === true, String(warm.cached_probe));
+
+    /* A batch on a complete range is a no-op rather than a re-fetch, and the
+     * day budget is clamped to 31. */
+    const edges = await run(`
+$before = fetchCount();
+$clamped = warmCdrBatch($user, '${from}', '${to}', 999, 20);
+$out['clamped_warmed'] = $clamped['warmed'];
+$out['clamped_stopped'] = $clamped['stopped'];
+$out['clamped_complete'] = $clamped['status']['complete'];
+$out['fetches'] = fetchCount() - $before;
+`);
+    if (edges) {
+      check('a complete range warms nothing and fetches nothing', edges.clamped_warmed === 0 && edges.fetches === 0 && edges.clamped_stopped === 'complete', JSON.stringify(edges));
+    }
+  }
+}
+
 console.log(`\n${failures.length === 0 ? 'CDR CACHE TESTS OK' : `${failures.length} FAILURE(S): ${failures.join(' | ')}`}`);
 process.exit(failures.length ? 1 : 0);

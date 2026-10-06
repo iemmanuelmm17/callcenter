@@ -122,14 +122,32 @@ function reportingInventory(array $user, array $directory, array $calls): array
 }
 
 function scopedCdrs(array $raw, array $filters, array $directory = []): array {
-    $start = (string)($filters['start'] ?? '');
-    $end = (string)($filters['end'] ?? '');
-    return array_values(array_filter($raw, static function(array $row) use ($filters, $directory): bool {
+    /*
+     * Opening-hours scoping lives here, in the one function every reporting
+     * endpoint already funnels through (report rows, calls, call history, the
+     * queue and cradle screens, the exports). That is deliberate: a filter that
+     * only applied to one endpoint is how a dashboard and its own drill-down
+     * come to disagree.
+     */
+    $hours = (string)($filters['hours'] ?? 'all');
+    $settings = null;
+    if ($hours !== 'all') {
+        $settings = loadDomainSettings((string)($filters['domain'] ?? ''));
+        if (!businessHoursConfigured($settings)) {
+            $hours = 'all';
+        }
+    }
+    return array_values(array_filter($raw, static function(array $row) use ($filters, $directory, $hours, $settings): bool {
         $agent = callAgent($row); $directoryEntry = $directory[$agent] ?? [];
         $department = callDepartment($row) ?: (string)($directoryEntry['department'] ?? '');
         $site = callSite($row) ?: (string)($directoryEntry['site'] ?? '');
         if ($filters['department'] !== '' && $department !== $filters['department']) return false;
         if (($filters['site'] ?? '') !== '' && $site !== $filters['site']) return false;
+        if ($hours !== 'all' && $settings !== null) {
+            $inside = callWithinBusinessHours($row, $settings);
+            if ($hours === 'business' && !$inside) return false;
+            if ($hours === 'after' && $inside) return false;
+        }
         return !$filters['agents'] || in_array(callAgent($row), $filters['agents'], true);
     }));
 }
@@ -160,22 +178,110 @@ function resolveSlaSeconds($requested, array $user): int {
     return max(1, min(120, $sla));
 }
 
-function summary(array $calls, int $slaSeconds = 20, array $directory = [], array $queueIds = []): array {
+/**
+ * The period totals every screen reads.
+ *
+ * $settings is optional and, when given, turns on per-queue SLA: each inbound
+ * call is judged against its own queue's target (with the request's target as
+ * the fallback and the domain default behind that). Without it the behaviour is
+ * exactly what it always was - one target for everything.
+ */
+function summary(array $calls, int $slaSeconds = 20, array $directory = [], array $queueIds = [], ?array $settings = null): array {
     if ($slaSeconds < 1) {
         $slaSeconds = 20;
     }
+    if ($settings !== null) {
+        /* The report's requested target beats the stored default, but a queue's
+         * own override still beats both. */
+        $settings = array_merge($settings, ['slaSeconds' => $slaSeconds]);
+    }
+    $perQueueSla = $settings !== null && !empty($settings['queueSla']);
     $sets = ['inbound'=>[], 'outbound'=>[]];
     $counts = ['total'=>0,'inbound'=>0,'outbound'=>0,'missed'=>0,'onnet'=>0];
     $hours = array_fill(0, 24, 0);
+    /*
+     * Per-hour detail, keyed by the same hour index as $hours: a count answers
+     * "when is it busy", and the review needs the two follow-ups - "how long do
+     * calls take at 09:00" (AHT by hour, and the base of the Sprint C staffing
+     * estimate) and "how many were missed at 09:00". Only inbound answered calls
+     * carry talk time into AHT; an outbound leg's talk belongs to the campaign,
+     * not to the desk's answering speed.
+     */
+    $hourInbound = array_fill(0, 24, 0);
+    $hourMissed = array_fill(0, 24, 0);
+    $hourTalk = array_fill(0, 24, 0);
+    /*
+     * Sprint B: weekday x hour. The same three facts as the hourly detail, split
+     * one more way, because "we are short on Mondays at 09:00" is the sentence
+     * the hourly chart cannot support - it averages every Monday into every
+     * other day. Rows are indexed by PHP's `w` (0 = Sunday) so the day index is
+     * the calendar's, not an accident of the label list; a call that starts at
+     * 23:50 Saturday is counted in Saturday, not split.
+     *
+     * `volume` is the same offered definition the rest of the dashboard uses
+     * (inbound + missed), `answered` is inbound answered, and `missed` carries
+     * the missed set (abandons included) so a cell can state its own share with
+     * its own base.
+     */
+    $heatVolume = array_fill(0, 7, array_fill(0, 24, 0));
+    $heatAnswered = array_fill(0, 7, array_fill(0, 24, 0));
+    $heatMissed = array_fill(0, 7, array_fill(0, 24, 0));
     $days = [];
     $missedBreakdown = ['noanswer'=>0,'voicemail'=>0,'abandon'=>0];
     $inboundRings = [];
     $answeredInSla = 0;
+    $slaTargetSum = 0;
+    $slaTargets = [];
+    /*
+     * Wait buckets, in the two shapes the review asks for: answered calls banded
+     * at the SLA-style thresholds (30/60/120s) so the coaching list is "who
+     * waited over two minutes", and unanswered calls banded at 5/30s, where the
+     * <5s bucket is overwhelmingly misdials and the >30s bucket is a real
+     * staffing failure. Both use waitSeconds() - the same number as the average
+     * beside them.
+     */
+    $waitBuckets = ['0-30'=>0,'31-60'=>0,'61-120'=>0,'120+'=>0];
+    $missedWaitBuckets = ['lt5'=>0,'5-30'=>0,'gt30'=>0];
+    $abandonWaitBuckets = ['lt5'=>0,'5-30'=>0,'gt30'=>0];
+    /*
+     * Sprint B (§3): the same three bands over EVERY arrival - answered calls by
+     * their ring time, missed calls by how long the caller waited before giving
+     * up - so each band publishes a miss RATE with the base it was taken over.
+     * A band with no arrivals is published with a zero base and a zero rate, not
+     * omitted, so the three always add up to the period's arrivals.
+     */
+    $waitBandOffered = ['lt5'=>0,'5-30'=>0,'gt30'=>0];
+    $waitBandMissed = ['lt5'=>0,'5-30'=>0,'gt30'=>0];
+    $waitBandAnswered = ['lt5'=>0,'5-30'=>0,'gt30'=>0];
+    $holdTotal = 0;
+    $holdCalls = 0;
+    /* Sprint B: the period's sentiment, with the same three figures the live
+     * Queues donut shows - averaged over the calls that carry sentiment at all,
+     * because a call nobody scored is not a neutral call. */
+    $sentPos = 0.0;
+    $sentNeu = 0.0;
+    $sentNeg = 0.0;
+    $sentN = 0;
+    $sentNegativeCalls = 0;
+    $sentTopics = [];
 
     foreach ($calls as $call) {
         $type = callType($call);
         if (!isset($counts[$type])) {
             continue;
+        }
+        if ($type === 'inbound' || $type === 'missed') {
+            $heatAt = parseEasternDateTime((string)($call['call-start-datetime'] ?? ''));
+            if ($heatAt instanceof DateTimeImmutable) {
+                $heatDow = (int)$heatAt->format('w');
+                $heatHour = (int)$heatAt->format('G');
+                $heatVolume[$heatDow][$heatHour]++;
+                if ($type === 'inbound') {
+                    $heatAnswered[$heatDow][$heatHour]++;
+                } else {
+                    $heatMissed[$heatDow][$heatHour]++;
+                }
+            }
         }
         $counts[$type]++;
         $counts['total']++;
@@ -183,14 +289,67 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
             $sets[$type][] = $call;
         }
 
+        $hold = holdSeconds($call);
+        if ($hold > 0) {
+            $holdTotal += $hold;
+            $holdCalls++;
+        }
+
+        $sent = callSentimentShare($call);
+        if ($sent['present']) {
+            $sentPos += $sent['positive'];
+            $sentNeu += $sent['neutral'];
+            $sentNeg += $sent['negative'];
+            $sentN++;
+            if (callIsNegative($call)) {
+                $sentNegativeCalls++;
+            }
+        }
+        $sentTopic = trim((string)($call['call-intelligence-topics-top'] ?? ''));
+        if ($sentTopic !== '') {
+            foreach (preg_split('/[,;|]+/', $sentTopic) ?: [] as $piece) {
+                $piece = trim($piece);
+                if ($piece !== '') {
+                    $sentTopics[$piece] = ($sentTopics[$piece] ?? 0) + 1;
+                }
+            }
+        }
+
         if ($type === 'missed') {
-            $missedBreakdown[callMissedBucket($call, $directory, $queueIds)]++;
+            $bucket = callMissedBucket($call, $directory, $queueIds);
+            $missedBreakdown[$bucket]++;
+            $waited = waitSeconds($call);
+            $band = $waited < 5 ? 'lt5' : ($waited <= 30 ? '5-30' : 'gt30');
+            $missedWaitBuckets[$band]++;
+            $waitBandMissed[$band]++;
+            $waitBandOffered[$band]++;
+            if ($bucket === 'abandon') {
+                $abandonWaitBuckets[$band]++;
+            }
         }
 
         if ($type === 'inbound') {
             $ring = ringSeconds($call);
             $inboundRings[] = $ring;
-            if ($ring <= $slaSeconds) {
+            /* The SAME band on the answered side, so each band's miss rate has a
+             * denominator: how long a caller waited before a person picked up is
+             * the same quantity as how long they waited before giving up. */
+            $waitBand = $ring < 5 ? 'lt5' : ($ring <= 30 ? '5-30' : 'gt30');
+            $waitBandOffered[$waitBand]++;
+            $waitBandAnswered[$waitBand]++;
+            if ($ring <= 30) { $waitBuckets['0-30']++; }
+            elseif ($ring <= 60) { $waitBuckets['31-60']++; }
+            elseif ($ring <= 120) { $waitBuckets['61-120']++; }
+            else { $waitBuckets['120+']++; }
+            /* The target this call is actually judged against: its queue's
+             * override when one is configured, otherwise the report's target. */
+            $target = $slaSeconds;
+            if ($perQueueSla) {
+                $target = resolveQueueSlaSeconds($settings, cdrQueueMatch($call, $queueIds));
+            }
+            $slaTargetSum += $target;
+            $slaTargets[$target] = true;
+            if ($ring <= $target) {
                 $answeredInSla++;
             }
         }
@@ -198,7 +357,14 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
         $raw = (string)($call['call-start-datetime'] ?? $call['startedAt'] ?? '');
         $at = parseEasternDateTime($raw);
         if ($at instanceof DateTimeImmutable) {
-            $hours[(int)$at->format('G')]++;
+            $hourIndex = (int)$at->format('G');
+            $hours[$hourIndex]++;
+            if ($type === 'inbound') {
+                $hourInbound[$hourIndex]++;
+                $hourTalk[$hourIndex] += seconds($call, 'call-talking-duration-seconds');
+            } elseif ($type === 'missed') {
+                $hourMissed[$hourIndex]++;
+            }
             $day = $at->format('Y-m-d');
             $days[$day] = ($days[$day] ?? 0) + 1;
         }
@@ -218,6 +384,10 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
     $serviceLevel = [
         'p50Ring' => percentileInt($inboundRings, 50),
         'p90Ring' => percentileInt($inboundRings, 90),
+        /* Same numbers, named for the wait the caller felt: on the dashboard
+         * "wait" is the word a manager uses for an answered call's ring. */
+        'p50Wait' => percentileInt($inboundRings, 50),
+        'p90Wait' => percentileInt($inboundRings, 90),
         'answeredInSla' => $answeredInSla,
         'answeredIn20' => $answeredInSla,
         'answered' => $answeredInbound,
@@ -225,12 +395,35 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
         'slaSeconds' => $slaSeconds,
         'sla' => $answeredInbound > 0 ? round(($answeredInSla / $answeredInbound) * 100, 1) : 0.0,
         'sla20' => $answeredInbound > 0 ? round(($answeredInSla / $answeredInbound) * 100, 1) : 0.0,
+        /*
+         * Per-queue targets: when several targets were in play for one period,
+         * a single "answered within X" label would be a half-truth, so the
+         * payload carries the mean target actually applied and how many
+         * distinct targets were used. The UI prints "within 24s (avg, per
+         * queue)" instead of naming one number that only half the calls faced.
+         */
+        'perQueue' => $perQueueSla,
+        'avgTargetSeconds' => $answeredInbound > 0 ? (int)round($slaTargetSum / $answeredInbound) : $slaSeconds,
+        'targetsUsed' => count($slaTargets),
     ];
 
     $panel = static function(array $group, string $kind): array {
         $count = count($group);
         $talk = array_sum(array_map(fn($c) => seconds($c, 'call-talking-duration-seconds'), $group));
         $rings = array_map(fn($c) => ringSeconds($c), $group);
+        /*
+         * Sprint B: connects ÷ attempts for the outbound panel, so the contact
+         * rate is available where the outbound AHT already was (the Settings
+         * live chip reads this block) without a second definition of
+         * "answered" living in the client. The test is callAnswered(), the same
+         * one the agents endpoint and the type classifier use.
+         */
+        $connected = 0;
+        foreach ($group as $member) {
+            if (callAnswered($member)) {
+                $connected++;
+            }
+        }
         return [
             'count' => $count,
             'avgHandling' => $count ? (int)round($talk / $count) : 0,
@@ -238,6 +431,8 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
             'avgRing' => $count ? (int)round(array_sum($rings) / $count) : 0,
             'longestTalk' => $group ? max(array_map(fn($c) => seconds($c, 'call-talking-duration-seconds'), $group)) : 0,
             'totalTalk' => $talk,
+            'connected' => $connected,
+            'connectPct' => $count ? round(($connected / $count) * 100, 1) : 0.0,
         ];
     };
     return [
@@ -245,16 +440,357 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
         'inbound' => $panel($sets['inbound'], 'inbound'),
         'outbound' => $panel($sets['outbound'], 'outbound'),
         'hours' => $hours,
+        /*
+         * The same 24 hours with their detail, so a totals row under the hourly
+         * grid adds up the numbers a manager can see rather than re-deriving
+         * them per screen. `calls` counts every call in scope (the $hours series
+         * unchanged); `answered` is inbound answered, which is AHT's denominator.
+         */
+        'heatmap' => [
+            /* Sunday-first rows, matching PHP's date('w') - the index IS the
+             * calendar day, so the client can label a row without trusting an
+             * order it did not compute. */
+            'days' => ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+            'hours' => range(0, 23),
+            'volume' => $heatVolume,
+            'answered' => $heatAnswered,
+            'missed' => $heatMissed,
+            'total' => array_sum(array_map('array_sum', $heatVolume)),
+            'maxCell' => $heatVolume ? max(array_map('max', $heatVolume)) : 0,
+        ],
+        'hourly' => array_map(
+            static fn(int $h): array => [
+                'hour' => $h,
+                'calls' => $hours[$h],
+                'answered' => $hourInbound[$h],
+                'missed' => $hourMissed[$h],
+                'talkSeconds' => $hourTalk[$h],
+                'aht' => $hourInbound[$h] > 0 ? (int)round($hourTalk[$h] / $hourInbound[$h]) : 0,
+            ],
+            range(0, 23)
+        ),
         'days' => $days,
         'missedBreakdown' => $missedBreakdown,
         'serviceLevel' => $serviceLevel,
+        'waitBuckets' => $waitBuckets,
+        'missedWaitBuckets' => $missedWaitBuckets,
+        /*
+         * Miss rate per wait band, each with its own base. The three bands
+         * partition every arrival (answered calls by ring time, missed calls by
+         * how long the caller waited), so a band with no arrivals is published
+         * as a zero row rather than omitted.
+         */
+        'waitBandMix' => array_values(array_map(
+            static function (string $band, string $label) use ($waitBandOffered, $waitBandAnswered, $waitBandMissed): array {
+                $base = (int)$waitBandOffered[$band];
+                return [
+                    'band' => $band,
+                    'label' => $label,
+                    'offered' => $base,
+                    'answered' => (int)$waitBandAnswered[$band],
+                    'missed' => (int)$waitBandMissed[$band],
+                    'missPct' => $base > 0 ? round((((int)$waitBandMissed[$band]) / $base) * 100, 1) : 0.0,
+                ];
+            },
+            ['lt5','5-30','gt30'],
+            ['under 5s','5-30s','over 30s']
+        )),
+        'abandonWaitBuckets' => $abandonWaitBuckets,
+        'hold' => [
+            'totalSeconds' => $holdTotal,
+            'calls' => $holdCalls,
+            'avgSeconds' => $holdCalls > 0 ? (int)round($holdTotal / $holdCalls) : 0,
+        ],
+        'sentiment' => [
+            /* Averages over the calls that carry sentiment; `scored` is the base
+             * a reader needs before quoting any of the three. */
+            'positive' => $sentN ? round($sentPos / $sentN, 1) : 0.0,
+            'neutral' => $sentN ? round($sentNeu / $sentN, 1) : 0.0,
+            'negative' => $sentN ? round($sentNeg / $sentN, 1) : 0.0,
+            'score' => $sentN ? round(($sentPos - $sentNeg) / $sentN, 1) : 0.0,
+            'scored' => $sentN,
+            'negativeCalls' => $sentNegativeCalls,
+            'topics' => array_map(
+                static fn(string $topic, int $count): array => ['topic' => $topic, 'count' => $count],
+                array_keys(array_slice($sentTopics, 0, 8, true)),
+                array_values(array_slice($sentTopics, 0, 8, true))
+            ),
+        ],
     ];
 }
 
+/*
+ * ==========================================================================
+ * SPRINT A ROW-SET FILTERS
+ * ==========================================================================
+ *
+ * api/calls.php and api/report.php both offer these now (the dashboard KPIs
+ * have to move with the filter bar, or a manager filters to "abandoned" and
+ * reads an unchanged page). They live here, once, for the same reason the
+ * outcome classifier does: two copies of a filter drift, and a drift between
+ * the dashboard and its drill-down is the bug this sprint exists to remove.
+ */
+
+/** The canonical outcome filter (answered / abandoned / voicemail / noanswer). */
+function filterCallsByOutcome(array $calls, string $outcome, array $directory = [], array $queueIds = []): array
+{
+    if (!in_array($outcome, callOutcomeKinds(), true)) {
+        return array_values($calls);
+    }
+    return array_values(array_filter(
+        $calls,
+        static fn(array $call): bool => callOutcome($call, $directory, $queueIds) === $outcome
+    ));
+}
+
+/**
+ * Sentiment (Sprint B): the rule for "this call went badly", stated once.
+ *
+ * A call is negative when its negative share is both non-trivial and larger
+ * than its positive share. Requiring both halves matters: a call with no
+ * intelligence data at all reports 0/0/0, and a call with 40 % negative and 45 %
+ * positive is not a complaint. The fields are collected today and rendered only
+ * on the live Queues donut, so this is the first time the period can be scoped
+ * to them.
+ */
+function callSentimentShare(array $row): array
+{
+    $pos = (float)($row['call-intelligence-percent-positive'] ?? 0);
+    $neu = (float)($row['call-intelligence-percent-neutral'] ?? 0);
+    $neg = (float)($row['call-intelligence-percent-negative'] ?? 0);
+    return ['positive' => $pos, 'neutral' => $neu, 'negative' => $neg, 'present' => ($pos + $neu + $neg) > 0];
+}
+
+function callIsNegative(array $row): bool
+{
+    $s = callSentimentShare($row);
+    return $s['present'] && $s['negative'] > 0 && $s['negative'] > $s['positive'];
+}
+
+function callSentimentFilterKinds(): array
+{
+    return ['negative', 'positive'];
+}
+
+function filterCallsBySentiment(array $calls, string $sentiment): array
+{
+    $sentiment = strtolower(trim($sentiment));
+    if (!in_array($sentiment, callSentimentFilterKinds(), true)) {
+        return array_values($calls);
+    }
+    return array_values(array_filter(
+        $calls,
+        static function (array $call) use ($sentiment): bool {
+            $share = callSentimentShare($call);
+            if (!$share['present']) {
+                return false;
+            }
+            return $sentiment === 'negative' ? callIsNegative($call) : $share['positive'] > $share['negative'];
+        }
+    ));
+}
+
+/**
+ * The wait bucket filter, with the SAME band edges summary() counts:
+ * 0-30, 31-60, 61-120, 120+. Only answered inbound calls are banded, like the
+ * card; `waitedOver` is direction-agnostic (a caller who gave up after 70 s
+ * waited too).
+ */
+function filterCallsByWait(array $calls, string $bucket = '', ?int $waitedOver = null): array
+{
+    if ($bucket === '' && $waitedOver === null) {
+        return array_values($calls);
+    }
+    return array_values(array_filter(
+        $calls,
+        static function (array $call) use ($bucket, $waitedOver): bool {
+            $waited = waitSeconds($call);
+            if ($waitedOver !== null && $waited < $waitedOver) {
+                return false;
+            }
+            if ($bucket === '') {
+                return true;
+            }
+            if (callType($call) !== 'inbound') {
+                return false;
+            }
+            return match ($bucket) {
+                '0-30' => $waited <= 30,
+                '31-60' => $waited > 30 && $waited <= 60,
+                '61-120' => $waited > 60 && $waited <= 120,
+                '120+' => $waited > 120,
+                default => true,
+            };
+        }
+    ));
+}
+
+/**
+ * The returned-call filter, over the whole set it is given (so combining it
+ * with a queue or agent filter still finds the calls that were returned).
+ * Matching itself is the links layer's - one definition.
+ *
+ * Both sets are needed, and this is subtle: "unreturned" is NOT "everything
+ * that is not returned". Every answered call and every outbound leg is also
+ * "not returned", so filtering on the complement alone turned a two-row
+ * worklist into the whole day. `unreturnedRoots` is the set of MISSED
+ * conversations nobody called back - that, and only that, is the worklist.
+ */
+function filterCallsByCallback(
+    array $calls,
+    string $state,
+    array $returnedRoots,
+    array $unreturnedRoots,
+    array $legIndex
+): array {
+    if ($state === '') {
+        return array_values($calls);
+    }
+    return array_values(array_filter(
+        $calls,
+        static function (array $call) use ($state, $returnedRoots, $unreturnedRoots, $legIndex): bool {
+            $root = cdrRootKey($call, $legIndex);
+            return $state === 'returned'
+                ? isset($returnedRoots[$root])
+                : isset($unreturnedRoots[$root]);
+        }
+    ));
+}
+
+/** The valid values, for endpoints that validate a request parameter. */
+function callWaitBuckets(): array
+{
+    return ['0-30', '31-60', '61-120', '120+'];
+}
+
+function callCallbackStates(): array
+{
+    return ['returned', 'unreturned'];
+}
+
+/*
+ * ==========================================================================
+ * COMPARISON MODES (manager review, F3)
+ * ==========================================================================
+ *
+ * The dashboard had one baseline: the previous period of equal length. That is
+ * the wrong baseline for the two questions the review actually asks -
+ * "yesterday is the wrong baseline for a Wednesday huddle, and last month is
+ * the wrong baseline for a monthly review that has a different number of
+ * business days in it".
+ *
+ * Every mode below shifts the requested range to another range and the caller
+ * runs the SAME pipeline over it, so a comparison can never be computed with
+ * different semantics than the period it is compared against.
+ */
+
+/** The valid comparison modes, for endpoints that validate a request value. */
+function compareModes(): array
+{
+    return ['previous', 'weekday', 'month', 'mtd', 'year'];
+}
+
+function normalizeCompareMode($requested): string
+{
+    $mode = strtolower(trim((string)$requested));
+    return in_array($mode, compareModes(), true) ? $mode : 'previous';
+}
+
+/**
+ * Shift a Y-m-d by whole months (or years) without PHP's month-end surprise.
+ *
+ * `(new DateTimeImmutable('2026-03-31'))->modify('-1 month')` is 2026-03-03 -
+ * PHP overflows the 31st into the next month. A comparison baseline that
+ * silently points at the wrong month is worse than no baseline, so the day is
+ * clamped to the last day of the target month instead.
+ */
+function shiftMonthsClamped(string $date, int $months): string
+{
+    try {
+        $at = new DateTimeImmutable($date);
+    } catch (Throwable $e) {
+        return $date;
+    }
+    $day = (int)$at->format('j');
+    $firstOfTarget = $at->modify('first day of this month')->modify(($months >= 0 ? '+' : '') . $months . ' months');
+    $lastDay = (int)$firstOfTarget->format('t');
+    return $firstOfTarget->setDate(
+        (int)$firstOfTarget->format('Y'),
+        (int)$firstOfTarget->format('n'),
+        min($day, $lastDay)
+    )->format('Y-m-d');
+}
+
+/**
+ * The comparison range for a mode, with a label that states the baseline AND
+ * the period length (review §5.3: "vs previous 7 days", not "vs previous").
+ *
+ *   previous  the equal-length period immediately before (the old behaviour)
+ *   weekday   the same dates one week earlier - for a daily huddle, yesterday
+ *             last week is the honest baseline: same weekday, same hours
+ *   mtd       the same dates one month earlier, clamped to that month's length
+ *             (month-to-date against the same point last month)
+ *   month     identical to mtd when the range is one calendar month; kept as
+ *             its own mode because that is the name a reader looks for
+ *   year      the same dates one year earlier (month-end and 29 February are
+ *             clamped), which is what "how does this compare to last year"
+ *             means for a report that is a calendar month
+ */
+function comparePeriodFilters(array $filters, string $mode = 'previous'): array
+{
+    $mode = normalizeCompareMode($mode);
+    $start = new DateTimeImmutable((string)$filters['start']);
+    $end = new DateTimeImmutable((string)$filters['end']);
+    $days = (int)$start->diff($end)->days + 1;
+
+    if ($mode === 'weekday') {
+        $compareStart = $start->modify('-7 days')->format('Y-m-d');
+        $compareEnd = $end->modify('-7 days')->format('Y-m-d');
+    } elseif ($mode === 'month' || $mode === 'mtd') {
+        $compareStart = shiftMonthsClamped((string)$filters['start'], -1);
+        $compareEnd = shiftMonthsClamped((string)$filters['end'], -1);
+    } elseif ($mode === 'year') {
+        $compareStart = shiftMonthsClamped((string)$filters['start'], -12);
+        $compareEnd = shiftMonthsClamped((string)$filters['end'], -12);
+    } else {
+        /* previous: default, and the fallback and the old behaviour. */
+        $compareEnd = $start->modify('-1 day')->format('Y-m-d');
+        $compareStart = (new DateTimeImmutable($compareEnd))->modify('-' . ($days - 1) . ' days')->format('Y-m-d');
+    }
+
+    $startAt = new DateTimeImmutable($compareStart);
+    $endAt = new DateTimeImmutable($compareEnd);
+    $compareDays = (int)$startAt->diff($endAt)->days + 1;
+    $dayWord = $compareDays === 1 ? 'day' : 'days';
+
+    $labels = [
+        'previous' => 'previous ' . $compareDays . ' ' . $dayWord,
+        'weekday' => 'same weekday last week',
+        'month' => 'same ' . $compareDays . ' ' . $dayWord . ' last month',
+        'mtd' => 'same point last month',
+        'year' => 'same ' . $compareDays . ' ' . $dayWord . ' last year',
+    ];
+
+    return [
+        'mode' => $mode,
+        'label' => $labels[$mode],
+        'days' => $compareDays,
+        'start' => $compareStart,
+        'end' => $compareEnd,
+    ];
+}
+
+/**
+ * The previous equal-length period, as a filters array.
+ *
+ * Kept because callers outside report.php use it; it is now a thin wrapper so
+ * there is only one implementation of the date arithmetic.
+ */
 function previousFilters(array $filters): array {
-    $start = new DateTimeImmutable($filters['start']); $end = new DateTimeImmutable($filters['end']); $days = $start->diff($end)->days + 1;
-    $previousEnd = $start->modify('-1 day'); $previousStart = $previousEnd->modify('-' . ($days - 1) . ' days');
-    $filters['start'] = $previousStart->format('Y-m-d'); $filters['end'] = $previousEnd->format('Y-m-d'); return $filters;
+    $compare = comparePeriodFilters($filters, 'previous');
+    $filters['start'] = $compare['start'];
+    $filters['end'] = $compare['end'];
+    return $filters;
 }
 
 function filterCallTypes(
@@ -683,24 +1219,15 @@ function findRelatedCdrs(
     array $cdr
 ): array {
 
+    /*
+     * The id vocabulary lives in links.php. This function used to read six
+     * fields where api/queue.php read eight (`call-id`, `cdr-id` were missing),
+     * so the same call could be one interaction here and two there - exactly the
+     * kind of drift that makes two screens disagree about one call.
+     */
     $ids = [];
-
-    foreach ([
-        'id',
-        'call-orig-call-id',
-        'call-parent-call-id',
-        'call-parent-cdr-id',
-        'call-through-call-id',
-        'call-term-call-id'
-    ] as $field) {
-
-        $value = trim(
-            (string)($cdr[$field] ?? '')
-        );
-
-        if ($value !== '') {
-            $ids[$value] = true;
-        }
+    foreach (cdrIdBag($cdr) as $id) {
+        $ids[$id] = true;
     }
 
     if (!$ids) {
@@ -715,23 +1242,9 @@ function findRelatedCdrs(
             continue;
         }
 
-        foreach ([
-            'id',
-            'call-orig-call-id',
-            'call-parent-call-id',
-            'call-parent-cdr-id',
-            'call-through-call-id',
-            'call-term-call-id'
-        ] as $field) {
+        foreach (cdrIdBag($item) as $value) {
 
-            $value = trim(
-                (string)($item[$field] ?? '')
-            );
-
-            if (
-                $value !== '' &&
-                isset($ids[$value])
-            ) {
+            if (isset($ids[$value])) {
 
                 $related[] = $item;
 

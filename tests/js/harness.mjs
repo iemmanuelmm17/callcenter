@@ -33,7 +33,27 @@ export const FIXTURES = {
     user: { username: 'om@7826.DynaCloud', displayName: 'Test OM', role: 'office_manager', domain: '7826.DynaCloud', extension: '1000', department: '', site: '' },
     remaining: 1800, warningAt: 900, tokenRemaining: 3600
   },
-  settings: { slaSeconds: 20, slaPct: 80, abandonPct: 10, missedPct: 20, ahtMinutes: 5, ahtOutboundMinutes: 5, topAgentAhtMinutes: 5, topAgentMinCalls: 20 },
+  settings: {
+    slaSeconds: 20, slaPct: 80, abandonPct: 10, missedPct: 20,
+    ahtMinutes: 5, ahtOutboundMinutes: 5, contactPct: 50, topAgentAhtMinutes: 5, topAgentMinCalls: 20,
+    /* Sprint A: the service-desk block. The calendar ships OFF, exactly as a
+     * fresh install does, with the Mon-Fri grid pre-filled. */
+    businessHours: {
+      enabled: false,
+      days: {
+        1: { closed: false, open: '08:00', close: '18:00' },
+        2: { closed: false, open: '08:00', close: '18:00' },
+        3: { closed: false, open: '08:00', close: '18:00' },
+        4: { closed: false, open: '08:00', close: '18:00' },
+        5: { closed: false, open: '08:00', close: '18:00' },
+        6: { closed: true, open: '', close: '' },
+        7: { closed: true, open: '', close: '' }
+      },
+      holidays: []
+    },
+    queueSla: { 700: 15 },
+    roster: [{ extension: '6080', name: 'Ada Lovelace', team: 'Sales', supervisor: 'Sup', days: [1, 2, 3, 4, 5], start: '09:00', end: '17:00' }]
+  },
   /*
    * Mirrors api/filters.php: departments/sites plus the metric catalog from
    * includes/reporting/metrics.php. The `total` title is a sentinel on
@@ -44,6 +64,28 @@ export const FIXTURES = {
   filters: {
     departments: ['Sales', 'Support', 'Billing'],
     sites: ['HQ', 'Branch'],
+    agents: [
+      { extension: '6080', name: 'Ada Lovelace', department: 'Sales', site: 'HQ' },
+      { extension: '6081', name: 'Alan Turing', department: 'Support', site: 'HQ' }
+    ],
+    queues: [
+      { id: '700', description: 'Sales queue' },
+      { id: '701', description: 'Support queue' }
+    ],
+    businessHours: {
+      enabled: false,
+      configured: false,
+      days: {
+        1: { closed: false, open: '08:00', close: '18:00' },
+        2: { closed: false, open: '08:00', close: '18:00' },
+        3: { closed: false, open: '08:00', close: '18:00' },
+        4: { closed: false, open: '08:00', close: '18:00' },
+        5: { closed: false, open: '08:00', close: '18:00' },
+        6: { closed: true, open: '', close: '' },
+        7: { closed: true, open: '', close: '' }
+      },
+      holidays: []
+    },
     metrics: {
       total: {label: 'All calls', title: 'All calls (served by api/filters.php)'},
       missed: {label: 'Missed', title: 'Missed'}
@@ -51,6 +93,18 @@ export const FIXTURES = {
   },
   cache_job: { complete: true, ready: 5, total: 5, percent: 100, next: null, start: '2026-08-02', end: '2026-08-06', warming: false },
   report: {
+    links: {
+      offered: 12,
+      transfers: {
+        count: 3, transferredInteractions: 2, handled: 10, ratePct: 20, perTransferred: 1.5,
+        agentPairs: [{ from: '6080', to: '6081', count: 2 }], queuePairs: []
+      },
+      callbacks: {
+        windowSeconds: 86400, missed: 5, returned: 3, unreturned: 2, ratePct: 60,
+        avgReturnSeconds: 1500, fastest: null, slowest: null, worklist: [], unreturnedList: []
+      },
+      repeat: { callers: 10, repeat24: 3, repeat72: 4, rate24Pct: 30, rate72Pct: 40, top: [] }
+    },
     filters: { start: '2026-08-02', end: '2026-08-06', department: '', site: '', agents: [] },
     callTypes: { inbound: true, outbound: true, missed: true, onnet: true },
     summary: {
@@ -61,12 +115,68 @@ export const FIXTURES = {
       inbound: panel('Inbound', HOURS, DAYS),
       outbound: panel('Outbound', HOURS, DAYS),
       hours: HOURS,
+      /*
+       * AHT by hour (Sprint A). Two busy hours and twenty-two empty ones — the
+       * shape a real quiet week has. Hour 9 carries the outbound/on-net talk
+       * that must NOT enter AHT: 60 s of inbound talk over 1 answered call,
+       * which is why the hour reads 60 s rather than 487 s.
+       */
+      hourly: Array.from({ length: 24 }, (_, h) => (
+        h === 8 ? { hour: 8, calls: 3, answered: 2, missed: 1, talkSeconds: 300, aht: 150 }
+          : h === 9 ? { hour: 9, calls: 4, answered: 1, missed: 1, talkSeconds: 60, aht: 60 }
+            : { hour: h, calls: 0, answered: 0, missed: 0, talkSeconds: 0, aht: 0 }
+      )),
       days: DAYS,
       outcomes: { answered: 1400, missed: 130, busy: 12, failed: 6 },
       duration: [{ label: '0–30s', count: 120 }, { label: '30–60s', count: 90 }],
-      heatmap: Array.from({ length: 7 }, () => HOURS.map(n => Math.round(n / 3)))
+      /*
+       * Sprint B weekday x hour grid, hand-built so a test can check a SPECIFIC
+       * cell rather than "a grid rendered": Monday (row 1) 09:00 = 12 offered /
+       * 10 answered / 2 missed, Sunday (row 0) 09:00 = 1, everything else empty.
+       * A row index off by one (Monday-first vs Sunday-first) reads 1 where it
+       * must read 12, which is the mistake this fixture pins.
+       */
+      heatmap: (() => {
+        const volume = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
+        const answered = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
+        const missed = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
+        volume[1][9] = 12; answered[1][9] = 10; missed[1][9] = 2;
+        volume[0][9] = 1; answered[0][9] = 1;
+        return {
+          days: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+          hours: Array.from({ length: 24 }, (_, h) => h),
+          volume, answered, missed,
+          total: 13,
+          maxCell: 12
+        };
+      })(),
+      /* Sprint A: the wait bands, the hold nobody used to see, and the links
+       * block (transfers / returned calls / repeat callers). */
+      waitBuckets: { '0-30': 6, '31-60': 3, '61-120': 2, '120+': 1 },
+      missedWaitBuckets: { lt5: 1, '5-30': 2, gt30: 2 },
+      abandonWaitBuckets: { lt5: 1, '5-30': 1, gt30: 2 },
+      hold: { totalSeconds: 480, calls: 3, avgSeconds: 160 },
+      /*
+       * Sprint B, §3: the miss rate inside each wait band, bases summed from the
+       * bands themselves (2 + 3 + 3 = 8 arrivals).
+       */
+      waitBandMix: [
+        { band: 'lt5', label: 'under 5s', offered: 2, answered: 1, missed: 1, missPct: 50 },
+        { band: '5-30', label: '5-30s', offered: 3, answered: 2, missed: 1, missPct: 33.3 },
+        { band: 'gt30', label: 'over 30s', offered: 3, answered: 1, missed: 2, missPct: 66.7 }
+      ],
+      /* Sprint B: the period's sentiment, with its base. */
+      sentiment: {
+        positive: 38.3, neutral: 25.0, negative: 43.3, score: -5.0,
+        scored: 3, negativeCalls: 1,
+        topics: [{ topic: 'billing', count: 2 }, { topic: 'outage', count: 1 }]
+      }
     },
     comparison: {
+      /* F3: the baseline's own name and length, as the server publishes them. */
+      mode: 'previous',
+      label: 'previous 5 days',
+      days: 5,
       previous: {
         start: '2026-07-27', end: '2026-07-31',
         counts: { total: 1900, inbound: 1300, outbound: 450, missed: 120, onnet: 30 },
@@ -82,28 +192,95 @@ export const FIXTURES = {
      * ib + mc + ab, mcRate is every missed call ÷ offered.
      */
     agentPerformance: [
-      { extension: '6080', name: 'Ada Lovelace', department: 'Sales', site: 'HQ', total: 245, ib: 200, ob: 40, mc: 24, ab: 16, onnet: 5, ibAht: 210, ibAat: 12, ibLtt: 900, ibTct: 42000, obArt: 8, obAat: 10, obLtt: 300, obTct: 1200, offered: 240, mcRate: 16.7, abRate: 6.7 },
-      { extension: '6081', name: 'Alan Turing', department: 'Support', site: 'HQ', total: 185, ib: 150, ob: 20, mc: 20, ab: 15, onnet: 3, ibAht: 190, ibAat: 14, ibLtt: 700, ibTct: 28500, obArt: 9, obAat: 11, obLtt: 240, obTct: 800, offered: 185, mcRate: 18.9, abRate: 8.1 }
+      { extension: '6080', name: 'Ada Lovelace', department: 'Sales', site: 'HQ', total: 245, ib: 200, ob: 40, mc: 24, ab: 16, onnet: 5, ibAht: 210, ibAat: 12, ibLtt: 900, ibTct: 42000, obArt: 8, obAat: 10, obLtt: 300, obTct: 1200, offered: 240, mcRate: 16.7, abRate: 6.7, obConnected: 29, obConnectPct: 72.5, holdTotal: 900, holdCalls: 30, holdAvg: 30 },
+      { extension: '6081', name: 'Alan Turing', department: 'Support', site: 'HQ', total: 185, ib: 150, ob: 20, mc: 20, ab: 15, onnet: 3, ibAht: 190, ibAat: 14, ibLtt: 700, ibTct: 28500, obArt: 9, obAat: 11, obLtt: 240, obTct: 800, offered: 185, mcRate: 18.9, abRate: 8.1, obConnected: 8, obConnectPct: 40, holdTotal: 120, holdCalls: 4, holdAvg: 30 }
     ],
     inventory: { agents: 2, totalNumbers: 4, enabledNumbers: 3, autoAttendants: 2, aaCalls: 300, queues: 3 },
+    /*
+     * Sprint C: the month-end pack. Shapes match includes/reporting/pack.php
+     * exactly, including the bases that must ride with each rate: slaBase,
+     * missedBase, the staffing assumption fields, and the baseline's window vs
+     * the days that actually had data.
+     */
+    pack: {
+      queues: [
+        { callqueue: '700', description: 'Sales queue', slaSeconds: 15, offered: 3, answered: 2, missed: 0, abandoned: 1,
+          sla: 50, slaBase: 2, abandonRate: 33.3, avgRing: 20, avgTalk: 45, totalTalk: 90, holdAvg: 25, holdTotal: 50 },
+        { callqueue: '701', description: 'Support queue', slaSeconds: 30, offered: 1, answered: 1, missed: 0, abandoned: 0,
+          sla: 100, slaBase: 1, abandonRate: 0, avgRing: 20, avgTalk: 40, totalTalk: 40, holdAvg: 0, holdTotal: 0 },
+        { callqueue: '702', description: 'Idle queue', slaSeconds: 20, offered: 0, answered: 0, missed: 0, abandoned: 0,
+          sla: 0, slaBase: 0, abandonRate: 0, avgRing: 0, avgTalk: 0, totalTalk: 0, holdAvg: 0, holdTotal: 0 }
+      ],
+      numbers: [
+        { number: '8457620001', key: '8457620001', calls: 5, inbound: 2, missed: 2, abandoned: 1,
+          missedBase: 4, missedRate: 50, abandonRate: 50, totalTalk: 90, zeroTraffic: false, highAbandon: false },
+        { number: '8457620004', key: '8457620004', calls: 0, inbound: 0, missed: 0, abandoned: 0,
+          missedBase: 0, missedRate: 0, abandonRate: 0, totalTalk: 0, zeroTraffic: true, highAbandon: false },
+        { number: '8457620005', key: '8457620005', calls: 6, inbound: 1, missed: 5, abandoned: 1,
+          missedBase: 6, missedRate: 83.3, abandonRate: 20, totalTalk: 25, zeroTraffic: false, highAbandon: true }
+      ],
+      quality: {
+        calls: 17, answered: 6,
+        missingAnswerTime: { count: 0, base: 17, pct: 0 },
+        zeroTalkAnswered: { count: 0, base: 6, pct: 0 },
+        missingDisconnectReason: { count: 17, base: 17, pct: 100 },
+        duplicateLegs: { count: 0, base: 17, pct: 0 }
+      },
+      staffing: {
+        occupancyPct: 85, intervalMinutes: 60,
+        formula: 'offered x AHT / interval / occupancy',
+        label: 'baseline, not a forecast',
+        basis: 'Talk time is the only work content the CDRs carry; after-call work, breaks and meetings are not in this estimate, and there is no roster to compute real occupancy from.',
+        totalWorkHours: 0.16, totalAgentHours: 0.19,
+        hours: [
+          { hour: 8, offered: 3, aht: 150, workSeconds: 450, agents: 0.15 },
+          { hour: 9, offered: 2, aht: 60, workSeconds: 120, agents: 0.04 }
+        ]
+      },
+      baseline: {
+        label: 'baseline over the same weekday in the prior weeks',
+        windowFrom: '2026-07-05', windowTo: '2026-08-01', weeks: 4,
+        from: '2026-07-06', to: '2026-07-27',
+        byWeekday: [
+          { weekday: 0, label: 'Sunday', weeks: 4, total: 40, avg: 10 },
+          { weekday: 1, label: 'Monday', weeks: 4, total: 48, avg: 12 },
+          { weekday: 2, label: 'Tuesday', weeks: 4, total: 44, avg: 11 },
+          { weekday: 3, label: 'Wednesday', weeks: 4, total: 36, avg: 9 },
+          { weekday: 4, label: 'Thursday', weeks: 4, total: 32, avg: 8 },
+          { weekday: 5, label: 'Friday', weeks: 4, total: 28, avg: 7 },
+          { weekday: 6, label: 'Saturday', weeks: 0, total: 0, avg: 0 }
+        ],
+        days: [
+          { date: '2026-08-02', weekday: 0, volume: 12, baseline: 10, index: 120 },
+          { date: '2026-08-03', weekday: 1, volume: 6, baseline: null, index: null }
+        ]
+      }
+    },
+    dataQuality: {
+      days: {
+        '2026-08-02': { records: 812, complete: true, cached: true },
+        '2026-08-03': { records: 410, complete: false, cached: true }
+      },
+      incompleteDays: 1, emptyDays: 0, hours: 'all', businessHoursConfigured: false
+    },
     timezone: 'US/Eastern'
   },
   agents: { data: [
-    { extension: '6080', name: 'Ada Lovelace', department: 'Sales', site: 'HQ', total: 245, ib: 200, ob: 40, mc: 24, ab: 16, onnet: 5, ibAht: 210, ibAat: 12, ibLtt: 900, ibTct: 42000, obArt: 8, obAat: 10, obLtt: 300, obTct: 1200 },
-    { extension: '6081', name: 'Alan Turing', department: 'Support', site: 'HQ', total: 185, ib: 150, ob: 20, mc: 20, ab: 15, onnet: 3, ibAht: 190, ibAat: 14, ibLtt: 700, ibTct: 28500, obArt: 9, obAat: 11, obLtt: 240, obTct: 800 }
+    { extension: '6080', name: 'Ada Lovelace', department: 'Sales', site: 'HQ', total: 245, ib: 200, ob: 40, mc: 24, ab: 16, onnet: 5, ibAht: 210, ibAat: 12, ibLtt: 900, ibTct: 42000, obArt: 8, obAat: 10, obLtt: 300, obTct: 1200, obConnected: 29, obConnectPct: 72.5, holdTotal: 900, holdCalls: 30, holdAvg: 30 },
+    { extension: '6081', name: 'Alan Turing', department: 'Support', site: 'HQ', total: 185, ib: 150, ob: 20, mc: 20, ab: 15, onnet: 3, ibAht: 190, ibAat: 14, ibLtt: 700, ibTct: 28500, obArt: 9, obAat: 11, obLtt: 240, obTct: 800, obConnected: 8, obConnectPct: 40, holdTotal: 120, holdCalls: 4, holdAvg: 30 }
   ], total: 2, page: 1, size: 25, last_page: 1 },
   telephone_numbers: {
     numbers: [
       { id: '1', number: '8457620002', type: 'Local DID', enabled: true,
-        calls: { inbound: 812, missed: 143, outbound: 12, talkSeconds: 41230, firstCall: '2026-08-02T10:00:00Z', lastCall: '2026-08-02T18:00:00Z' },
+        calls: { inbound: 812, missed: 143, abandoned: 58, outbound: 12, talkSeconds: 41230, firstCall: '2026-08-02T10:00:00Z', lastCall: '2026-08-02T18:00:00Z' },
         destination: { name: 'Main line', extension: '2000', department: 'Support', site: 'HQ' },
         routing: { application: 'to-callqueue' } },
       { id: '2', number: '8005551212', type: 'Toll-Free', enabled: false,
-        calls: { inbound: 130, missed: 12, outbound: 0, talkSeconds: 8040 },
+        calls: { inbound: 130, missed: 12, abandoned: 2, outbound: 0, talkSeconds: 8040 },
         destination: { name: 'Sales', extension: '2200', department: 'Sales', site: 'Branch' },
         routing: { application: 'to-user' } }
     ],
-    summary: { totalNumbers: 2, enabledNumbers: 1, totalCalls: 942, totalInbound: 942, totalMissed: 155, totalTalkSeconds: 49270 },
+    summary: { totalNumbers: 2, enabledNumbers: 1, totalCalls: 942, totalInbound: 942, totalMissed: 155, totalAbandoned: 60, totalTalkSeconds: 49270 },
     charts: { hours: HOURS, days: DAYS, outcomes: { answered: 942, missed: 155, busy: 0, failed: 0 }, duration: [{ label: '0–30s', count: 40 }], heatmap: Array.from({ length: 7 }, () => HOURS) },
     repeatCallers: [{ caller: '8454259810', calls: 3, answered: 2, missed: 1, dids: [{ number: '8457620002', calls: 3, answered: 2, missed: 1 }] }],
     departments: ['Support', 'Sales'], sites: ['HQ', 'Branch']
@@ -130,6 +307,37 @@ export const FIXTURES = {
   },
   queue: {
     queues: [{ callqueue: '700', description: 'Sales queue', site: 'HQ', agentsOnline: 4, agentsTotal: 6, waiting: 2, calls: 240, slaPct: 88 }],
+    /*
+     * Two queues for the Queue stats grid, with numbers chosen so the totals
+     * row can be checked by hand and so a WRONG aggregate is visibly wrong:
+     * the weighted average ring time is (20x70 + 10x45) / 115 = 16 s, while the
+     * mean of the two averages would be 15 s, and the SLA rate is
+     * (80x100 + 90x60) / 160 = 83.8 % (weighted by the larger of offered and
+     * legs, the page's own rule) rather than the 85 % mean of 80 and 90.
+     */
+    queueStats: [
+      { callqueue: '700', description: 'Sales queue', site: 'HQ', totalCalls: 100, offered: 80, handled: 70,
+        slaMiss: 14, sla: 80, abandoned: 10, abandonRate: 12.5,
+        avgRing: 20, maxRing: 90, avgTalk: 180, maxTalk: 600, totalTalk: 20000,
+        holdCalls: 6, holdAvg: 45, holdTotal: 270 },
+      { callqueue: '701', description: 'Support queue', site: 'HQ', totalCalls: 60, offered: 50, handled: 45,
+        slaMiss: 5, sla: 90, abandoned: 5, abandonRate: 10,
+        avgRing: 10, maxRing: 60, avgTalk: 120, maxTalk: 400, totalTalk: 8000,
+        holdCalls: 0, holdAvg: 0, holdTotal: 0 }
+    ],
+    /*
+     * Service level by interval (Sprint A): two busy intervals, so the card's
+     * totals line can be checked by hand.
+     *   09:00  6 offered, 5 answered, 1 abandoned, asa 20 s, sla 80 %, 1 missed
+     *   10:00  2 offered, 2 answered, 0 abandoned, asa 40 s, sla 50 %, 1 missed
+     * Totals: 8 offered / 7 answered / 1 abandoned; weighted ASA
+     * (5x20 + 2x40) / 7 = 25.7 s; SLA (7 - 2) / 7 = 71.4 % (NOT the 65 % mean).
+     */
+    intervalMinutes: 60,
+    intervalSla: [
+      { from: '09:00', to: '10:00', offered: 6, answered: 5, abandoned: 1, asa: 20, sla: 80, slaMiss: 1 },
+      { from: '10:00', to: '11:00', offered: 2, answered: 2, abandoned: 0, asa: 40, sla: 50, slaMiss: 1 }
+    ],
     selected: '700',
     queue: { callqueue: '700', description: 'Sales queue', site: 'HQ', dispatchType: 'simultaneous' },
     kpis: { waiting: 2, agentsAvailable: 4, agentsTotal: 6, totalCalls: 240, avgWait: 18, sla: 88.4, abandonRate: 3.2, aht: 205, longestWait: 74 },
@@ -409,9 +617,30 @@ export async function createHarness(options = {}) {
     [...window.document.querySelectorAll(selector)].find(el => el.textContent.includes(text));
   const root = () => window.document.getElementById('root');
 
+  /*
+   * Type into a controlled input the way React can see it.
+   *
+   * Setting element.value directly updates React's own value tracker, so the
+   * change is swallowed as a no-op: the DOM shows the new text and the component
+   * never hears about it. Going through the native setter is what a real
+   * keystroke does.
+   */
+  const typeInto = async (element, value) => {
+    const proto = element.tagName === 'SELECT' ? window.HTMLSelectElement.prototype
+      : element.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+    await act(async () => {
+      if (descriptor && descriptor.set) descriptor.set.call(element, value);
+      else element.value = value;
+      element.dispatchEvent(new window.Event('input', { bubbles: true }));
+      element.dispatchEvent(new window.Event('change', { bubbles: true }));
+    });
+  };
+
   return {
     dom, window, document: window.document, React, ReactDOM, flush, click, press,
-    byText, containing, root, errors, warnings, requested,
+    byText, containing, root, errors, warnings, requested, typeInto,
     /* Every Tabulator the app constructed, oldest first. */
     tables: window.__tabulatorTables,
     /* Every Chart the app constructed, oldest first. */

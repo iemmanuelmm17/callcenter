@@ -56,13 +56,49 @@ function authorizedFilters(array $requested, array $user): array {
      */
     $start = filterYmd($requested['start'] ?? null, date('Y-m-d'));
     $end = filterYmd($requested['end'] ?? null, $start);
-    $maxSpanDays = 31;
+    /*
+     * The 31-day cap protects the PBX from a bookmarked multi-month range: the
+     * day cache is fetched a day at a time, so a "last year" URL would fan out
+     * into hundreds of upstream requests. That reasoning holds for a supervisor
+     * opening a shared link; it does not hold for the office manager producing
+     * a month-end or year-on-year report, who is the one person we want to allow
+     * a longer window (manager review, Sprint A/B). 366 days is a year plus the
+     * leap day, and a single year's day cache is bounded work.
+     */
+    $maxSpanDays = ($role === 'office_manager') ? 366 : 31;
     $dStart = new DateTimeImmutable($start);
     $dEnd = new DateTimeImmutable($end);
     if ($dEnd > $dStart && $dStart->diff($dEnd)->days >= $maxSpanDays) {
         $end = $dStart->modify('+' . ($maxSpanDays - 1) . ' days')->format('Y-m-d');
     }
     $result = ['start' => $start, 'end' => $end];
+
+    /*
+     * Opening hours (manager review, Sprint A).
+     *
+     *   all       every call in the range - what the app reported before
+     *   business  only calls that started inside the desk's opening hours
+     *   after     only calls outside them (the "what are we missing at night"
+     *             view, and the other half of the split)
+     *
+     * The default is `business` whenever a calendar is actually configured,
+     * because that is the number a manager publishes; while no calendar is
+     * configured the only honest answer is `all`, so an unconfigured install
+     * behaves exactly as it did before this feature existed.
+     */
+    $settings = loadDomainSettings((string)($user['domain'] ?? ''));
+    $configured = businessHoursConfigured($settings);
+    $hours = strtolower(trim((string)($requested['hours'] ?? '')));
+    if (!in_array($hours, ['all', 'business', 'after'], true)) {
+        $hours = $configured ? 'business' : 'all';
+    }
+    if (!$configured) {
+        $hours = 'all';
+    }
+    $result['hours'] = $hours;
+    /* Which desk's calendar/SLA the report layers should resolve against. */
+    $result['domain'] = (string)($user['domain'] ?? '');
+
     if ($role === 'office_manager') {
         $result['department'] = trim((string)($requested['department'] ?? ''));
         $result['site'] = trim((string)($requested['site'] ?? ''));

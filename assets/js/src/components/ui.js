@@ -108,6 +108,7 @@ const navItems = [
     { id: 'telephone_numbers', label: 'Telephone Numbers', icon: 'phone' },
     { id: 'attendants', label: 'Auto-Attendants', icon: 'attendants' },
     { id: 'call_history', label: 'Call History', icon: 'history' },
+    { id: 'reports', label: 'Reports', icon: 'download' },
 ];
 
 function flowFaIcon(classes) {

@@ -9,6 +9,7 @@ import { ErrorState, Tooltip, skel, skelPanel } from './ui.js';
 import { api, apiDownload } from '../lib/api.js';
 import { fmt, fmtNum, fmtPct, formatPhoneNumber } from '../lib/format.js';
 import { h, useEffect, useMemo, useRef, useState } from '../lib/react.js';
+import { countBy, sumBy } from '../lib/totals.js';
 
 function telephoneDestinationType(application) {
 
@@ -178,6 +179,9 @@ function TelephoneNumbersTable({data,loading, filters, onTelephoneClick}) {
             } else if (sortKey === 'missed') {
                 av = Number(ca.missed || 0);
                 bv = Number(cb.missed || 0);
+            } else if (sortKey === 'abandoned') {
+                av = Number(ca.abandoned || 0);
+                bv = Number(cb.abandoned || 0);
             } else if (sortKey === 'talk') {
                 av = Number(ca.talkSeconds || 0);
                 bv = Number(cb.talkSeconds || 0);
@@ -208,6 +212,32 @@ function TelephoneNumbersTable({data,loading, filters, onTelephoneClick}) {
     const startIndex = (currentPage - 1) * pageSize;
     const endIndex = Math.min(startIndex + pageSize, totalRows);
     const paginatedData = sorted.slice(startIndex, endIndex);
+
+    /*
+     * Totals row (manager review, §5.1). The grid's three numeric columns are
+     * counts and a duration, so they add up: the row is the DID portfolio for the
+     * filters (search, type, hide-zero), not just the page. "Missed" gets the same
+     * red treatment a row gets when it is above zero, because on a DID grid a
+     * nonzero missed total is the thing being looked for.
+     */
+    const totalsRow = sorted.length
+        ? h('tr', {className: 'grid-totals'},
+            h('td', {className: 'whitespace-nowrap px-2 py-2'}, 'All ' + fmtNum(countBy(sorted, 'number')) + ' numbers'),
+            h('td', {className: 'whitespace-nowrap px-2 py-2'}, ''),
+            h('td', {className: 'whitespace-nowrap px-2 py-2'}, ''),
+            h('td', {className: 'whitespace-nowrap px-2 py-2'}, ''),
+            h('td', {className: 'whitespace-nowrap px-2 py-2'}, ''),
+            h('td', {className: 'whitespace-nowrap px-2 py-2'}, ''),
+            h('td', {className: 'whitespace-nowrap px-2 py-2 text-right tabular-nums text-slate-200'},
+                fmtNum(sumBy(sorted, p => (p.calls || {}).inbound))),
+            h('td', {className: 'whitespace-nowrap px-2 py-2 text-right tabular-nums ' + (sumBy(sorted, p => (p.calls || {}).missed) > 0 ? 'text-rose-400 font-bold' : 'tn-faint')},
+                fmtNum(sumBy(sorted, p => (p.calls || {}).missed))),
+            h('td', {className: 'whitespace-nowrap px-2 py-2 text-right tabular-nums ' + (sumBy(sorted, p => (p.calls || {}).abandoned) > 0 ? 'text-rose-400 font-bold' : 'tn-faint')},
+                fmtNum(sumBy(sorted, p => (p.calls || {}).abandoned))),
+            h('td', {className: 'whitespace-nowrap px-2 py-2 text-right tabular-nums text-slate-200'},
+                fmt(sumBy(sorted, p => (p.calls || {}).talkSeconds)))
+          )
+        : null;
 
     const sortBtn = (field, label, align, tip) => {
         const active = sortKey === field;
@@ -262,16 +292,19 @@ function TelephoneNumbersTable({data,loading, filters, onTelephoneClick}) {
                         h('th', {className: 'whitespace-nowrap px-2 py-2 text-left'}, 'Site'),
                         sortBtn('calls', 'Calls', 'text-right', 'Answered inbound volume. Click a number to open those calls.'),
                         sortBtn('missed', 'Missed', 'text-right', 'Unanswered inbound. Red when greater than zero.'),
+                        sortBtn('abandoned', 'Abandoned', 'text-right', 'Unanswered inbound where the caller reached a queue or the auto attendant and hung up — the same abandon definition as the dashboard.'),
                         sortBtn('talk', 'Talk', 'text-right', 'Total talking time on this DID.')
                     )
                 ),
                 h('tbody', null,
+                    totalsRow,
                     paginatedData.length === 0
-                        ? h('tr', null, h('td', {colSpan: 9, className: 'px-4 py-10 text-center text-xs text-slate-500'}, 'No telephone numbers found.'))
+                        ? h('tr', null, h('td', {colSpan: 10, className: 'px-4 py-10 text-center text-xs text-slate-500'}, 'No telephone numbers found.'))
                         : paginatedData.map((phone, index) => {
                             const calls = phone.calls || {};
                             const destination = phone.destination || {};
                             const missed = Number(calls.missed || 0);
+                            const abandoned = Number(calls.abandoned || 0);
                             const inbound = Number(calls.inbound || 0);
                             const talk = Number(calls.talkSeconds || 0);
                             const enabled = tnIsEnabled(phone);
@@ -311,6 +344,7 @@ function TelephoneNumbersTable({data,loading, filters, onTelephoneClick}) {
                                 h('td', {className: 'whitespace-nowrap px-2 py-2'}, tnFaint(destination.site)),
                                 h('td', {className: 'whitespace-nowrap px-2 py-2 text-right tabular-nums ' + (inbound ? 'text-slate-200' : 'tn-faint')}, fmtNum(inbound)),
                                 h('td', {className: 'whitespace-nowrap px-2 py-2 text-right tabular-nums ' + (missed > 0 ? 'text-rose-400 font-bold' : 'tn-faint')}, fmtNum(missed)),
+                                h('td', {className: 'whitespace-nowrap px-2 py-2 text-right tabular-nums ' + (abandoned > 0 ? 'text-rose-400 font-bold' : 'tn-faint')}, fmtNum(abandoned)),
                                 h('td', {className: 'whitespace-nowrap px-2 py-2 text-right tabular-nums ' + (talk > 0 ? 'text-slate-200' : 'tn-faint')}, fmt(talk))
                             );
                         })
@@ -690,7 +724,12 @@ function TelephoneNumbers({filters, onCallClick}) {
     return [phone.number, phone.type, tnTypeLabel(phone.type), d.name, d.extension, d.department, d.site, route.label].some(v => String(v||'').toLowerCase().includes(term));
   }), [numbers, hideZeroCalls, typeFilter, term]);
 
-  const kpi = (label, value, icon, tone, onClick, tip) => {
+  /*
+   * `base` is the review's rule that a rate never appears without its base: the
+   * card prints the sub-line under the value ("60 of the 155 abandoned"). It is
+   * optional, because not every number here has a denominator worth printing.
+   */
+  const kpi = (label, value, icon, tone, onClick, tip, base) => {
     const Tag = onClick ? 'button' : 'div';
     return h(Tag, {
       type: onClick ? 'button' : undefined,
@@ -703,7 +742,8 @@ function TelephoneNumbers({filters, onCallClick}) {
         h('span', {className: 'tn-kpi-mini-label'}, label),
         tip ? h(Tooltip, {text: tip}, h('span', {className: 'cursor-help border-b border-dotted border-slate-600 text-[10px]'}, '?')) : null
       ),
-      h('div', {className: 'tn-kpi-mini-value'}, typeof value === 'number' ? fmtNum(value) : value)
+      h('div', {className: 'tn-kpi-mini-value'}, typeof value === 'number' ? fmtNum(value) : value),
+      base ? h('div', {className: 'tn-kpi-mini-base'}, base) : null
     );
   };
 
@@ -744,8 +784,11 @@ function TelephoneNumbers({filters, onCallClick}) {
     ),
     h('section', {className: 'tn-kpi-ribbon'},
       kpi('Total numbers', summary.totalNumbers || 0, 'fa-solid fa-hashtag', null, null, 'DIDs in inventory for this account.'),
-      kpi('Total calls', summary.totalCalls || 0, 'fa-solid fa-phone', 'good', () => onCallClick && onCallClick({ metric: 'incoming' }), 'Inbound + missed volume on all listed numbers. Click to open the call list.'),
-      kpi('Missed calls', summary.totalMissed || 0, 'fa-solid fa-phone-slash', 'bad', () => onCallClick && onCallClick({ metric: 'missed' }), 'Unanswered inbound to these numbers. Click to open missed calls.'),
+      kpi('Total calls', summary.totalCalls || 0, 'fa-solid fa-phone', 'good', () => onCallClick && onCallClick({ metric: 'incoming' }), 'Answered inbound volume on all listed numbers (missed calls are the card beside this one). Click to open the call list.'),
+      kpi('Missed calls', summary.totalMissed || 0, 'fa-solid fa-phone-slash', 'bad', () => onCallClick && onCallClick({ metric: 'missed' }), 'Unanswered inbound to these numbers. Click to open missed calls. The sub-line is the abandon share — callers who reached a queue or the auto attendant and hung up, the same abandon definition as the dashboard.',
+        (Number(summary.totalAbandoned || 0) > 0
+          ? fmtNum(summary.totalAbandoned) + ' of the ' + fmtNum(summary.totalMissed || 0) + ' abandoned'
+          : null)),
       kpi('Disabled numbers', Math.max(0, Number(summary.totalNumbers || 0) - Number(summary.enabledNumbers || 0)), 'fa-solid fa-ban', 'warn', null, 'Inventory marked disabled — candidates to reclaim.')
     ),
     unusedCount > 0

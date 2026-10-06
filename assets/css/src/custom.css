@@ -3160,3 +3160,349 @@ html[data-theme="light"] .ops-rank-tab.is-on {
   color: var(--color-slate-500, #64748b);
 }
 .cm-tray .rec-panel { padding: 8px 12px 12px; }
+
+/* ==========================================================================
+   Settings: the service-desk block (opening hours, per-queue targets, roster)
+   ==========================================================================
+   Sprint A. The class names follow the existing `set-` prefix so the settings
+   dialog reads as one surface; every value that can be wrong is shown next to
+   the control that decides it (a closed day shows its inputs disabled, a
+   calendar that cannot be enabled says why).
+   ========================================================================== */
+.set-service { margin-top: 14px; }
+.set-section {
+  font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--color-slate-500); margin: 6px 0 8px;
+}
+.set-card {
+  border: 1px solid rgba(148,163,184,.14);
+  border-radius: 8px;
+  padding: 10px 12px 12px;
+  margin-bottom: 12px;
+  background: color-mix(in srgb, var(--color-slate-900) 40%, transparent);
+}
+.set-card-head {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 13px; font-weight: 600; color: var(--color-slate-100);
+}
+.set-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.set-hint { font-size: 11px; font-weight: 400; color: var(--color-slate-400); line-height: 1.4; }
+.set-note { font-size: 11px; color: var(--color-slate-500); line-height: 1.45; margin: 8px 0 0; }
+.set-input {
+  height: 28px; min-width: 84px;
+  padding: 0 6px;
+  border: 1px solid var(--color-slate-700); border-radius: 6px;
+  background: var(--color-slate-950); color: var(--color-slate-100);
+  font-size: 12px; font-variant-numeric: tabular-nums;
+}
+.set-input:disabled { opacity: .5; }
+.set-days { display: grid; gap: 4px; }
+.set-day {
+  display: grid;
+  grid-template-columns: 34px 62px auto 74px 10px 74px;
+  align-items: center; gap: 6px;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.set-day.is-open { background: color-mix(in srgb, var(--good, #35D0A0) 7%, transparent); }
+.set-day-name { font-size: 11px; font-weight: 600; color: var(--color-slate-300); }
+.set-day-closed {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; color: var(--color-slate-500);
+}
+.set-dash { color: var(--color-slate-600); text-align: center; }
+.set-holidays {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin-top: 10px;
+}
+.set-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid rgba(148,163,184,.2); border-radius: 999px;
+  font-size: 11px; font-variant-numeric: tabular-nums;
+  color: var(--color-slate-200);
+}
+.set-chip button {
+  border: 0; background: transparent; cursor: pointer;
+  color: var(--color-slate-400); font-size: 13px; line-height: 1; padding: 0 4px;
+}
+.set-chip button:hover { color: var(--bad, #F0555A); }
+.set-warn {
+  margin-top: 10px; padding: 7px 9px;
+  border-left: 3px solid var(--warn, #F5A83C);
+  background: color-mix(in srgb, var(--warn, #F5A83C) 10%, transparent);
+  font-size: 11px; color: var(--color-slate-200); line-height: 1.45;
+}
+.set-target-row {
+  display: grid;
+  grid-template-columns: 1fr 84px auto 20px;
+  align-items: center; gap: 8px;
+  padding: 4px 2px;
+}
+.set-target-row + .set-target-row { border-top: 1px solid rgba(148,163,184,.08); }
+.set-target-name { font-size: 12px; color: var(--color-slate-200); }
+.set-roster { overflow-x: auto; }
+.set-roster-head,
+.set-roster-row {
+  display: grid;
+  grid-template-columns: 190px 150px 76px 76px 96px 110px 26px;
+  align-items: center; gap: 6px;
+  min-width: 760px;
+}
+.set-roster-head {
+  font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--color-slate-500);
+  padding: 0 2px 4px;
+}
+.set-roster-row { padding: 3px 2px; border-top: 1px solid rgba(148,163,184,.08); }
+.set-weekdays { display: inline-flex; gap: 2px; }
+.set-weekdays label {
+  display: inline-grid; place-items: center;
+  width: 18px; height: 20px;
+  border: 1px solid var(--color-slate-700); border-radius: 4px;
+  font-size: 9px; color: var(--color-slate-500); cursor: pointer;
+}
+.set-weekdays label.is-on {
+  border-color: color-mix(in srgb, var(--good, #35D0A0) 55%, transparent);
+  color: var(--good, #35D0A0);
+}
+.set-weekdays input { position: absolute; opacity: 0; pointer-events: none; }
+.set-remove {
+  border: 0; background: transparent; cursor: pointer;
+  color: var(--color-slate-500); font-size: 14px; line-height: 1;
+}
+.set-remove:hover { color: var(--bad, #F0555A); }
+.set-add {
+  margin-top: 8px;
+  padding: 5px 10px;
+  border: 1px solid var(--color-slate-700); border-radius: 6px;
+  background: transparent; color: var(--color-slate-200);
+  font-size: 11px; cursor: pointer;
+}
+.set-add:hover { border-color: var(--color-cyan-400, #22d3ee); color: var(--color-cyan-400, #22d3ee); }
+
+/* ==========================================================================
+   Dashboard: how long callers waited, and the follow-ups (Sprint A)
+   ==========================================================================
+   Two cards in their own row. The bars are clickable because a band nobody can
+   drill into is a number nobody can act on; the follow-up rows are buttons for
+   the two that have a filter behind them and plain rows for the two that do
+   not (a fake affordance is worse than none).
+   ========================================================================== */
+.ops-wait-head {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ops-wait-stat { display: flex; flex-direction: column; gap: 1px; }
+.ops-wait-k { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--color-slate-500); }
+.ops-wait-v { font-size: 18px; font-weight: 650; color: var(--color-slate-100); font-variant-numeric: tabular-nums; }
+.ops-wait-hint { font-size: 10px; color: var(--color-slate-500); }
+.ops-wait-bars { display: grid; gap: 3px; margin-top: 4px; }
+.ops-wait-row {
+  display: grid;
+  grid-template-columns: 78px 1fr 46px 36px;
+  align-items: center; gap: 6px;
+  padding: 2px 0;
+  border: 0; background: transparent; cursor: pointer; text-align: left;
+}
+.ops-wait-row:hover .ops-wait-name { color: var(--color-slate-100); }
+.ops-wait-name { font-size: 11px; color: var(--color-slate-400); }
+.ops-wait-track {
+  height: 8px; border-radius: 4px;
+  background: rgba(148,163,184,.14);
+  overflow: hidden;
+}
+.ops-wait-fill { display: block; height: 100%; border-radius: 4px; }
+.ops-wait-val { font-size: 11px; color: var(--color-slate-200); text-align: right; font-variant-numeric: tabular-nums; }
+.ops-wait-pct { font-size: 10px; color: var(--color-slate-500); text-align: right; font-variant-numeric: tabular-nums; }
+.ops-links { display: flex; flex-direction: column; gap: 2px; }
+.ops-link-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: baseline; gap: 8px;
+  padding: 6px 0;
+  border: 0; border-top: 1px solid rgba(148,163,184,.1);
+  background: transparent; text-align: left;
+  cursor: pointer;
+}
+.ops-link-row.is-static { cursor: default; }
+.ops-link-row:hover:not(.is-static) .ops-link-k { color: var(--color-cyan-400, #22d3ee); }
+.ops-link-k { font-size: 12px; color: var(--color-slate-300); }
+.ops-link-v { font-size: 14px; font-weight: 650; color: var(--color-slate-100); font-variant-numeric: tabular-nums; }
+.ops-link-h { font-size: 10px; color: var(--color-slate-500); }
+.ops-link-pairs { margin-top: 6px; border-top: 1px solid rgba(148,163,184,.1); padding-top: 6px; }
+.ops-link-pair {
+  display: flex; justify-content: space-between;
+  font-size: 11px; color: var(--color-slate-400);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Totals rows on the agent / queue / DID grids (manager review §5.1).
+ *
+ * The row is the first row of <tbody>, so it must not inherit the striped
+ * nth-child background that makes row 1 look like a data row: it gets its own
+ * surface, a heavier top rule and tabular figures so the sums line up with the
+ * columns above them. Sticky off, because the grids scroll horizontally only.
+ */
+.grid-totals td {
+  background: color-mix(in srgb, var(--color-slate-800, #1e293b) 55%, transparent);
+  border-top: 2px solid var(--color-slate-600, #475569);
+  border-bottom: 1px solid var(--color-slate-700, #334155);
+  font-weight: 650;
+  color: var(--color-slate-100, #f1f5f9);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+html[data-theme="light"] .grid-totals td {
+  background: color-mix(in srgb, #cbd5e1 60%, transparent);
+  border-top-color: #94a3b8;
+}
+
+/* The sub-line under a KPI value, for the base of a rate (review §5.2). */
+.tn-kpi-mini-base { margin-top: 2px; font-size: 10px; color: var(--color-slate-400, #94a3b8); }
+
+/* AHT / missed by hour, under the volume chart (Sprint A). */
+.ops-hour-detail { margin-top: 8px; border-top: 1px solid rgba(148,163,184,.12); padding-top: 6px; }
+.ops-hour-table { width: 100%; font-size: 11px; border-collapse: collapse; }
+.ops-hour-table th {
+  text-align: left; font-weight: 600; color: var(--color-slate-500);
+  font-size: 10px; text-transform: uppercase; letter-spacing: .02em; padding: 2px 4px;
+}
+.ops-hour-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--color-slate-300); }
+.ops-hour-cell { padding: 2px 4px; color: var(--color-slate-400); font-variant-numeric: tabular-nums; }
+.ops-hour-row { cursor: pointer; }
+.ops-hour-row:hover .ops-hour-cell { color: var(--color-cyan-400, #22d3ee); }
+.ops-hour-row td { padding: 2px 4px; border-top: 1px solid rgba(148,163,184,.07); }
+.ops-hour-row:hover td { background: rgba(148,163,184,.08); }
+
+/* The call list's sort-direction toggle (review F5). */
+.call-modal-dir {
+  margin-left: 4px; padding: 2px 6px; font-size: 11px; line-height: 1.4;
+  border: 1px solid var(--color-slate-700, #334155); border-radius: 3px;
+  background: var(--color-slate-950, #020617); color: var(--color-slate-300, #cbd5e1);
+  cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.call-modal-dir:hover { border-color: var(--color-cyan-500, #06b6d4); color: var(--color-cyan-300, #67e8f9); }
+
+/* The dashboard's comparison-baseline switch (review F3). */
+.ops-compare { display: flex; align-items: center; gap: 8px; }
+.ops-compare-label { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--color-slate-500); }
+.ops-compare-select {
+  border: 1px solid var(--color-slate-700, #334155); border-radius: 3px;
+  background: var(--color-slate-950, #020617); color: var(--color-slate-200, #e2e8f0);
+  padding: 2px 6px; font-size: 11px; outline: none; cursor: pointer;
+}
+.ops-compare-select:focus { border-color: var(--color-cyan-500, #06b6d4); }
+.ops-compare-hint { font-size: 10px; color: var(--color-slate-500); font-variant-numeric: tabular-nums; }
+
+/*
+ * Weekday x hour heatmap (Sprint B). Six levels because five shades plus empty
+ * is what a reader can still tell apart on a projector; the legend prints the
+ * same classes the cells use, so the scale on screen is the scale in the grid.
+ */
+.ops-heat { margin-bottom: 12px; }
+.ops-heat-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 6px 0; }
+.ops-heat-loading { padding: 24px 0; text-align: center; color: var(--color-slate-500); font-size: 12px; }
+.ops-heat-scroll { overflow-x: auto; }
+.ops-heat-table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+.ops-heat-table th { font-weight: 600; color: var(--color-slate-500); font-size: 9px; text-transform: uppercase; letter-spacing: .02em; padding: 1px; }
+.ops-heat-hour { text-align: center; }
+.ops-heat-day {
+  width: 34px; text-align: left; padding-right: 6px; color: var(--color-slate-400);
+  font-size: 10px; text-transform: none; letter-spacing: 0;
+}
+.ops-heat-cell {
+  height: 22px; text-align: center; font-size: 9.5px; font-variant-numeric: tabular-nums;
+  border: 1px solid var(--color-slate-900); color: var(--color-slate-200);
+}
+.ops-heat-l0 { background: var(--color-slate-800); }
+.ops-heat-l1 { background: rgba(6, 182, 212, .18); }
+.ops-heat-l2 { background: rgba(6, 182, 212, .34); }
+.ops-heat-l3 { background: rgba(6, 182, 212, .52); }
+.ops-heat-l4 { background: rgba(6, 182, 212, .72); }
+.ops-heat-l5 { background: rgba(6, 182, 212, .95); color: #020617; font-weight: 600; }
+.ops-heat-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  margin-top: 6px; font-size: 11px; color: var(--color-slate-400);
+}
+.ops-heat-legend { display: inline-flex; align-items: center; gap: 3px; color: var(--color-slate-500); }
+.ops-heat-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; }
+
+/* Sentiment card (Sprint B): three share bars, the base, and the topics. */
+.ops-sent-row { display: grid; grid-template-columns: 64px 1fr 52px; align-items: center; gap: 8px; margin-bottom: 4px; }
+.ops-sent-k { font-size: 11px; color: var(--color-slate-400); }
+.ops-sent-v { font-size: 11px; color: var(--color-slate-300); text-align: right; font-variant-numeric: tabular-nums; }
+.ops-sent-track { height: 8px; border-radius: 4px; background: var(--color-slate-800); overflow: hidden; }
+.ops-sent-fill { height: 100%; border-radius: 4px; }
+.ops-sent-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 8px; font-size: 11px; color: var(--color-slate-400); }
+.ops-sent-link { background: none; border: 0; padding: 0; font-size: 11px; color: var(--color-cyan-400, #22d3ee); cursor: pointer; }
+.ops-sent-link:hover { text-decoration: underline; }
+.ops-sent-topics { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.ops-sent-topic {
+  font-size: 10px; padding: 1px 6px; border: 1px solid var(--color-slate-700);
+  border-radius: 10px; color: var(--color-slate-300); background: none;
+}
+.ops-sent-topic:hover { border-color: var(--color-cyan-500, #06b6d4); }
+
+/* ---------------------------------------------------------------------------
+ * The month-end report (Sprint C): one page that prints to PDF.
+ *
+ * The report is a normal route inside the app, so printing it would otherwise
+ * carry the navigation, the header and the filter bar onto every page. Those
+ * three carry .app-nav / .app-header / .filters-bar and are hidden in print;
+ * the action buttons hide themselves, and the tables stop being scroll boxes so
+ * nothing is clipped. Colours are forced to ink on paper instead of the dark
+ * theme, because a printed dark theme is unreadable and wastes toner.
+ * ------------------------------------------------------------------------ */
+.rep { padding: 16px 20px 40px; max-width: 1100px; margin: 0 auto; color: var(--color-slate-200); }
+.rep-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.rep-btn {
+  border: 1px solid var(--color-slate-600); background: var(--color-slate-800); color: var(--color-slate-100);
+  font-size: 12px; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+}
+.rep-btn:hover { border-color: var(--color-cyan-500, #06b6d4); }
+.rep-hint { font-size: 11px; color: var(--color-slate-500); }
+.rep-error { border: 1px solid var(--color-rose-500, #f43f5e); border-radius: 6px; padding: 12px; font-size: 12px; }
+.rep-head { border-bottom: 2px solid var(--color-slate-700); padding-bottom: 8px; margin-bottom: 14px; }
+.rep-title { font-size: 20px; font-weight: 600; color: var(--color-slate-100); }
+.rep-meta { display: flex; flex-wrap: wrap; gap: 2px 6px; font-size: 11px; color: var(--color-slate-400); margin-top: 4px; }
+.rep-sec { margin-top: 20px; }
+.rep-sec-title { font-size: 13px; font-weight: 600; color: var(--color-cyan-300, #67e8f9); text-transform: uppercase; letter-spacing: .04em; }
+.rep-note { font-size: 11px; color: var(--color-slate-400); margin: 4px 0 8px; line-height: 1.5; }
+.rep-kpi-wrap { margin-top: 6px; }
+.rep-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.rep-kpi { border: 1px solid var(--color-slate-700); border-radius: 6px; padding: 8px 10px; }
+.rep-kpi-label { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--color-slate-500); }
+.rep-kpi-value { font-size: 18px; font-weight: 600; color: var(--color-slate-100); margin-top: 2px; font-variant-numeric: tabular-nums; }
+.rep-kpi-sub { font-size: 10px; color: var(--color-slate-400); margin-top: 2px; }
+.rep-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 4px; }
+.rep-th { text-align: left; font-weight: 600; color: var(--color-slate-300); border-bottom: 1px solid var(--color-slate-600); padding: 5px 6px; }
+.rep-td { color: var(--color-slate-200); border-bottom: 1px solid var(--color-slate-800); padding: 4px 6px; }
+.rep-num { text-align: right; font-variant-numeric: tabular-nums; }
+.rep-flag-bad { color: var(--color-rose-400, #fb7185); font-weight: 600; }
+.rep-flag-warn { color: var(--color-amber-400, #fbbf24); }
+.rep-inline { display: flex; gap: 16px; flex-wrap: wrap; font-size: 11px; color: var(--color-slate-300); margin-top: 6px; }
+.rep-inline-wrap { gap: 10px; }
+.rep-days { margin-top: 10px; }
+.rep-foot { margin-top: 24px; border-top: 2px solid var(--color-slate-700); padding-top: 8px; font-size: 10px; color: var(--color-slate-400); display: grid; gap: 6px; line-height: 1.5; }
+
+@media print {
+  .app-nav, .app-header, .filters-bar, .rep-actions { display: none !important; }
+  html, body { background: #ffffff !important; }
+  .rep { max-width: none; padding: 0; color: #111111; }
+  .rep-title, .rep-kpi-value, .rep-td { color: #111111 !important; }
+  .rep-sec-title { color: #0e7490 !important; }
+  .rep-meta, .rep-note, .rep-kpi-label, .rep-kpi-sub, .rep-inline, .rep-foot, .rep-hint { color: #444444 !important; }
+  .rep-kpi, .rep-table, .rep-sec, .rep-head { border-color: #999999 !important; }
+  .rep-th { color: #111111 !important; border-bottom: 1px solid #666666 !important; }
+  .rep-td { border-bottom: 1px solid #cccccc !important; }
+  .rep-sec, .rep-kpi { break-inside: avoid; }
+  .ops-heat-scroll, .ops-heat-table { overflow: visible !important; }
+  .ops-card { border-color: #999999 !important; background: #ffffff !important; color: #111111 !important; }
+}
+
+/* The miss rate per wait band under the wait card (Sprint B, §3). */
+.ops-wait-miss { margin-top: 4px; font-variant-numeric: tabular-nums; }

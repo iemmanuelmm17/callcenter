@@ -1,3 +1,1097 @@
+# CHANGES — Sprint B, phase 9: the miss rate inside each wait band
+
+**What this phase is about.** Sprint A split abandons by how long the caller
+waited ("a 4-second abandon is usually a misdial; a 90-second one is a staffing
+failure"), but only over the calls that were missed. That answers "how many" and
+not "how bad": a band with 40 abandons and 4,000 calls is a different problem
+from a band with 40 abandons and 50 calls. This phase publishes the **miss rate
+inside each band, with the base it was taken over**.
+
+## The rule
+
+The same three bands (`under 5s`, `5-30s`, `over 30s`) applied to **every
+arrival**: an answered call is banded by its ring time (`ringSeconds()`), a missed
+call by how long the caller waited before giving up (`waitSeconds()`, which is
+deliberately the same function). Arrivals = answered + missed in the band, the
+miss rate is missed ÷ arrivals, and a band with no arrivals is published as a
+zero row rather than omitted, so the three bases always add up to the period's
+arrivals.
+
+`summary.waitBandMix[]` carries `{band, label, offered, answered, missed,
+missPct}`; `missedWaitBuckets`, `abandonWaitBuckets` and the wait-bucket drill
+are unchanged, and a test asserts the missed-only buckets still agree with the
+bands they extend.
+
+## On screen
+
+The Operations Overview wait card gains one line under the abandon hint:
+`Missed within each wait band: under 5s 50.0% (1 of 2) · 5-30s 33.3% (1 of 3) ·
+over 30s 66.7% (2 of 3)` — every rate with the counts it came from.
+
+## Evidence
+
+`tests/php/report-metrics.mjs` §11b (10 checks) on a fixture nothing else owns
+(Monday 2026-07-13), where the eight calls and their bands are written out in the
+comment first: 2 arrivals / 1 missed under 5s, 3 / 1 in 5-30s, 3 / 2 over 30s;
+the bases sum to the day's answered + missed; every rate re-derived from its own
+counts; and the extended buckets still line up. `tests/js/smoke.mjs` asserts the
+rendered line (rates and bases) in the real bundle. `npm test` = 25 suites green;
+`dead code`, `ui audit`, `css coverage` and `module budget` clean.
+
+**Behaviour change to disclose:** the report payload gains
+`summary.waitBandMix`; the Operations Overview wait card gains one hint line. No
+existing figure moves.
+
+---
+
+# CHANGES — Sprint C, phase 8: the printable month-end report
+
+**What this phase is about.** The pack's row sets and trust blocks existed but
+nothing showed them. This phase is the page the owner reads: one route
+(**Reports**, manager and supervisor) that prints to PDF and downloads its own
+CSVs, with every figure server-computed.
+
+## The page
+
+`assets/js/src/components/reports.js`, mounted at `route === 'reports'`:
+
+- **Headline KPIs** — offered, answered, missed, abandoned, service level, AHT
+  and hold. Each carries its base in the sub-line (service level prints the base
+  it was taken over and, when per-queue targets are in play, the *mean target
+  actually applied*; hold prints how many calls held).
+- **Against the baseline period** — this period vs the comparison the filter bar
+  selected (so month-on-month and year-on-year come from F3's modes), with the
+  baseline named and its dates printed.
+- **By queue** — target, offered, answered, missed, abandoned, SLA + base,
+  abandon %, ring/talk and hold, including the zero rows.
+- **By number** — the DID roll-up with the missed share over arrivals and the
+  zero-traffic / high-abandon flags.
+- **Sentiment** — over scored calls only, with the base printed and the footnote
+  that an abandoned call is never scored.
+- **Daily volume vs the same weekday in the prior weeks** — the days table plus
+  every weekday's own baseline, labelled a baseline.
+- **Staffing estimate** — per hour, with the occupancy assumption, the formula
+  and the "no roster, so this is not occupancy" basis printed on the page.
+- **Data quality** — the four F7 checks with their bases, plus the per-day fetch
+  table (records, complete/partial).
+- **Weekday × hour** — the Sprint B heatmap, reusing `WeekHourHeatmap`.
+- **Definitions footer** — offered/missed/AHT/on-net stated once, with the scope
+  and timezone.
+
+The page fetches its own payload in one request with `baseline: 1` (the pack,
+the comparison and the 4-week baseline together) rather than riding on the
+dashboard's request, and it re-fetches when the filters change.
+
+## Print and exports
+
+`assets/css/src/custom.css` gains the `.rep-*` block and a `@media print` section
+that hides the shell chrome (`.app-nav`, `.app-header`, `.filters-bar`) and the
+action row, forces ink-on-paper colours, keeps sections off page breaks and turns
+the heatmap's scroll box back into a table so nothing is clipped. The page's two
+buttons are **Print / save as PDF** and **Download the CSVs** (summary, queues,
+numbers, hourly, baseline, data quality).
+
+## Evidence
+
+`tests/js/smoke.mjs` walks the new route in the real bundle and asserts the facts
+the client is responsible for: the request carries `baseline: 1`; the queue table
+prints the target beside the SLA **and its base**; an idle queue is a zero row,
+not an omission; both DID flags are printed; the staffing assumption (85 %, no
+roster) and the "baseline, not a forecast" label are on the page; the baseline
+prints its window and says "no prior weeks" instead of 0 %; the quality appendix
+prints counts with bases; the sentiment base is stated; the action row and the
+shell chrome carry the print-hiding classes. 16 checks. `tests/js/harness.mjs`
+gains `pack` + `dataQuality` fixtures shaped exactly like the endpoint's.
+`npm test` = 25 suites green; `ui audit --strict`, `css coverage` and
+`dead code --strict` clean.
+
+**Behaviour change to disclose:** a new nav entry and route for managers and
+supervisors; the dashboard payload is unchanged apart from the blocks shipped in
+phases 6–7, which every `report.php` response now computes (a single extra pass
+over rows already loaded).
+
+---
+
+# CHANGES — Sprint C, phase 7: the trust blocks (quality, staffing, baseline)
+
+**What this phase is about.** Three of the month-end pack's lines need data the
+dashboard never published: whether the month can be trusted (F7), what staffing
+the observed volume implies, and how each day compares with the same weekday in
+the prior weeks. All three are computed here, server-side, so the printed page
+prints figures rather than doing arithmetic in the browser.
+
+## Data quality (F7)
+
+`packQuality()` counts the four ways a CDR set lies — calls that connected with
+no answer moment (their wait is unknown, so they are absent from every ring
+figure), answered calls with zero talking seconds, legs with no disconnect
+reason, and the same leg appearing twice in the day file (the codebase's own
+`cdrLegFingerprint`). **Every count carries the base it was taken over**, because
+a quality percentage without a denominator is the kind of number this review was
+written about.
+
+## Staffing estimate
+
+`packStaffing()` is the review's formula — offered × AHT ÷ interval ÷ target
+occupancy — and it travels with its assumption as *fields*, not as a comment:
+the occupancy percent (85), the interval (60 minutes), the formula, and an
+explicit `label: "baseline, not a forecast"`. There is no roster in this system,
+so this is not occupancy and the `basis` text says why; the estimate uses the AHT
+the calls actually showed, and cost every offered call at that AHT (a missed call
+is demand that would have taken work had it been answered). A row with no offered
+calls asks for no agents instead of dividing by zero.
+
+## 4-week same-weekday baseline
+
+`packDays()` counts arrivals per calendar day (inbound + missed — the heatmap's
+own definition, so an outbound leg is never a "call that came in").
+`packBaseline()` averages each weekday over the prior four weeks and indexes each
+day of the period against its own weekday. It publishes the **window it was
+asked for** (`windowFrom`/`windowTo`) and the days **inside it that had data**
+(`from`/`to`), because "the PBX had no data that week" must not read as "zero
+calls". A weekday with no prior data gives a `null` baseline and a `null` index
+rather than 0 %, which would read as a catastrophic day.
+
+The lookback is a **second fetch** (the prior 28 days), so it runs only when the
+caller asks (`baseline=1`) — the dashboard never pays for it — and it carries the
+same scope as the period (hours, department, site, call types); a baseline built
+without them would compare two different businesses.
+
+## Evidence
+
+`tests/php/report-metrics.mjs` §12 (22 checks). The quality checks count the
+fixture's 17 rows and prove the zero cases are real zeroes (no false "missing
+answer moment" flags); staffing is checked by hand at 09:00 (4 offered, AHT 45 →
+180 work-seconds → 0.06 agents at 85 %) and against its own total; the baseline
+is checked structurally against its own published window, then arithmetically on
+a fixture nothing else owns (four arrivals on Mon 2026-06-01 → the Monday
+baseline is 4.0 over one week; six on Mon 2026-06-15 → index 150 %). `npm test` =
+25 suites green; `dead code --strict` clean.
+
+**Behaviour change to disclose:** a `report.php` request carrying `baseline=1`
+now performs a second CDR fetch (the prior 28 days) and returns
+`pack.quality`, `pack.staffing` and `pack.baseline`; requests without the flag
+are unchanged in cost and payload except for the two cheap blocks. No published
+figure moves.
+
+---
+
+# CHANGES — Sprint C, phase 6: the pack's row sets, and one DID definition
+
+**What this phase is about.** The printable month-end report (the next phase) needs
+two tables that no payload published as rows: a line per queue *with the target it
+was judged against*, and a line per dialled number with the two flags the review
+asked for. Both are built here, from the same scoped call list and the same
+helpers every other figure uses, so the printed page cannot contradict the
+dashboard it was printed from.
+
+## The pack rows
+
+`includes/reporting/pack.php` (new):
+
+- **`packQueueRows()`** — one row per queue that saw traffic, **plus a zero row for
+  every known queue that saw none** (a staffed-and-silent queue is a finding, and
+  a total that omits it is wrong). Each row carries `offered`, `answered`,
+  `missed`, `abandoned`, `sla` **and its base `slaBase`**, `abandonRate`, `avgRing`,
+  `avgTalk`, `totalTalk`, `holdAvg`, `holdTotal`, and the `slaSeconds` it was
+  measured against — the queue's own override when one is configured, otherwise
+  the domain default, through the same `resolveQueueSlaSeconds()` the dashboard
+  uses. Hold is averaged only over the calls that actually held, exactly as on the
+  queues screen.
+- **`packNumberRows()`** — one row per number, computed by
+  `buildNumberStats()`, the function the Telephone Numbers screen itself uses, so
+  the pack shows a number's volume, missed and abandoned counts exactly as that
+  screen does. Two flags, both derived server-side: `zeroTraffic` (live in the
+  inventory, took no call at all — only a number the caller actually has can be
+  silently dead, so an unlisted number seen in the CDRs is never flagged) and
+  `highAbandon` (at least 5 missed calls **and** an abandon share at or over
+  20 %, where the share's base is the missed calls — the calls that could have
+  been abandoned; a three-call line is not a finding). Both counts travel on the
+  row, so the flags can be checked by hand.
+
+`api/report.php` ships both as `pack.queues` / `pack.numbers`, from the same
+`$calls` as `summary`, and reuses one inventory read (`packInventory`) for the
+counts and the pack.
+
+**The bases, stated:** a queue's abandon share is over the calls **offered** to
+it; a number's missed share is over the calls that **arrived** (inbound + missed
+— an outbound leg the desk placed is not a chance to miss anybody), while
+`calls` itself is every call type on the line, which is what the Telephone
+Numbers screen shows.
+
+## One definition for a DID
+
+The four functions that map a CDR onto one of the customer's numbers and bucket
+that number's traffic (`didCandidatesFromCdr`, `resolveDidKey`, `buildNumberStats`,
+and the now-removed `firstDidFromCdr`) lived in `api/telephone_numbers.php`. The
+pack needed them, and a second copy of a mapping rule is how one DID becomes two
+rows — so they moved to `includes/reporting/dids.php`, and the API keeps calling
+them. `numberKey()` (the one phone-number normaliser, digits with a leading
+country code dropped) and `numberIsEnabled()` (absent/yes/1/true → enabled, an
+allow-list so an unrecognised spelling can never silently disable a line) moved
+to `includes/reporting/support.php`; the screen's `statsKey()` and its enabled
+check now delegate to them. `safeTimestamp()` went with the module that uses it.
+No behaviour changes on the Telephone Numbers screen — the same code runs, from
+a different file.
+
+## Evidence
+
+`tests/php/report-metrics.mjs` §11 (23 checks) seeds a day and an inventory and
+states the arithmetic in full before asserting it: a queue judged against its own
+15 s target (SLA 1 of 2 = 50 %, base published) beside one judged against the
+30 s domain default; an idle third queue published as zeroes rather than omitted;
+a DID where the outbound leg is in the volume but **not** in the missed share's
+base; 5 missed at exactly 20 % abandoned flagged while a worse 66.7 % on a
+3-call base is not (the floor); a live-but-silent line flagged while an unlisted
+number that took a call is not; the disabled line absent; and both row sets
+reconciled against `summary.counts` (every call lands on a number row; the queues'
+offered total is the calls that reached a queue). `npm test` = 25 suites green;
+`dead code --strict` clean.
+
+**Behaviour change to disclose:** the report payload gains `pack.queues` and
+`pack.numbers`. Nothing on screen consumes them yet — the printable page (next
+phase) does. No published figure moves.
+
+---
+
+# CHANGES — Sprint B, phase 5: sentiment for the period, and the negative scope
+
+**What this phase is about.** The call-intelligence fields
+(`call-intelligence-percent-positive|neutral|negative`, `…-topics-top`) were
+collected, rendered as a live donut on Queues → Overview, and used nowhere else:
+no period, no base, no way to ask "which week was bad, and about what". Two
+things were missing — sentiment for the *selected range*, and a filter that
+scopes every figure to the calls that came out badly. This phase adds both, and
+fixes a stale-data bug the new filter exposed.
+
+## The rule for "this call went badly", stated once
+
+`callIsNegative()` (includes/reporting/rows.php): the call was scored **at all**
+(`pos + neu + neg > 0`) **and** its negative share leads its positive share.
+Both halves matter — a call nobody scored is not a neutral call, and 40 %
+negative against 45 % positive is not a complaint no matter how much negative
+share it has. `sentiment=positive` is the same rule with the sign flipped, so the
+two scopes **partition** the scored calls (a 50/50 tie belongs to neither), and
+an unknown value scopes nothing rather than emptying the report. The filter runs
+through `filterCallsBySentiment()` before any aggregate, on the same row set as
+the outcome/wait/callback filters, so the numbers and the list behind them are
+the same calls. `appliedFilters.sentiment` in the response says which scope
+produced it.
+
+## On screen
+
+- `summary.sentiment`: positive/neutral/negative averages, the score, **`scored`**
+  (the base), `negativeCalls`, and the period's top topics with counts. The
+  averages are over the scored calls only — that is the honest denominator — and
+  the block never shows a share without the count.
+- A **Sentiment** card on the dashboard (new module
+  `assets/js/src/components/sentiment.js`): three share bars with their
+  percentages, a foot line reading "3 scored calls · 1 negative", the topics, and
+  an **Open the negative calls →** action. The action sets the filter rather than
+  opening a drill, because a drill would show a list the figures above it were
+  not computed from. When no call in the range was scored the card says so
+  instead of drawing zeros.
+- A **sentiment select** in the filter bar (Any / Negative only / Positive
+  only), carried in the URL like every other narrowing filter.
+
+## The bug this found: stale numbers behind a new control
+
+The dashboard's fetch effect listed its dependencies by hand —
+`[route, filters.start, filters.end, filters.department, filters.site, …]`. Every
+filter **not** in that list changed the control without re-fetching, leaving the
+old numbers on screen: `hours` (Sprint A's opening-hours select), `outcome`,
+`waitBucket`, `waitedOver`, `callbackState`, `compare`, and now `sentiment`. A
+filter that moves the control but not the data is worse than no filter, so all
+five filter-driven effects now key on `filtersKey` — a stable serialisation of
+every filter the server is sent. A control cannot be added again without the data
+following it.
+
+## Evidence
+
+`tests/php/report-metrics.mjs` seeds 2026-08-24 with five calls: 70/10 negative,
+45/40 positive-led (the case a naive "any negative share" rule would miscall),
+60/20 positive, one scored 0/0/0 and one with no fields at all. It checks the
+averages over the three scored calls (38.3 / 25.0 / 43.3), the negative count,
+the topics with counts, that `sentiment=negative` keeps exactly one call, that
+`sentiment=positive` keeps the other two and the two scopes partition the scored
+set, that an unknown value scopes nothing, and that the scope is applied to the
+same rows the counts come from. 12 checks.
+
+`tests/js/smoke.mjs` asserts the select exists with its three options, the card's
+shares and base line, the topics, and — by clicking the negative worklist — that
+the next report request actually carries `"sentiment":"negative"` and the select
+agrees. 11 checks. `npm test` = 25 suites green.
+
+**Behaviour change to disclose:** the report payload gains `summary.sentiment`
+and `appliedFilters`; the filter bar gains a select; the dashboard gains a card.
+The dependency fix changes *when* screens re-fetch and is a bug fix, not a
+behaviour change to any published figure. No number moves unless a reader picks a
+sentiment scope.
+
+---
+
+# CHANGES — Sprint B, phase 4: the weekday × hour grid
+
+**What this phase is about.** The weekly ops review asks a question the hourly
+chart cannot answer: *"are we short on Mondays at 09:00?"* The hourly chart sums
+every 09:00 in the range, so a Monday spike is averaged into six quieter days
+and disappears. The Telephone Numbers page already had a weekday × hour heatmap;
+the Dashboard and the queues did not.
+
+## The grid
+
+`summary.heatmap` (includes/reporting/rows.php) publishes three 7 × 24 grids
+beside `summary.hourly`:
+
+| grid | cell |
+| --- | --- |
+| `volume` | inbound + missed calls started in that weekday/hour — the same *offered* definition the rest of the dashboard uses |
+| `answered` | inbound answered |
+| `missed` | the missed set, abandons included |
+
+Rows are indexed by PHP's `date('w')` — **row 0 is Sunday, row 4 is Thursday** —
+and the payload carries its own `days` labels and `hours` list, so the client
+labels what the server indexed instead of assuming an order. A call that starts
+at 23:50 on Saturday is counted on Saturday; nothing is split across a boundary.
+`total` and `maxCell` travel with the grid so the card's foot line and its colour
+scale come from the same numbers as the cells. Outbound and on-net legs are
+excluded, exactly as they are from the hourly series.
+
+## The card
+
+`assets/js/src/components/heatmap.js` is a new module (the dashboard and the
+queue page will both use it; nothing was added to the already-large
+`overview.js` beyond a two-line mount). It renders a Sunday-first grid with:
+
+- a **Calls / Missed** toggle — one grid, two measures, each with its own colour
+  scale, because a shared scale would make the missed view look empty;
+- a tooltip per cell that states its own base: *"Monday 09:00 — 12 offered, 10
+  answered, 2 missed (16.7 % of 12)"*;
+- a foot line that totals the visible measure with its base (13 offered, 11
+  answered, 2 missed; and in the missed view "2 missed of 13 offered (15.4 %)").
+
+**Cells are deliberately not clickable.** The call list can filter by hour but not
+by weekday, so no drill could open exactly the cell it was started from — and a
+drill that opens a different set of calls than the number clicked is worse than
+no drill (the same rule the interval and hourly rows satisfy because they *can*
+carry their window). The tooltip says this rather than leaving the reader to
+discover it. A pre-Sprint-B cached payload that still ships a bare 7 × 24 array
+is read as the volume grid rather than blanking the card.
+
+## Evidence
+
+`tests/php/report-metrics.mjs` seeds a Thursday (2026-08-20) and a Sunday
+(2026-08-23) and checks the hand count: Thursday 09:00 = 2 offered / 2 answered,
+Thursday 14:00 = 1 missed, Sunday 09:00 = 1 missed in **row 0**; totals 4 offered
+/ 2 answered / 2 missed; the outbound leg contributes nothing; and the grid total
+equals `counts.inbound + counts.missed` for the same range. 10 checks.
+
+`tests/js/smoke.mjs` asserts seven rows of 24 cells, the 12 in the **Monday**
+row and the 1 in the **Sunday** row (the off-by-one this pins), the per-cell
+tooltip base, the foot totals, and the missed view's own numbers and share. 12
+checks. `npm test` = 25 suites green.
+
+**Behaviour change to disclose:** `summary.heatmap` changes shape from a bare
+7 × 24 array to `{days, hours, volume, answered, missed, total, maxCell}`. Nothing
+consumed the old key (the Telephone Numbers heatmap builds its own grid from its
+own endpoint), and the new component still reads the old shape if a stale
+response arrives.
+
+---
+
+# CHANGES — Sprint B, phase 3: hold time and the outbound contact rate
+
+**What this phase is about.** Two numbers the manager asks for weekly that the
+CDR already carried and nobody published. `call-batch-on-hold-duration-seconds`
+was read inside `ringSeconds()` and thrown away, so "hold time per agent" and
+"hold time per queue" had no column anywhere. The outbound contact rate —
+connects ÷ attempts — was not computed at all, although every outbound leg's
+answer state was already on the wire.
+
+## Hold time, counted the same way everywhere
+
+Hold is accumulated with one rule, stated once: **a call with zero hold is not
+averaged in.** A team where two calls held 90 s each reports a 90 s average, not
+30 s diluted by twenty calls that never held. Every site publishes the same
+three figures — `holdTotal` (seconds), `holdCalls` (the denominator) and
+`holdAvg` — so a rate never appears without its base:
+
+- `api/agents.php` — per agent, over that agent's calls.
+- `api/cradle.php` — per queue, over every call that reached the queue
+  (`cradle.php` reads the call list itself; abandons that held are counted,
+  because a caller who held and then left still held).
+- `summary.hold` on the report — already there for the whole period, unchanged.
+
+The three levels add up: the per-agent and per-queue totals sum to the
+dashboard's `summary.hold.totalSeconds` for the same range, which is asserted.
+
+## The outbound contact rate
+
+`obConnected` and `obConnectPct` on the agents endpoint and `connected`/
+`connectPct` on the report's outbound panel, both using the app's own
+`callAnswered()` — an answer timestamp (plain or on the queue batch leg) or
+talking seconds. That last clause matters: an outbound call with 15 s of talking
+and no answer timestamp is a connect, and a dial that rang out is not. An agent
+with no outbound attempts reports `0.0` and is never coloured, because there is
+no rate to judge.
+
+Unlike every other threshold in Settings, the contact rate is a **floor**: the
+agent table marks a rate *below* it red. It ships at **50 %**, beside the other
+domain thresholds, and is manager-writable like them (`contactPct`).
+
+## On screen
+
+- Agent table: **Outbound · Contact · Rate**, **Hold · Avg** and **Hold · Total**
+  columns, each with a tooltip that names its base; the contact rate gets a
+  green/red verdict against the floor, and the CSV export carries all three
+  (`ob_contact_pct`, `hold_avg`, `hold_total`).
+- Queue stats grid: **Hold · Avg** and **Hold · Total**, plus the CSV columns.
+- Both grids' totals rows recompute rather than average: contact rate is
+  Σconnects ÷ Σattempts (61.7 % for the fixture, where the mean of 72.5 % and
+  40 % is 56.3 %), hold average is Σhold ÷ Σcalls-that-held (30 s, not the mean
+  of the two agents' averages).
+- Settings: the new floor, with a live chip reading the same outbound panel the
+  report publishes (`api/report.php` → `summary.outbound.connected`).
+
+## Evidence
+
+`tests/php/report-metrics.mjs` seeds one day (2026-08-19) whose arithmetic is
+written out in the assertions: Ada two inbound calls holding 30 s and 20 s (avg
+25 s), Alan three outbound attempts of which two connected — one answered, one
+with no answer timestamp but talking seconds, one rang out — for 66.7 %. It then
+checks the same seconds per queue (700 holds 50 s over 2 calls, 701 holds
+nothing) and that agent, queue and dashboard hold totals all agree. 17 checks.
+
+`tests/js/smoke.mjs` asserts the columns exist, that the totals rows recompute
+(61.7 %, 00:17:00, 30 s; queue 45 s and 00:04:30) and that a rate is never shown
+without a total to check it against. `npm test` = 25 suites green.
+
+**Behaviour change to disclose:** the report payload gains
+`summary.outbound.connected`/`connectPct` and the agents endpoint gains five
+fields; both are additions. The agent and queue grids gain three columns and the
+Settings modal one threshold — no existing figure moves.
+
+---
+
+# CHANGES — Sprint B, phase 2: longer windows for the manager, preset ranges (F2)
+
+**What this phase is about.** Two halves of the same complaint. A supervisor can
+only ask for 31 days, which is right — a bookmarked multi-month URL used to fan
+out into hundreds of upstream requests. But the person who produces the
+month-end and year-on-year packs is the office manager, and they were held to the
+same 31 days and then had to stitch twelve exports together. And once a range is
+longer, the reader needs the presets a longer range implies.
+
+## The cap is per role, and both sides use it
+
+`maxRangeDaysFor(role)` (assets/js/src/lib/date-range.js) returns **366** for
+`office_manager` and **31** for everyone else — the same split
+`authorizedFilters()` already enforces server-side. The picker's own clamp, the
+picker's span check and the preset visibility all take the cap as a parameter,
+and `app-shell.js` passes the signed-in role's number in. Nothing else changed:
+a caller that passes no cap gets 31, which is exactly the old behaviour, and a
+supervisor's API answer is still trimmed to 31 days anchored on the requested
+start (pinned in `tests/php/endpoints.mjs` against the live endpoint).
+
+## Three new presets, and the timezone bug they found
+
+The filter bar gains **Last 90 days**, **Quarter to date** and **Year to date**.
+Each is only offered when its whole span fits the role's cap: a "Last 90 days"
+button that quietly meant 31 days would be worse than no button, because the
+label *is* the range. Quarter-to-date on 5 October genuinely is five days, so it
+appears whenever the calendar boundary is the real start.
+
+Building them exposed a real bug in the existing presets, so it is fixed for all
+of them. They were built as `new Date(y, m, 1)` — an *instant* at the browser's
+local midnight — and then labelled by the app's Eastern formatter. For a reader
+east of New York that instant is the previous day in Eastern time, so "Year to
+date" asked the API for **31 December of the previous year**, and "This month"
+could ask for the last day of the previous month. Every boundary is now string
+arithmetic on the Eastern calendar date (`monthStart`, `shiftMonths` — day
+clamped exactly like the API's month shift — `monthEnd`, `weekStart`,
+`quarterStart`, `yearStart`), so the label and the request are the same string
+and cannot disagree. `tests/js/date-range.mjs` pins the boundaries, including
+31 Mar − 1 month = 28 Feb and 29 Feb 2028 − 12 months = 28 Feb 2027.
+
+## Warming a long range, in batches
+
+`cdrRangeCacheStatus()` still counts the range day by day, and the day cache is
+still filled one day at a time — that granularity is what makes a partial fetch
+resumable. What changed is how many days one request fills: `warmCdrBatch()`
+(includes/reporting/cache.php) warms up to **5 days per request, or until a 20 s
+time budget**, whichever comes first, in date order. The response reports what it
+did — `batch: {attempted, warmed, days, stopped, seconds}` with `stopped` one of
+`complete | days | time | partial` — and `api/cache_job.php` passes an optional
+`batch` request key through (clamped to 1–31). The loop stays resumable and never
+re-fetches a finished day; a batch on a complete range does nothing.
+
+The progress banner says so ("7 of 366 days cached · fetching 2026-08-09 · 5 days
+per pass"), and the client's warm-loop guard now counts *passes* rather than days
+— the old `days * 4` ceiling would have let a 366-day range keep round-tripping
+long after the work was done.
+
+## Evidence
+
+- `tests/js/date-range.mjs` — the role caps (31 / 366, and a role string that is
+  merely similar still gets 31), a quarter inside the wider cap, exactly 366 days
+  inclusive (1 Jan 2026 → 1 Jan 2027) and a day past it trimming back to the same
+  span; the eight calendar boundaries; the unchanged default when no cap is
+  passed.
+- `tests/js/smoke.mjs` — the manager is offered all three long presets; clicking
+  **Year to date** puts `start = <year>-01-01` and `end = today` in the report
+  request body (the Eastern-date bug above would fail this); the warming banner
+  renders the batch response, driven through a fresh app booted on a one-year
+  URL.
+- `tests/php/cdr-cache.mjs` — a 12-day range at batch 4 takes exactly three warm
+  calls, four days each, in date order, `stopped: 'days'` while work remains then
+  `complete`; a batch on a complete range warms and fetches nothing.
+- `tests/php/endpoints.mjs` — the API's own clamps: 90 days for a supervisor →
+  31 days anchored on the requested start; 90 days for a manager → 90; two years
+  for a manager → exactly 366 days.
+
+`npm test` = 25 suites green.
+
+**Behaviour change to disclose:** the office manager may now select up to 366
+days per report (previously 31); the new presets appear only for that role. The
+bug fix above changes what the *existing* presets request for a reader in a
+timezone east of Eastern — that is the fix, not a regression: the request now
+matches the label. No published figure moves for anyone who does not press a
+preset or pick a longer range.
+
+---
+
+# CHANGES — Sprint B, phase 1: comparison modes (F3)
+
+**What this phase is about.** The dashboard had exactly one baseline: the
+previous period of equal length. The review's objection is the one a supervisor
+makes at a Wednesday huddle — "yesterday is the wrong baseline for a Wednesday,
+and last month is the wrong baseline for a monthly review that has a different
+number of business days in it". This phase makes the baseline a choice, and
+makes the screen say which one it used.
+
+## Five baselines, one implementation
+
+`comparePeriodFilters()` (includes/reporting/rows.php) shifts the requested
+range to another range, and `api/report.php` then runs the **same** pipeline
+over it — same `slaSeconds`, same directory, same queue targets, same hours
+scope — so a comparison can never be computed by different rules than the period
+it is compared against:
+
+| `compare` | baseline | example for 15 Sep |
+| --- | --- | --- |
+| `previous` (default) | the equal-length period immediately before | 14 Sep |
+| `weekday` | the same dates a week earlier | 8 Sep (a Tuesday) |
+| `mtd` | the same point last month | 15 Aug |
+| `month` | the same dates last month, clamped to a month end | 15 Aug (1–31 Aug → 1–31 Jul) |
+| `year` | the same dates a year earlier | 15 Sep 2025 |
+
+An unknown value is `previous`, so an old bookmarked URL behaves exactly as it
+did. `previousFilters()` survives as a thin wrapper over the same arithmetic, so
+there is only one implementation.
+
+**Month-end is clamped, not overflowed.** PHP's own `-1 month` turns 31 March
+into *3 March* — a comparison that silently points at the wrong month is worse
+than no comparison, so `shiftMonthsClamped()` clamps the day to the target
+month's length: 31 Mar → 28 Feb, 31 Jan → 31 Dec, 29 Feb 2028 → 28 Feb 2027.
+
+## The baseline is stated, not implied (review §5.3)
+
+Every report response now carries `comparison.mode`, `comparison.label` and
+`comparison.days`, and the dashboard prints them: the subtitle reads
+"…Deltas compare vs previous 5 days (2026-07-27 – 2026-07-31)", the total-calls
+delta says which period it is against, the missed-calls nudge and the hour-chart
+caption name it too. "vs last period" was a claim the reader could not check.
+
+The mode is part of the view, so it travels in the URL (`?compare=year`) with the
+dates: a link to "this week vs the same week last year" opens showing that, and
+both dashboard phases (the period, then the non-blocking comparison) request the
+same baseline.
+
+## Evidence
+
+`tests/php/report-metrics.mjs` grew two sections. The first checks the date
+arithmetic by hand, with no CDR involved at all — including the three cases that
+make clamping visible (31 Mar → 28 Feb, 31 Jan → 31 Dec, 29 Feb → 28 Feb), the
+singular "previous 1 day", and the fallbacks for an unknown or blank mode. The
+second seeds one call set on 2026-09-15 and one on 2026-08-15 and asserts that
+each mode fetched the range it named: `previous` → 14 Sep (empty), `weekday` →
+8 Sep (empty, and NOT the previous day), `month`/`mtd` → 15 Aug (two calls),
+`year` → 15 Sep 2025 (empty). A mode that quietly fell back would read 0 where
+`month` must read 2.
+
+`tests/js/smoke.mjs` asserts the control exists with the five modes, that the
+screen states the baseline from the payload (mode, label and both dates), and —
+by booting a second app with `?compare=year` — that the mode reaches **every**
+report request the dashboard makes. The select's own `change` handler cannot be
+driven in the jsdom harness (the standing React-controlled-input limitation), so
+the URL path is used to drive the same state; the test says so in a comment.
+The screen shows the mode the **server** reported rather than the one requested,
+because if the two ever differ the label has to describe the numbers on screen.
+
+`npm test` = 25 suites green.
+
+**Behaviour change to disclose:** none for an existing caller. `compare` is
+optional, and omitting it (or sending nonsense) still means "the previous period
+of equal length" — the exact behaviour before this phase. The new fields in the
+payload (`comparison.mode`/`label`/`days`) are additions.
+
+---
+
+# CHANGES — Sprint A, phase 7: totals rows, AHT by hour, the interval view, and the sort control
+
+**What this phase is about.** Phase 6 gave the reader the new numbers. This
+phase makes them add up in front of them — the review's §5, "about trust rather
+than features" — and finishes the three Sprint A items that were still open:
+AHT by hour, `intervalSla` on screen, and a sort control on the call list.
+
+## Totals rows on every grid (review §5.1)
+
+The agent, queue-stats and DID grids now carry a totals row, computed from the
+rows **on screen for the current filters** (after search and the per-grid site
+filter, before pagination — so it is the filtered set, not the ten rows of one
+page). The arithmetic lives in one new module, `assets/js/src/lib/totals.js`,
+because it is arithmetic and not markup:
+
+* counts and total durations **sum**;
+* a "longest" column takes the **max** — a sum of "longest ring time" is
+  meaningless;
+* averages (AHT, AAT, ART, ASAs) are **weighted by volume** — a 60-second AHT on
+  one call and a 120-second AHT on ninety-nine is a 119-second desk, not the
+  90-second midpoint;
+* rates are **recomputed from the summed numerator and denominator**, never the
+  mean of percentages. On the fixture: 1 missed of 100 plus 99 of 1,000 is
+  9.1 %, where averaging 1.0 % and 9.9 % would say 5.45 % and understate the
+  desk by nearly half.
+
+The agent CSV gained the same line (`TOTAL`, …) after the agents, computed by the
+same rules, so a spreadsheet reconciles against the screen.
+
+`tests/js/totals.mjs` is a new suite: the two rules above are pinned by name,
+along with the zero-denominator and broken-row cases (a missing field counts as
+zero; a grid with one bad row must not blank its own total).
+
+## A rate carries its base (review §5.2)
+
+`denomText()` / `pctWithBase()` render "12.4% (34 of 280 offered)". The DID page
+uses it first: the Missed-calls card now states its abandon share — "60 of the
+155 abandoned" — because that is the half of the number a reader acts on. The
+grid also gained an **Abandoned** column beside Missed (same `callMissedBucket`
+definition as the dashboard, so a DID flagged as abandoned here is flagged the
+same way there), a sortable header for it, and a column in the CSV.
+
+## AHT by hour (review §3)
+
+`summary.hourly` is new: 24 entries, each with `calls`, `answered`, `missed`,
+`talkSeconds` and `aht`. The dashboard's volume card now carries a small table
+under the chart — only the hours that took traffic, because a quiet desk has
+twelve empty rows and they would push the busy ones off the card — with a
+totals line whose AHT is the period's own weighted figure (Σtalk ÷ Σanswered),
+not the mean of 24 hourly averages. A row opens that hour's calls.
+
+Only **answered inbound** calls put talk time into the hourly AHT. The test
+fixture makes an hour with an outbound call (500 s talk) and an on-net call
+(900 s) and asserts the hour reads 60 s, not 487 s: an outbound campaign's talk
+time is not the desk's answering speed.
+
+## `intervalSla` on screen, and the sort control (F5)
+
+* **Service level by interval** — the queue Overview now renders the
+  `intervalSla` buckets phase 5 started publishing: offered, answered,
+  abandoned, ASA, SLA and SLA-missed per interval, only the busy ones, with a
+  totals line that recomputes the rate from the summed hits. This is the card
+  the review asked for by name: a period average hides the 09:00 spike. Rows
+  drill into that interval's calls. `intervalMinutes` is now published with the
+  buckets so the card never has to infer the interval size, and the app shell
+  forwards the row's window into the call list (it did for the Simultaneous
+  rows; the queue path dropped it).
+* **Sort control on the call list** — the modal's footer gained a Sort select
+  (Newest / Oldest / Longest wait / Longest talk / Longest hold) and a direction
+  toggle. It re-requests from the server, so the whole scoped result set is
+  ordered rather than the 25 rows on screen. Flipping the direction on a date
+  sort relabels it (Never "Newest ↑ ascending").
+
+`api/calls.php` also lost a dead branch: the direction default was
+`in_array(...) ? 'desc' : 'desc'`. `sort=oldest` with no direction was therefore
+a no-op alias of `newest`; it now means oldest-first, which is what the name
+says. Nothing in the app changes (it always sends both parameters), but a
+hand-built URL behaves as documented.
+
+## Evidence
+
+`npm test` = **25 suites green** (the new `totals` suite included). `tests/js/smoke.mjs`
+grew three blocks that check the rendered grids rather than the helpers: the
+totals rows (agent 430 calls, missed rate 17.6 % not 17.8 %, weighted AHT 201 s;
+queue 160 calls, 15 abandons, SLA 83.8 % not 85 %, weighted ring 16 s not 15 s;
+DID 155 missed and 60 abandoned with the "60 of the 155" base on screen), the
+hour table (2 busy rows, hour 09 = 60 s, totals 7 calls / 3 answered, weighted
+00:02:00 not the 00:01:45 mean, and the row's drill sending `hour=9`), the sort
+control (five orders, direction flip re-requesting with `sort=oldest&dir=asc`),
+and the interval card (per-interval SLA 80 % / 50 % beside a totals line of
+71.4 %, not the 65 % mean, with the click carrying `10:00–11:00`).
+`tests/php/report-metrics.mjs` pins `summary.hourly` against a hand-counted
+fixture (§A6), including the outbound/on-net exclusion and the rule that every
+hour with the same index as the chart series agrees with it. `tests/php/call-links.mjs`
+pins `sort=oldest`, `sort=newest` and `sort=hold`; `tests/php/export.mjs` pins
+the new CSV column and the invariant that a DID's abandons never exceed its
+missed calls. `tools/ui-audit.mjs` and `tools/css-coverage.mjs` are clean
+(the new clickable rows carry `role`/`tabIndex`/`onKeyDown`, so they are usable
+without a mouse).
+
+The fixtures grew with the tests: the JS harness now carries `queueStats`,
+`intervalSla`/`intervalMinutes`, `summary.hourly`, `summary.waitBuckets`,
+`summary.hold`, `report.links` and a per-DID `abandoned` count, so the smoke
+suite exercises the cards with the shapes the API actually sends.
+
+---
+
+# CHANGES — Sprint A, phase 6: opening hours, per-queue targets and the roster, editable
+
+**What this phase is about.** Phases 1–5 built the machinery — a business
+calendar, per-queue targets, transfer/callback/repeat links, wait buckets — and
+left it reachable only by editing JSON on the server. This phase is the screen
+that operates it, plus the two dashboard cards the review asked for and the
+drill-down that makes them actionable.
+
+## Settings → Service desk
+
+One Save button now posts `businessHours`, `queueSla` and `roster` in a single
+payload (`assets/js/src/components/settings.js`), with the three editors living
+in the new `settings-service.js` (383 lines). It is a module of its own rather
+than 400 more lines inside `settings.js` for the same reason the review asked
+for `auto-attendant-report.js` to be split: the two screens answer different
+questions — the tenant's thresholds versus the service desk's calendar, targets
+and staffing — and a file that keeps both is a file nobody can hold in their
+head. `tools/module-budget.mjs` counts them separately.
+
+* **Opening hours.** Seven weekday rows (open/closed, from, to) plus the holiday
+  list. The grid arrives pre-filled Monday–Friday 08:00–18:00 but
+  `businessHours.enabled` is **false on a fresh install**, because switching it
+  on re-scopes every published number; it is a manager's explicit decision, not
+  something that arrives with a deploy. The client refuses to save an enabled
+  calendar with every day closed ("Opening hours need at least one open day
+  before they can be switched on"), and `includes/reporting/settings.php`
+  refuses it again server-side, keeping the stored times so the mismatch shows
+  up in the UI instead of as a zero-call dashboard.
+* **Per-queue targets.** One row per queue from the PBX directory, a seconds
+  box and ▴▾ steppers (1–120 s) per row; a blank row means "use the desk
+  default". The steppers are not decoration: they are the one control that can
+  be driven in a keyboard-free test harness, and a manager setting thirty
+  queues to 15 s does not want to type thirty times.
+* **Roster.** Agent (picked from the directory, extension-first because that is
+  what a CDR and a roster row join on), team, supervisor, the weekdays worked,
+  and the shift. This is the input Sprint C's occupancy and calls-per-hour need;
+  without it the CDR cannot tell a short shift from an underworked agent.
+
+All three are manager-write, supervisor-read, in the server
+(`api/settings.php`: GET for `office_manager`+`supervisor`, POST for
+`office_manager` only) and in the UI — the same QA-5 rule as the thresholds.
+
+## Filter bar: site, opening hours, outcome
+
+`api/filters.php` now also returns `sites`, `agents`, `queues` and the
+calendar, and the filter bar grew three selects (the review's F4):
+
+* **Site** — manager-only, because that is the only role offered more than one
+  site to choose from (the endpoint returns the whole directory's sites to a
+  manager and the viewer's own site to everyone else).
+* **Opening hours / After hours / All hours** — only offered once a calendar
+  exists, because a scope selector that silently returns everything is worse
+  than none. Once it exists the default is opening hours.
+* **Any outcome / Answered / Abandoned / Voicemail / No answer** — the same
+  vocabulary the call list and the drill-downs use.
+
+## Two cards the review said were missing
+
+The dashboard now states what callers experienced while they waited and what
+happened to the calls nobody answered:
+
+* **How long callers waited** — p50 and p90 wait, total hold time and how many
+  calls held, service level, and four clickable wait bands
+  (0–30 s / 31–60 / 61–120 / over 120). Under it, abandons split by how long
+  the caller lasted: a caller who gives up in five seconds and one who holds for
+  a minute are different failures, and the review was right that a single
+  abandon count hides that.
+* **Follow-ups** — calls that were never returned versus returned, the transfer
+  rate and its best hand-off pairs, and repeat callers.
+
+Both cards drill: a band opens the call list filtered to exactly that band, a
+follow-up row opens the callback worklist, and the call list shows the scope as
+a chip ("Waited over 120 s", "Callbacks not returned") so the reader can see
+which population the number came from. `api/report.php`, `api/calls.php` and
+`api/filters.php` share the new `rows.php` helpers
+(`filterCallsByOutcome`, `filterCallsByWait`, `filterCallsByCallback`,
+`callWaitBuckets`, `callCallbackStates`), so a card and its drill-down cannot
+disagree about who is in the set.
+
+## Evidence
+
+`tests/js/smoke.mjs` gained two blocks that drive the real screens: the Settings
+editors (seven weekday rows with five open, the target rows, the roster row and
+its weekday chips, a stepper click taking a queue from 15 s to 16 s, and the
+payload that Save actually posts — calendar, target and roster together) and the
+dashboard cards (four bands, four follow-up rows, and the two clicks asserting
+`waitBucket: '120+'` and `callbackState: 'unreturned'` reach `api/calls.php`
+with the chip on screen). `tests/js/harness.mjs` grew the matching fixtures.
+The PHP side of all three blocks was already pinned by
+`tests/php/report-metrics.mjs` in phase 1 (the calendar round-trip and its
+refusals, "a save that omits the calendar entirely must not wipe it", the
+queue-map clamps, the roster rows dropped for having no shift / no day / no
+extension), and `tests/php/endpoints.mjs` pins who may read and write Settings
+at all. `npm test` = 24
+suites green; `tools/css-coverage.mjs` reports no unstyled new class.
+
+**Known limitation, stated rather than hidden:** the JS harness cannot type into
+a React-controlled input — jsdom plus the fetch stub never fires React's change
+plugin on a synthetic keystroke — so the smoke suite drives buttons and asserts
+saved payloads, and typed text is covered by the PHP suites instead.
+
+---
+
+# CHANGES — Sprint A, phases 4-5: per-queue targets, ASA by interval, data quality
+
+## Per-queue service targets, now actually applied
+
+`api/queue.php` and `api/cradle.php` resolved one target for the whole period.
+They now resolve each queue's own target (`resolveQueueSlaSeconds`: queue id →
+extension → name → the report's target → the stored default) and:
+
+* judge calls against the queue's target, so `sla` means what the manager set;
+* publish the target with every figure that used it — `queueStats[].slaSeconds`
+  and `kpis.avgTargetSeconds` — so a mixed period is never labelled with one
+  queue's number. `kpis.perQueueTargets` says whether any override is in play.
+
+## ASA by interval
+
+`api/queue.php` gained `intervalSla`: 15/30/60-minute buckets (the request's
+`intervalMinutes`, defaulting to 60 and falling back on an unsupported value),
+each with `offered`, `answered`, `abandoned`, `asa`, `sla` and `slaMiss`. The
+review's point was that a 09:00 spike averaged into the month hides itself; now
+the 09:00 bucket says so. A test asserts the buckets sum to the period total.
+
+## Data quality (the review's F7, data half)
+
+`api/report.php` now ships `cacheStatus` (per-range readiness) and
+`dataQuality`: one entry per day in the range with its record count and whether
+the fetch that filled it **finished**. A day that stopped at the page cap is
+short, and until now nothing on screen said so — the appendix in Sprint C prints
+this, and the fact is now available wherever the numbers are. It also restates
+`hours` and `businessHoursConfigured`, so a reader can see the scope the numbers
+were computed over without opening the filter bar.
+
+## Lengthened window for the manager
+
+`includes/auth.php`: the 31-day span cap protects the PBX from a bookmarked
+multi-month URL (the day cache fetches a day at a time). It stays 31 days for
+every role except `office_manager`, who gets **366** — the person who produces
+the month-end and year-on-year reports is the one who should be able to ask for
+a year in one request. Counted as calendar days inclusive, so a "31 days" window
+is still exactly 31 days for everyone else.
+
+## Evidence
+
+`tests/php/report-metrics.mjs` grew two sections over a fresh day: two queues
+with different targets (15 s and 30 s) where each percentage is hand-computed and
+the mean target must be 21 s; an interval bucket that must hold 5 offered / 4
+answered / 1 abandoned with asa 23 s; cradle parity; and 15/60/1-60 interval
+sizes. For data quality: a configured calendar must flip the default scope to
+`business` and say so; `hours=all` and `hours=after` must report the scope they
+applied (and `after` must find nothing without erroring); and a deliberately
+partial day must come back incomplete with its resume point. `npm test` = 24
+suites green.
+
+---
+
+# CHANGES — Sprint A, phase 3: the list behind the card
+
+**What this phase is about.** Sprint A's filters are only useful if the list you
+get when you click a number is the same population the number was computed from.
+This phase makes `api/calls.php` carry the new per-row facts and the new
+controls, and adds the tests that prove the card and its drill-down agree.
+
+## New controls on the call list
+
+| control | values | note |
+| --- | --- | --- |
+| `sort` / `dir` | `newest` (default), `oldest`, `wait`, `talk`, `hold` × `asc`/`desc` | the list was newest-first only — the review's own "longest wait" coaching list meant exporting the CSV and sorting it in Excel. Ties always fall back to newest-first so paging is stable |
+| `waitBucket` | `0-30`, `31-60`, `61-120`, `120+` | **the same bands `summary()` counts**, restricted to answered inbound calls like the card is, so the four buckets drill into exactly the four numbers |
+| `waitedOver` | seconds | direction-agnostic: a caller who gave up after 70 s waited too |
+| `outcome` | `answered`, `abandoned`, `voicemail`, `noanswer` | the canonical vocabulary, the same classifier the dashboard's missed breakdown uses |
+| `callbackState` / `callbackOnly` | `returned`, `unreturned` | the returned-call worklist, matched by the links layer (one definition), computed over the whole scoped period so it still works combined with a queue or agent filter |
+
+## New per-row fields (JSON **and** the CSV, from one shaper)
+
+`wait` (same number as `ringing`, named for the caller), `hold` (previously read
+inside `ringSeconds()` and discarded), `outcome`, `missedBucket`, `transfers`
+(hand-offs inside this call's conversation), `callback`.
+
+The calls CSV gained the matching columns: `outcome`, `wait`, `hold`,
+`transfers` — the header and the value rows are both written from `callsRow()`,
+which is what the export suite asserts.
+
+## Fixed
+
+1. **The export blocked itself.** The per-row context was built after the CSV
+   branch, so the export path used an undefined variable, the shaper threw, and
+   the endpoint answered 502 — an empty spreadsheet with no error the user could
+   see. The context is now built above both paths.
+2. **A single-call drill-down reported "not returned" for a returned call.** The
+   callback flag was computed from the *narrowed* row set, so opening one call
+   from the worklist showed `callback: false` while the dashboard counted it as
+   returned. The context is now built once, on the loaded and scoped rows, before
+   any drill-down narrowing — the same set the dashboard's `links` block uses.
+
+## Evidence
+
+`tests/php/call-links.mjs` grew a drill-parity ledger: one day, four answered
+waits of exactly 10/45/100/150 s, two abandons of 3 s and 70 s, a voicemail, and
+the outbound that returns the 3-second abandon. It asserts, against the
+hand-computed numbers: the four `waitBucket` filters return exactly those rows;
+the four buckets together equal `counts.inbound`; `outcome=abandoned` equals
+`missedBreakdown.abandon`; the callback filters and the per-row flag agree with
+each other; sorting is monotonic; and an unknown sort falls back to newest-first
+rather than 422 or chaos. `tests/php/export.mjs` pins the new CSV columns.
+
+---
+
+# CHANGES — Sprint A, phase 2: one call, many legs (transfers, callbacks, repeats)
+
+**What this phase is about.** A NetSapiens call is not a row: a transferred call
+is two or three rows sharing `call-orig-call-id`/`call-parent-call-id`. Three
+different copies of "which rows are the same conversation" had grown in the tree,
+and none of them could answer the two questions a manager asks every morning —
+*how often do we bounce a caller between two agents*, and *which missed calls did
+we return*.
+
+## New: `includes/reporting/links.php`
+
+The one definition of call identity, and the three metrics that need it:
+
+| function | what it answers |
+| --- | --- |
+| `cdrIdBag()` / `cdrLegIndex()` / `cdrRootKey()` / `cdrInteractionLegs()` | which rows are one conversation (union-find over every shared id, PBX leg order preserved, a stable fingerprint for rows with no ids at all) |
+| `cdrOfferedInteractions()` | how many calls did we receive — one entry per conversation, not per leg. This is the denominator the app never had |
+| `cdrTransferCount()` / `cdrTransferPairs()` | how many times a conversation was handed to a **different** agent, and the pairs |
+| `cdrTransferSummary()` | hand-offs, transferred conversations, the pair lists, and the rate |
+| `cdrCallbacks()` | which missed calls were returned, by whom, and how fast; plus the unreturned worklist |
+| `cdrRepeatCallers()` | the same customer calling again, split 24 h / 72 h, with the honest FCR-proxy rate |
+| `callLinkReport()` | everything above in one payload, so the dashboard, the queue screen and the printable pack cannot disagree |
+
+`api/report.php` now ships that block as `links`.
+
+## Fixed (found by the new suite, each one a wrong published number)
+
+1. **The same call was one interaction on one screen and several on another.**
+   `cdrIdBag` existed three times: `api/queue.php`, `api/cradle.php` and a
+   six-field list inside `rows.php:findRelatedCdrs()` (it did not read `call-id`
+   or `cdr-id`). All three now use the shared eight-field version. The cradle
+   copy was also **missing** queue.php's numeric-call-id fix, so a purely numeric
+   id (which PHP casts to an int array key) would fatal there and not on the
+   queue screen; the shared version carries the fix and a test pins it.
+2. **`+1 (845) 425-9810` did not match `8454259810`.** Comparing raw strings made
+   every callback look unreturned — every single one, silently, which is the most
+   dangerous direction this metric can fail in. `normalizeCallNumber()` now
+   canonicalises NANP (`+1…` → 10 digits) and `00`-prefixed international
+   numbers, and both the callback and repeat matchers use it.
+3. **An outbound leg counted as a transfer hop.** `cdrIsAnsweredAgentLeg()`
+   documented a direction check it did not make, so an answered outbound call
+   inflated `handled` and depressed the transfer rate. Fixed.
+4. **A transfer rate of 200 %.** The rate divided the *hand-off count* by handled
+   calls, so a call bounced through three agents published "200 %" — the kind of
+   figure that discredits the whole page. The rate is now transferred
+   *conversations* / handled interactions (cannot exceed 100 %), with the
+   hand-off count and `perTransferred` beside it. A test asserts ≤ 100 %.
+5. **A queue pair that was not a queue transfer.** The first version recorded
+   "previous agent → this queue"; the review asked for queue→queue, so it now
+   records a genuine queue change inside one conversation.
+
+## Deliberate rules, pinned by tests rather than left implicit
+
+* A transfer needs a **person** to take the call: an unanswered leg offered to
+  another agent is not a transfer (that would let an unanswered transfer inflate
+  a coaching conversation), and a terminus that looks like an outside number is
+  not an agent.
+* The same agent answering twice on one interaction is the same person still on
+  the call — not a transfer.
+* A callback is looked for only in **outbound** legs. A customer calling back in
+  is a repeat call; counting it as a callback would flatter every desk.
+* An outbound leg's own from-number is ignored: it is usually the desk's caller
+  ID, and matching it would "return" missed calls to the first number in the
+  outbound caller-ID pool.
+* The `call-back` CDR field is never consulted. It is always false in the data
+  this app reads, so trusting it would report "nothing was ever returned".
+
+## Evidence
+
+`node tests/php/call-links.mjs` — 40 checks over hand-built leg trees, plus
+`api/report.php` end-to-end. Registered in `tests/run.mjs` (`npm test` = 24
+suites, all green).
+
+---
+
+# CHANGES — Sprint A, phase 1: opening hours, wait buckets, hold, service targets
+
+**The task (2026-10-06):** implement the manager review (`REPORTING-REVIEW.md`)
+in full — Sprints A, B and C — phase by phase, with every published number
+recomputed and checked independently.
+
+**Read this before you quote a number.** Three figures the app publishes have
+changed, all three because they were wrong:
+
+1. **p50 / p90 wait** (`support.php: percentileInt`). The percentile picked the
+   element at `round(p/100 × (n−1))` and published it. For an even count that is
+   not the median: over six rings of 10, 20, 45, 100, 125, 150 s it reported
+   **100 s** where the median is **72.5 s** — a 38 % overstatement of the wait
+   the desk made people endure, in the number the review says is quoted at the
+   daily huddle. It now interpolates between the two nearest values, the same
+   method as Excel/LibreOffice `PERCENTILE.INC` and R's type 7, so the exported
+   CSV can be checked in a spreadsheet. Same fixture: p50 **73 s**, p90
+   **138 s**. This affects the dashboard CSV's `p50_ring` / `p90_ring` columns
+   and the new on-screen p50/p90; nothing else used the function.
+2. **A call whose ringing and answer timestamps belong to different legs**
+   (`support.php: ringSeconds`) used to publish **0 seconds**. A transfer or a
+   re-queue can leave a row whose answer precedes this row's ringing, and the
+   old code clamped the negative difference to zero: a real wait silently
+   published as "answered instantly". It now measures this leg's own
+   start→answer gap for that case (45 s in the test). Every single-leg value is
+   byte-identical to before.
+3. **An omitted field on the Settings screen wiped fields it did not mention.**
+   `saveDomainSettings()` wrote the whole settings object, so a save that did
+   not include the calendar wrote the *default* calendar over the stored one —
+   the same class of bug the old `$pick` fix addressed for the scalar fields,
+   and worse, because a partial save would silently switch opening hours off.
+   The nested settings now start from what is stored. Test:
+   `a save that omits the calendar keeps it`.
+
+## What is new
+
+| piece | where | note |
+| --- | --- | --- |
+| Opening-hours calendar (Mon–Fri 08:00–18:00 grid, per-day open/close, holiday list) | `includes/reporting/settings.php` | `businessHours.enabled` ships **false**: switching it on changes every headline number, so it is a manager decision, not a deploy |
+| `hours=all\|business\|after` on every reporting endpoint | `includes/auth.php` (`authorizedFilters`), `includes/reporting/rows.php` (`scopedCdrs`) | the default is `business` **once a calendar is configured**, `all` while none is — an unconfigured install behaves exactly as before |
+| Per-queue service targets (queue id → extension → name → domain default) | `settings.php: resolveQueueSlaSeconds`, `rows.php: summary()` | a period judged against several targets says so and carries the mean target applied, so the UI never labels it with one queue's number |
+| Wait buckets for answered calls (≤30/≤60/≤120/>120 s) | `summary()` | one definition with the average beside it (`waitSeconds()` == `ringSeconds()`) |
+| Abandon split by how long the caller waited (<5 s misdial / 5–30 s / >30 s staffing failure) | `summary()` | the review's F5, and the "abandoned wait" figure every nav now sees |
+| Hold time (total, calls, average) | `summary()`, `support.php: holdSeconds` | the field was read inside `ringSeconds()` and thrown away |
+| Roster rows (agent, weekday, shift, team, supervisor) stored and validated | `settings.php` | the editor UI lands with Sprint C; the storage and validation are here so no later phase can half-write it |
+
+## Evidence
+
+`node tests/php/report-metrics.mjs` — 77 checks, all hand-computed in the file:
+the calendar's boundaries (open inclusive / close exclusive), a cross-midnight
+shift, holidays and closed weekdays; the ring fix; `summary()`'s buckets, hold
+and per-queue SLA arithmetic written out line by line; the Save guards; and
+`api/report.php` over a four-call day where `business + after` must equal `all`
+exactly and the drill-down must agree with the summary it was opened from.
+Registered in `tests/run.mjs`, so `npm test` (23 suites) already runs it.
+
+Two behavioural rules are **pinned, not changed**: a call with no usable
+timestamp is never hidden by the hours filter, and an unanswered call that
+reached a queue counts as an **abandon even when it ended in a mailbox** (the
+mailbox is the queue's overflow; counting it as handled voicemail would hide the
+failure). Both now have a test that says so.
+
+---
+
 # CHANGES — QA round 2: the remaining P1s, the history purge, the large modules
 
 **Scope:** the three P1 findings round 1 left for a decision (QA-3, QA-4,

@@ -26,6 +26,16 @@ try {
      * (domain settings default, clamped 1..120).
      */
     $slaSeconds = resolveSlaSeconds($requested, $user);
+    /*
+     * Per-queue target for the queue being inspected (Sprint A). The cradle is
+     * one queue, so this is the whole story: the target the KPI is measured
+     * against, and the one published with it.
+     */
+    $settings = loadDomainSettings((string)($user['domain'] ?? ''));
+    $settingsForSla = array_merge($settings, ['slaSeconds' => $slaSeconds]);
+    $queueTarget = static function (string $queue) use ($settingsForSla): int {
+        return resolveQueueSlaSeconds($settingsForSla, $queue);
+    };
 
     $queues = cachedCallQueues($user);
     $allQueueIds = [];
@@ -69,25 +79,9 @@ try {
         return $value;
     };
 
-    $cdrIdBag = static function (array $row): array {
-        $ids = [];
-        foreach ([
-            'call-orig-call-id',
-            'call-parent-call-id',
-            'call-parent-cdr-id',
-            'call-through-call-id',
-            'call-term-call-id',
-            'call-id',
-            'cdr-id',
-            'id',
-        ] as $field) {
-            $v = trim((string)($row[$field] ?? ''));
-            if ($v !== '') {
-                $ids[$v] = true;
-            }
-        }
-        return array_keys($ids);
-    };
+    /* Shared with api/queue.php and the reporting layer (links.php). This copy
+     * used to return array_keys() directly, which hands back INT keys for a
+     * numeric call id and fatals under strict_types; the shared one fixes that. */
 
     $directory = userDirectory($user);
     $agentNames = [];
@@ -168,6 +162,8 @@ try {
     $talkSum = 0;
     $talkN = 0;
     $slaHit = 0;
+    $avgTargetSum = 0;
+    $avgTargetN = 0;
     $posSum = 0;
     $neuSum = 0;
     $negSum = 0;
@@ -194,6 +190,10 @@ try {
             'waitSum' => 0,
             'talkSum' => 0,
             'talkN' => 0,
+            /* Sprint B: hold seconds, counted only on the calls that used hold,
+             * exactly like the dashboard summary and the per-agent figures. */
+            'holdSum' => 0,
+            'holdN' => 0,
         ];
     }
 
@@ -220,7 +220,7 @@ try {
         if (!is_array($row)) {
             continue;
         }
-        $ids = $cdrIdBag($row);
+        $ids = cdrIdBag($row);
         if ($ids === []) {
             $ids[] = 'row:' . $i;
         }
@@ -240,7 +240,7 @@ try {
         if (!is_array($row)) {
             continue;
         }
-        $ids = $cdrIdBag($row);
+        $ids = cdrIdBag($row);
         $key = $ids !== [] ? $ufFind($ids[0]) : ('row:' . $i);
         $legsByRoot[$key][] = $row;
     }
@@ -316,11 +316,23 @@ try {
             continue;
         }
         $queueStats[$through]['totalCalls']++;
+        $queueStats[$through]['slaSeconds'] = $queueTarget($through);
+        /*
+         * Hold is accumulated for every call that reached the queue, answered
+         * or not: a caller who held and then abandoned still held, and dropping
+         * those made the queue's average look better than the agent's own.
+         */
+        $queueHold = holdSeconds($row);
+        if ($queueHold > 0) {
+            $queueStats[$through]['holdSum'] += $queueHold;
+            $queueStats[$through]['holdN']++;
+        }
         if ($answeredCall) {
             $queueStats[$through]['answered']++;
             $queueStats[$through]['waitSum'] += $wait;
             $queueStats[$through]['waitN']++;
-            if ($wait <= $slaSeconds) {
+            /* Judged against this queue's own target. */
+            if ($wait <= $queueTarget($through)) {
                 $queueStats[$through]['slaHit']++;
             }
             if ($talk > 0) {
@@ -345,11 +357,14 @@ try {
         $answeredCall = callAnswered($row);
         $abandonedCall = callOutcome($row, $directory, $queueIds, $answeredCall) === 'abandoned';
 
+        $rowTarget = $queueTarget($through);
+        $avgTargetSum += $rowTarget;
+        $avgTargetN++;
         if ($answeredCall) {
             $answered++;
             $waitSum += $wait;
             $waitN++;
-            if ($wait <= $slaSeconds) {
+            if ($wait <= $rowTarget) {
                 $slaHit++;
             }
             if ($talk > 0) {
@@ -421,7 +436,7 @@ try {
             $sentDot = 'negative';
         }
 
-        $ids = $cdrIdBag($row);
+        $ids = cdrIdBag($row);
         $origKey = trim((string)($row['call-orig-call-id'] ?? $row['call-parent-call-id'] ?? ''));
         $parentKey = $origKey !== '' ? $origKey : ($ids !== [] ? $ufFind($ids[0]) : '');
         $legs = [];
@@ -608,6 +623,8 @@ try {
                 'avgTalk' => $talkN ? (int)round($talkSum / $talkN) : 0,
                 'answerRate' => $offered ? round(($answered / $offered) * 100, 1) : 0,
                 'slaSeconds' => $slaSeconds,
+                'avgTargetSeconds' => $avgTargetN > 0 ? (int)round($avgTargetSum / $avgTargetN) : $slaSeconds,
+                'perQueueTargets' => is_array($settings['queueSla'] ?? null) && $settings['queueSla'] !== [],
             ],
             'hours' => $hours,
             'outcomes' => [
@@ -654,6 +671,9 @@ try {
                     'avgRing' => $waitN ? (int)round($st['waitSum'] / $waitN) : 0,
                     'avgTalk' => $talkN ? (int)round($st['talkSum'] / $talkN) : 0,
                     'totalTalk' => (int)$st['talkSum'],
+                    'holdCalls' => (int)$st['holdN'],
+                    'holdAvg' => $st['holdN'] ? (int)round($st['holdSum'] / $st['holdN']) : 0,
+                    'holdTotal' => (int)$st['holdSum'],
                 ];
             }, $queueStats)),
         ],

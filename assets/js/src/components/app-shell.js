@@ -16,6 +16,7 @@ import { CallTypeFilters, Filters } from './filters.js';
 import { AlertsBell } from './login.js';
 import { OverviewDashboard } from './overview.js';
 import { QueueDashboard } from './queue.js';
+import { ReportsDashboard } from './reports.js';
 import { SettingsModal } from './settings.js';
 import { TelephoneNumbers } from './telephone-numbers.js';
 import { ErrorState, NavIcon, ThemeToggle, ToastHost, navItems, useToasts } from './ui.js';
@@ -23,6 +24,7 @@ import { api, routesForRole } from '../lib/api.js';
 import { CAN_READ_SETTINGS } from '../lib/roles.js';
 import { histInitials } from '../lib/format.js';
 import { h, useEffect, useRef, useState } from '../lib/react.js';
+import { maxRangeDaysFor } from '../lib/date-range.js';
 import { readSlaSeconds, writeSlaSeconds } from '../lib/sla.js';
 import { today } from '../lib/time.js';
 
@@ -37,7 +39,16 @@ const [filters,setFilters] = useState(() => {
         start: q.get('start') || today,
         end: q.get('end') || today,
         department: q.get('department') || '',
-        site: q.get('site') || ''
+        site: q.get('site') || '',
+        /*
+         * F3. The baseline is part of the view, so it travels in the URL with
+         * the dates: a link to "this week vs the same week last year" has to
+         * show what it says. Empty means the server default (previous period).
+         */
+        compare: q.get('compare') || '',
+        /* Sprint B: the sentiment scope travels in the URL like every other
+         * narrowing filter, so "the negative calls this week" is a link. */
+        sentiment: q.get('sentiment') || ''
     };
 });
 
@@ -64,6 +75,28 @@ const retryAa = () => {
 };
 const [aaLoading, setAaLoading] = useState(false);
 const [cacheJob, setCacheJob] = useState(null);
+/*
+ * Every filter the bar can set, as one stable string. The fetch effects below
+ * used to list fields by hand (start, end, department, site...), which is a
+ * whitelist that silently keeps serving the OLD numbers the moment somebody adds
+ * a control - exactly what happened when the Sprint A narrowing filters and the
+ * Sprint B sentiment scope arrived. Anything the server is sent is now part of
+ * the key, so a control cannot change without the data following it.
+ */
+const filtersKey = JSON.stringify({
+    start: filters.start,
+    end: filters.end,
+    department: filters.department,
+    site: filters.site,
+    hours: filters.hours || '',
+    outcome: filters.outcome || '',
+    waitBucket: filters.waitBucket || '',
+    waitedOver: filters.waitedOver ?? '',
+    callbackState: filters.callbackState || '',
+    sentiment: filters.sentiment || '',
+    compare: filters.compare || '',
+    agents: Array.isArray(filters.agents) ? filters.agents : []
+});
 const rangeDayCount = (() => {
     if (!filters.start || !filters.end) return 0;
     const a = new Date(filters.start + 'T00:00:00');
@@ -84,7 +117,7 @@ const [inventory,setInventory] = useState({ agents: 0, totalNumbers: 0, enabledN
 const [inventoryReady,setInventoryReady] = useState({ agents: false, numbers: false, aa: false });
 const [agentSub,setAgentSub] = useState('performance');
 const [slaSeconds, setSlaSeconds] = useState(readSlaSeconds);
-const [domainSettings, setDomainSettings] = useState({ slaPct: 80, abandonPct: 10, missedPct: 20, ahtMinutes: 5, ahtOutboundMinutes: 5, topAgentAhtMinutes: 5, topAgentMinCalls: 20 });
+const [domainSettings, setDomainSettings] = useState({ slaPct: 80, abandonPct: 10, missedPct: 20, ahtMinutes: 5, ahtOutboundMinutes: 5, contactPct: 50, topAgentAhtMinutes: 5, topAgentMinCalls: 20 });
 const [focusQueue, setFocusQueue] = useState('');
 const [focusAa, setFocusAa] = useState('');
 const [settingsOpen, setSettingsOpen] = useState(false);
@@ -108,6 +141,7 @@ const applyThresholds = d => {
         missedPct: Number(d.missedPct || 20),
         ahtMinutes: Number(d.ahtMinutes || 5),
         ahtOutboundMinutes: Number(d.ahtOutboundMinutes || d.ahtMinutes || 5),
+        contactPct: Number(d.contactPct || 50),
         /*
          * Top-agent qualification. Falls back to the general AHT threshold so
          * the podium still behaves sensibly against a backend that does not
@@ -207,7 +241,14 @@ useEffect(() => {
             apply(st);
             await tick();
             let guard = 0;
-            const maxWarm = Math.max(days * 4, 16);
+            /*
+             * F2: each warm request fills a batch of days (server default 5), so
+             * the loop guard counts passes, not days: one pass per five days
+             * with slack for a partial day or a stop on the time budget. The
+             * old `days * 4` ceiling would have let a 366-day range spin for
+             * thousands of round-trips after the work was already done.
+             */
+            const maxWarm = Math.max(Math.ceil(days / 5) + 8, 16);
             while (active && st && !st.complete && guard < maxWarm) {
                 const warmingDay = st.next || '';
                 if (warmingDay) {
@@ -263,6 +304,9 @@ const agentPerformanceTable = h(AgentPerformanceTable, {
     missedPct: domainSettings.missedPct,
     abandonPct: domainSettings.abandonPct,
     ahtMinutes: domainSettings.ahtMinutes,
+    /* Sprint B: the contact-rate floor, beside the other domain thresholds so
+     * the red highlight on the table can be traced to a setting. */
+    contactPct: domainSettings.contactPct,
     onAgentClick: extension => {
         setSelectedAgents([extension]);
         setAgentSub('overview');
@@ -318,7 +362,7 @@ useEffect(() => {
     if (route !== 'agents') return;
     const agents = agentSub === 'overview' ? selectedAgents : [];
     loadAgentReport(agents);
-}, [route, agentSub, filters.start, filters.end, filters.department, filters.site, selectedAgents, callTypes, slaSeconds]);
+}, [route, agentSub, filtersKey, selectedAgents, callTypes, slaSeconds]);
 
 /*
  * =====================================================================
@@ -353,7 +397,7 @@ useEffect(() => {
             if (active) setAaRosterLoading(false);
         });
     return () => { active = false; };
-}, [route, filters.start, filters.end, filters.department, filters.site, aaReload]);
+}, [route, filtersKey, aaReload]);
 
 /*
  * Filters changed: whatever was computed for the previous range is stale.
@@ -362,7 +406,7 @@ useEffect(() => {
 useEffect(() => {
     setAaReport(null);
     setAaStructures(null);
-}, [filters.start, filters.end, filters.department, filters.site]);
+}, [filtersKey]);
 
 /*
  * =====================================================================
@@ -408,7 +452,7 @@ useEffect(() => {
             if (active) setAaLoading(false);
         });
     return () => { active = false; };
-}, [route, selectedAutoAttendants, aaReport, filters.start, filters.end, filters.department, filters.site]);
+}, [route, selectedAutoAttendants, aaReport, filtersKey]);
 
 /*
  * =====================================================================
@@ -450,12 +494,14 @@ useEffect(() => {
         });
 
     return () => { active = false; };
-}, [route, aaView, aaStructures, selectedAutoAttendants, filters.start, filters.end, filters.department, filters.site]);
+}, [route, aaView, aaStructures, selectedAutoAttendants, filtersKey]);
 
 useEffect(() => {
     const q = new URLSearchParams({ start: filters.start, end: filters.end });
+    if (filters.sentiment) q.set('sentiment', filters.sentiment);
     if (filters.department) q.set('department', filters.department);
     if (filters.site) q.set('site', filters.site);
+    if (filters.compare && filters.compare !== 'previous') q.set('compare', filters.compare);
     history.replaceState(null, '', '?' + q.toString());
     if (route !== 'dashboard') return;
 
@@ -482,10 +528,16 @@ useEffect(() => {
         setLoading(false);
 
         /* Phase 2 — comparison, non-blocking. */
+        /*
+         * The comparison request carries the chosen baseline; the main request
+         * only needs the dates (its own `comparison` block names the mode, and
+         * this phase-2 call is what fills the trend arrows).
+         */
         api('report', { ...filters, callTypes, slaSeconds, previousOnly: 1 })
         .then(prev => {
             if (!active) return;
-            const previous = prev && prev.comparison && prev.comparison.previous;
+            const comparison = prev && prev.comparison;
+            const previous = comparison && comparison.previous;
             if (!previous) return;
             setReport(cur => {
                 if (!cur) return cur;
@@ -494,6 +546,11 @@ useEffect(() => {
                     comparison: {
                         ...(cur.comparison || {}),
                         previous,
+                        /* The baseline's own name and length, from the server
+                         * that actually fetched it. */
+                        mode: comparison.mode || 'previous',
+                        label: comparison.label || '',
+                        days: comparison.days || 0,
                         pending: false
                     }
                 };
@@ -520,7 +577,7 @@ useEffect(() => {
     });
 
     return () => { active = false; };
-}, [route, filters.start, filters.end, filters.department, filters.site, callTypes, slaSeconds]);
+}, [route, filtersKey, callTypes, slaSeconds]);
 
 const allowedRoutes = routesForRole(user.role);
 const item = navItems.filter(n => allowedRoutes.includes(n.id)).map(n =>
@@ -694,11 +751,23 @@ if (route === 'agents') {
             queue: payload.queue || null,
             queuesOnly: !!payload.queuesOnly,
             slaSeconds: payload.slaSeconds,
+            /*
+             * Sprint A: a service-level-by-interval row carries its own
+             * [timeFrom, timeTo) window, the same way the Simultaneous rows do.
+             * Without this the row would open the whole period, and the number
+             * that made the reader click would not be the number they see.
+             */
+            timeFrom: payload.timeFrom || null,
+            timeTo: payload.timeTo || null,
             callTypes: {inbound: true, outbound: true, missed: true, onnet: true}
         })
     });
 } else if (route === 'call_history') {
     main = h(CallHistoryDashboard, { filters, callTypes });
+} else if (route === 'reports') {
+    /* The month-end pack fetches its own payload (the pack + the comparison +
+     * the 4-week baseline), so it does not ride on the dashboard's request. */
+    main = h(ReportsDashboard, { filters, user });
 } else if (route === 'telephone_numbers') {
     main = h(TelephoneNumbers, {
         filters,
@@ -755,7 +824,12 @@ if (route === 'agents') {
             ahtMinutes: domainSettings.topAgentAhtMinutes,
             minCalls: domainSettings.topAgentMinCalls
         },
-        onMetric: metric => setModal({ metric }),
+        /*
+         * The drill-down carries an optional scope: a KPI card can now say
+         * "these calls, in this band" (Sprint A's wait buckets and callback
+         * worklist) instead of only naming a metric.
+         */
+        onMetric: (metric, extra) => setModal(extra && typeof extra === 'object' ? { metric, ...extra } : { metric }),
         onHourClick: hour => setModal({ metric: 'total', hour, agent: null }),
         onDayClick: day => setModal({ metric: 'total', filters: { ...filters, start: day, end: day } }),
         /*
@@ -783,6 +857,14 @@ if (route === 'agents') {
         onNavigate: setRoute,
         slaSeconds,
         onSlaChange: setSlaSeconds,
+        /* F3: which baseline the trend arrows compare against, and the setter
+         * that re-requests both periods with it. */
+        compare: filters.compare || 'previous',
+        onCompareChange: mode => setFilters(f => ({ ...f, compare: mode })),
+        /* Sprint B: one click from "we had 12 negative calls" to every figure
+         * scoped to exactly those calls - the filter bar reads the same state,
+         * so the two controls cannot disagree. */
+        onSentimentOnly: () => setFilters(f => ({ ...f, sentiment: 'negative' })),
         allowedRoutes
     });
 }
@@ -790,7 +872,7 @@ if (route === 'agents') {
 return h('div', { className: 'min-h-screen' },
     h('div', { className: 'min-h-screen flex' },
         h('nav', {
-            className: 'relative flex-shrink-0 border-r border-slate-700 bg-slate-900 transition-all duration-150 ' + (collapsed ? 'w-12' : 'w-44')
+            className: 'app-nav relative flex-shrink-0 border-r border-slate-700 bg-slate-900 transition-all duration-150 ' + (collapsed ? 'w-12' : 'w-44')
         },
             h('button', { onClick: () => setCollapsed(!collapsed), className: 'w-full border-b border-slate-700 py-3 text-cyan-400' }, '☰'),
             h('div', { ref: navPanelRef, className: 'nav-panel pt-2' }, ...item,
@@ -830,7 +912,7 @@ return h('div', { className: 'min-h-screen' },
             )
         ),
         h('div', { ref: mainScrollRef, className: 'min-w-0 flex-1 overflow-auto' },
-            h('header', { className: 'relative z-30 flex h-12 items-center justify-between border-b border-slate-700 bg-slate-900 px-3' },
+            h('header', { className: 'app-header relative z-30 flex h-12 items-center justify-between border-b border-slate-700 bg-slate-900 px-3' },
                 h('div', null,
                     h('span', { className: 'text-sm font-semibold text-slate-100' }, 'Reporting dashboard'),
                     h('span', { className: 'ml-2 text-[10px] text-slate-500' }, 'US/Eastern · ' + user.displayName)
@@ -856,13 +938,29 @@ return h('div', { className: 'min-h-screen' },
                     h('span', { className: 'text-[10px] uppercase tracking-wider text-cyan-400' }, user.role.replace('_', ' '))
                 )
             ),
-            h(Filters, { filters, setFilters, role: user.role, rangeLocked: !!cacheJob }),
+            h(Filters, {
+                filters,
+                setFilters,
+                role: user.role,
+                rangeLocked: !!cacheJob,
+                /*
+                 * F2: the span cap this role may pick. The server enforces the
+                 * same number in authorizedFilters(); passing it here is what
+                 * stops the picker offering a range the API would silently trim.
+                 */
+                maxRangeDays: maxRangeDaysFor(user.role)
+            }),
             cacheJob ? h('div', {className: 'cache-job'},
                 h('div', {className: 'cache-job-copy'},
                     h('span', {className: 'font-medium text-slate-200'}, 'Preparing call history'),
                     h('span', {className: 'text-slate-500'},
                         ' ' + (cacheJob.ready || 0) + ' of ' + (cacheJob.total || 0) + ' days cached' +
-                        (cacheJob.next ? ' · fetching ' + cacheJob.next : '')
+                        (cacheJob.next ? ' · fetching ' + cacheJob.next : '') +
+                        /* F2: say that the fetch is batched, so a long range
+                         * reads as steady progress rather than a stall. */
+                        (cacheJob.batch && cacheJob.batch.warmed > 1
+                            ? ' · ' + cacheJob.batch.warmed + ' days per pass'
+                            : '')
                     )
                 ),
                 h('div', {className: 'cache-job-track'},
@@ -893,6 +991,7 @@ return h('div', { className: 'min-h-screen' },
                     missedPct: Number(d.missedPct || 20),
                     ahtMinutes: Number(d.ahtMinutes || 5),
                     ahtOutboundMinutes: Number(d.ahtOutboundMinutes || d.ahtMinutes || 5),
+                    contactPct: Number(d.contactPct ?? prev.contactPct ?? 50),
                     /*
                      * Keep the values the user just chose even if the
                      * backend does not echo them back yet, otherwise the
@@ -920,6 +1019,11 @@ return h('div', { className: 'min-h-screen' },
             queuesOnly: !!modal.queuesOnly,
             timeFrom: modal.timeFrom || null,
             timeTo: modal.timeTo || null,
+            waitBucket: modal.waitBucket || null,
+            waitedOver: modal.waitedOver === undefined ? null : modal.waitedOver,
+            callbackState: modal.callbackState || null,
+            sort: modal.sort || null,
+            dir: modal.dir || null,
             filters: modal.filters || filters,
             callTypes: modal.callTypes || callTypes,
             /*
