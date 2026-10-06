@@ -29,7 +29,8 @@ const SUITES = {
   ],
   php: [
     { name: 'api matrix', cmd: ['node', 'tests/php/endpoints.mjs'] },
-    { name: 'url policy', cmd: ['node', 'tests/php/security.mjs'] }
+    { name: 'url policy', cmd: ['node', 'tests/php/security.mjs'] },
+    { name: 'csv exports', cmd: ['node', 'tests/php/export.mjs'] }
   ]
 };
 

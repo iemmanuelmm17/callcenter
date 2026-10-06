@@ -67,9 +67,7 @@
           headers: body ? {
             "Content-Type": "application/json"
           } : {},
-          body: body ? JSON.stringify(
-            body.start && body.end ? { ...body, ...rangeDateTimes(body.start, body.end) } : body
-          ) : void 0
+          body: body ? JSON.stringify(apiBody(body)) : void 0
         }
       );
       const raw = await response.text();
@@ -98,6 +96,32 @@
         return json.data;
       }
       return json;
+    };
+    const apiBody = (body) => body && body.start && body.end ? { ...body, ...rangeDateTimes(body.start, body.end) } : body;
+    const apiDownload = async (path, body, fallbackName) => {
+      const response = await fetch("api/" + path + ".php", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(apiBody(body) || {})
+      });
+      if (response.status === 401) {
+        handleAuthExpired();
+        throw Object.assign(new Error("Authentication required"), { status: 401 });
+      }
+      if (!response.ok) {
+        throw Object.assign(new Error("Export failed (" + response.status + ")"), { status: response.status });
+      }
+      const disposition = response.headers.get("Content-Disposition") || "";
+      const match = /filename="?([^";]+)"?/i.exec(disposition);
+      const name = match && match[1] || fallbackName || "export.csv";
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = name;
+      anchor.click();
+      URL.revokeObjectURL(url);
     };
     const fmt = (seconds) => {
       const n = Math.max(0, Number(seconds) || 0);
@@ -802,6 +826,7 @@
       const [error, setError] = useState("");
       const [openRec, setOpenRec] = useState(null);
       const [flow, setFlow] = useState(null);
+      const [exporting, setExporting] = useState(false);
       useEffect(() => {
         const t = setTimeout(() => {
           setCallerQ(caller.trim());
@@ -935,31 +960,24 @@
           });
         }
       };
-      const exportCsv = () => {
-        const headers = ["Date", "From name", "From", "Dialed", "To", "Agent", "Queue", "Outcome", "Ring", "Talk", "Disconnect"];
-        const lines = [headers.join(",")];
-        rows.forEach((r) => {
-          const cells = [
-            formatHistDate(r.startedAt),
-            r.from,
-            r.fromNumber,
-            r.dialed,
-            r.to,
-            r.agentName || r.agent || "",
-            r.throughUser || "",
-            r.outcome || "",
-            formatMmss(r.ringing),
-            formatMmss(r.talking),
-            r.disconnectReason || ""
-          ].map((v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"');
-          lines.push(cells.join(","));
-        });
-        const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = "call-history.csv";
-        a.click();
-        URL.revokeObjectURL(a.href);
+      const exportCsv = async () => {
+        if (exporting) return;
+        setExporting(true);
+        try {
+          await apiDownload("call_history", {
+            ...filters,
+            caller: callerQ,
+            called: calledQ,
+            agent: agentQ,
+            outcome,
+            callTypes: callTypes || { inbound: true, outbound: true, missed: true, onnet: true },
+            export: true
+          }, "call-history.csv");
+        } catch (e) {
+          setError(e && e.message ? e.message : "Unable to export call history.");
+        } finally {
+          setExporting(false);
+        }
       };
       const skel2 = loading && rows.length === 0;
       const st = stats || {};
@@ -1038,9 +1056,9 @@
             type: "button",
             className: "hist-export",
             onClick: exportCsv,
-            title: "Export visible rows as CSV",
-            disabled: rows.length === 0
-          }, "Export CSV")
+            title: "Export every row matching the current filters as CSV",
+            disabled: exporting || loading || total === 0
+          }, exporting ? "Exporting\u2026" : "Export CSV")
         ),
         error ? h("div", { className: "border border-rose-900 bg-rose-950/30 p-3 text-sm text-rose-300" }, error) : null,
         h(
@@ -2098,53 +2116,19 @@
         if (exporting) return;
         setExporting(true);
         try {
-          const size = 100;
-          let pageNo = 1;
-          let last = 1;
-          const all = [];
-          do {
-            const r = await api("calls", {
-              ...filters,
-              callTypes,
-              metric,
-              hour,
-              agent,
-              phoneNumber,
-              callerNumber,
-              queue,
-              queuesOnly: !!queuesOnly,
-              slaSeconds,
-              page: pageNo,
-              size
-            });
-            const rows = Array.isArray(r?.data) ? r.data : [];
-            all.push(...rows);
-            last = Math.max(1, Number(r?.last_page || 1));
-            pageNo += 1;
-          } while (pageNo <= last);
-          const header = ["date", "time", "type", "from_name", "from", "dialed", "to", "agent", "talk", "ring", "reason", "total"];
-          const body = all.map((row) => [
-            formatCallDate(row.startedAt) || row.date || "",
-            formatCallTime(row.startedAt) || row.time || "",
-            row.type || "",
-            row.from || "",
-            formatPhoneNumber(row.fromNumber) || row.fromNumber || "",
-            formatPhoneNumber(row.dialed) || row.dialed || "",
-            formatPhoneNumber(row.to) || row.to || "",
-            row.agent || "",
-            fmt(row.talking),
-            fmt(row.ringing),
-            row.disconnectReason || "",
-            fmt(row.total)
-          ]);
-          const csv = [header, ...body].map((r) => r.map(csvCell).join(",")).join("\n");
-          const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = "calls-" + String(metric || "all") + "-" + (filters?.start || "") + "-" + (filters?.end || "") + ".csv";
-          a.click();
-          URL.revokeObjectURL(url);
+          await apiDownload("calls", {
+            ...filters,
+            callTypes,
+            metric,
+            hour,
+            agent,
+            phoneNumber,
+            callerNumber,
+            queue,
+            queuesOnly: !!queuesOnly,
+            slaSeconds,
+            export: true
+          }, "calls-" + String(metric || "all") + ".csv");
         } catch (e) {
           setError("Unable to export calls.");
         } finally {
@@ -4075,11 +4059,24 @@
       if (!t || t === "\u2014") return h("span", { className: "tn-faint" }, "\u2014");
       return t;
     }
-    function TelephoneNumbersTable({ data, loading, onTelephoneClick }) {
+    function TelephoneNumbersTable({ data, loading, filters, onTelephoneClick }) {
       const [page, setPage] = useState(1);
       const [pageSize, setPageSize] = useState(10);
       const [sortKey, setSortKey] = useState("calls");
       const [sortDir, setSortDir] = useState("desc");
+      const [exporting, setExporting] = useState(false);
+      const [error, setError] = useState("");
+      const exportInventory = async () => {
+        if (exporting) return;
+        setExporting(true);
+        try {
+          await apiDownload("telephone_numbers", { ...filters || {}, export: true }, "telephone-numbers.csv");
+        } catch (e) {
+          setError(e && e.message ? e.message : "Unable to export telephone numbers.");
+        } finally {
+          setExporting(false);
+        }
+      };
       const rows = Array.isArray(data) ? data : [];
       const sorted = useMemo(() => {
         const copy = rows.slice();
@@ -4162,6 +4159,7 @@
       return h(
         "section",
         { className: "border border-slate-700 bg-slate-900" },
+        error ? h("div", { className: "border-b border-rose-900 bg-rose-950/30 p-2 text-[11px] text-rose-300" }, error) : null,
         h(
           "div",
           { className: "overflow-x-auto" },
@@ -4174,7 +4172,22 @@
               h(
                 "tr",
                 { className: "border-b border-slate-700 bg-slate-950 text-[10px] uppercase tracking-wide text-slate-500" },
-                sortBtn("number", "Telephone Number", "text-left", "Sort by number"),
+                h(
+                  "th",
+                  { className: "whitespace-nowrap px-2 py-2 text-left" },
+                  h(
+                    "div",
+                    { className: "flex items-center gap-2" },
+                    h("button", {
+                      type: "button",
+                      onClick: exportInventory,
+                      disabled: exporting || !!loading,
+                      title: "Export the complete inventory for this range as CSV",
+                      className: "hist-export"
+                    }, exporting ? "Exporting\u2026" : "Export CSV"),
+                    sortBtn("number", "Telephone Number", "text-left", "Sort by number")
+                  )
+                ),
                 sortBtn("type", "Type", "text-left", "Sort by Local DID vs Toll-Free"),
                 h(
                   "th",
@@ -5279,7 +5292,7 @@
       }, [filters?.start, filters?.end, filters?.department, filters?.site]);
       const term = search.toLowerCase().trim();
       const unusedCount = numbers.filter((p) => tnCallVolume(p) === 0).length;
-      const visibleNumbers = numbers.filter((phone) => {
+      const visibleNumbers = useMemo(() => numbers.filter((phone) => {
         if (hideZeroCalls && tnCallVolume(phone) === 0) return false;
         if (typeFilter === "local" && tnTypeKind(phone.type) !== "local") return false;
         if (typeFilter === "tollfree" && tnTypeKind(phone.type) !== "tollfree") return false;
@@ -5287,7 +5300,7 @@
         const d = phone.destination || {};
         const route = tnRouteMeta(phone);
         return [phone.number, phone.type, tnTypeLabel(phone.type), d.name, d.extension, d.department, d.site, route.label].some((v) => String(v || "").toLowerCase().includes(term));
-      });
+      }), [numbers, hideZeroCalls, typeFilter, term]);
       const kpi = (label, value, icon, tone, onClick, tip) => {
         const Tag = onClick ? "button" : "div";
         return h(
@@ -5412,6 +5425,7 @@
           h(TelephoneNumbersTable, {
             data: visibleNumbers,
             loading: false,
+            filters,
             onTelephoneClick: (phone) => {
               const number = phone?.number || phone?.phoneNumber || "";
               if (onCallClick && number) onCallClick({ phoneNumber: number, metric: "incoming" });
@@ -8812,7 +8826,7 @@
       }, [hours.join("|"), tab]);
       const exportCsv = () => {
         const rows = tab === "summary" ? [
-          ["extension", "name", "site", "total_calls", "offered", "handled", "sla_missed", "sla_rate", "abandoned", "abandon_rate", "avg_ring", "max_ring", "avg_talk", "max_talk", "total_talk"],
+          ["queue", "name", "site", "total_calls", "offered", "handled", "sla_missed", "sla_rate", "abandoned", "abandon_rate", "avg_ring", "max_ring", "avg_talk", "max_talk", "total_talk"],
           ...queueStats.map((q) => [q.callqueue, q.description, q.site, q.totalCalls, q.offered, q.handled, q.slaMiss, q.sla, q.abandoned, q.abandonRate, q.avgRing, q.maxRing, q.avgTalk, q.maxTalk, q.totalTalk])
         ] : [
           ["metric", "value"],
@@ -9078,6 +9092,7 @@
               type: "button",
               disabled: !recent.length,
               onClick: exportRecentCsv,
+              title: "Exports the most recent calls the server returns for this queue (capped at 200). Use Call History for a complete range export.",
               className: "cursor-pointer rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-300 hover:border-cyan-500 hover:text-cyan-300 disabled:cursor-not-allowed disabled:opacity-40"
             }, "Export CSV")
           ),

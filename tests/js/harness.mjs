@@ -218,6 +218,14 @@ export async function createHarness(options = {}) {
       return jsonResponse({ error: 'harness: no fixture for ' + name }, 404);
     }
     if (name === 'session') return jsonResponse({ ...FIXTURES.session, user });
+
+    /* Export requests are answered the way the real endpoint answers them:
+     * a CSV attachment, not JSON. */
+    if (String(init.body || '').includes('"export":true')) {
+      const stamp = new Date().toISOString().slice(0, 10);
+      return csvResponse('callscope-' + name + '-' + stamp + '.csv');
+    }
+
     if (/^https?:/.test(href)) return binaryResponse('');
     return jsonResponse(fixture);
   };
@@ -227,6 +235,14 @@ export async function createHarness(options = {}) {
     status,
     text: async () => JSON.stringify(body),
     json: async () => body
+  });
+  const csvResponse = filename => ({
+    ok: true,
+    status: 200,
+    text: async () => 'a,b\n1,2\n',
+    blob: async () => new window.Blob(['a,b\n1,2\n'], { type: 'text/csv;charset=utf-8' }),
+    headers: { get: name => (String(name).toLowerCase() === 'content-disposition' ? 'attachment; filename="' + filename + '"' : 'text/csv') },
+    downloads: []
   });
   const binaryResponse = text => ({
     ok: true, status: 200, text: async () => text,

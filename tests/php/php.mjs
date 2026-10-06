@@ -250,6 +250,15 @@ define('PBX_SERVERS', ['nms1' => 'https://pbx.example']);
     await this.write(`pbx/${name}.json`, JSON.stringify(rows));
   }
 
+  /** Read a file the interpreter wrote (audit trail, app log, fixtures). */
+  async readInterpreterFile(relative) {
+    try {
+      return String(await this.php.readFile(path.join(TMP, relative), { encoding: 'utf8' }));
+    } catch {
+      return '';
+    }
+  }
+
   /**
    * Run an arbitrary PHP snippet with the harness bootstrap loaded and return
    * everything it echoed. Used for pure-function tests (the URL policy).

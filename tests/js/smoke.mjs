@@ -120,6 +120,62 @@ console.log('\n== agent overview (report-driven) ==');
   check('agent sub-tabs threw nothing', errors.length === before, errors.slice(before).join(' | '));
 }
 
+console.log('\n== CSV exports (server-streamed) ==');
+{
+  /* Call history: the export must ask the server for the whole filtered set
+   * (export: true), not serialise the 25 rows on screen. */
+  requested.length = 0;
+  await goTo('Call History');
+  const histExport = document.querySelector('.hist-export');
+  check('call history has an export button', !!histExport);
+  if (histExport) {
+    (async () => {})(histExport);
+    await click(histExport);
+    await flush();
+    const call = requested.find(r => r.endpoint === 'call_history' && String(r.body || '').includes('"export":true'));
+    check('call history export requests the server CSV', !!call, requested.map(r => r.endpoint + ':' + String(r.body || '').slice(0, 60)));
+    check('call history export keeps the active filters', !!call && /"start":"\d{4}-\d{2}-\d{2}"/.test(call.body));
+    check('call history export did not throw', errors.length === 0, errors.slice(0, 2));
+  }
+
+  /* Telephone Numbers inventory: same rule — every DID, not the ten on screen. */
+  requested.length = 0;
+  await goTo('Telephone Numbers');
+  const tnExport = [...document.querySelectorAll('button')].find(b => b.className.includes('hist-export') && /Export/.test(b.textContent || ''));
+  check('telephone numbers has an export button', !!tnExport);
+  if (tnExport) {
+    await click(tnExport);
+    await flush();
+    check('telephone numbers export requests the server CSV',
+      requested.some(r => r.endpoint === 'telephone_numbers' && String(r.body || '').includes('"export":true')),
+      requested.map(r => r.endpoint));
+  }
+
+  /* Call modal: opened from the dashboard KPI, export uses the same request. */
+  requested.length = 0;
+  await goTo('Dashboard');
+  const kpi = document.querySelector('.ops-total-n');
+  if (kpi) {
+    await click(kpi);
+    await flush();
+    /* Scope to the modal: the dashboard has its own (browser-side) export. */
+    const modalRoot = document.querySelector('.call-modal') || document;
+    const modalExport = [...modalRoot.querySelectorAll('button')].find(b => /^Export CSV$/.test((b.textContent || '').trim()));
+    check('call modal has an export button', !!modalExport);
+    if (modalExport) {
+      await click(modalExport);
+      await flush();
+      check('call modal export requests the server CSV',
+        requested.some(r => r.endpoint === 'calls' && String(r.body || '').includes('"export":true')),
+        requested.map(r => r.endpoint + ':' + String(r.body || '').slice(0, 50)));
+      check('call modal export carries the drill-down filters',
+        !!requested.find(r => r.endpoint === 'calls' && String(r.body || '').includes('"export":true') && String(r.body || '').includes('"metric"')));
+    }
+    const close = [...modalRoot.querySelectorAll('button')].find(b => /close|×|Close/i.test(b.textContent || '') || b.getAttribute('aria-label') === 'Close');
+    if (close) await click(close);
+  }
+}
+
 console.log('\n== global error budget ==');
 check('no unexpected runtime errors', errors.length === 0, errors.slice(0, 5).join(' | '));
 const uniqueWarnings = [...new Set(warnings)];

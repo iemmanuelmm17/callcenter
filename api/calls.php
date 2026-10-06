@@ -2,8 +2,86 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../includes/reporting.php';
+require_once __DIR__ . '/../includes/export.php';
 
 requireMethod('POST');
+
+/**
+ * One call-detail row, exactly as the JSON page returns it. The CSV export
+ * uses the same function so the table and the file cannot drift apart.
+ */
+function callsRow(array $c): array
+{
+    $row = [
+
+        'startedAt' =>
+            $c['call-start-datetime']
+            ?? null,
+
+        'date' => (static function (array $call): string {
+            $dt = parseEasternDateTime((string)($call['call-start-datetime'] ?? ''));
+            return $dt instanceof DateTimeImmutable ? $dt->format('Y-m-d') : '';
+        })($c),
+
+        'time' => (static function (array $call): string {
+            $dt = parseEasternDateTime((string)($call['call-start-datetime'] ?? ''));
+            return $dt instanceof DateTimeImmutable ? $dt->format('g:i A') : '';
+        })($c),
+
+        'type' =>
+            callType($c),
+
+        'agent' =>
+            callAgent($c),
+
+        'queue' =>
+            (string)($c['call-through-user'] ?? ''),
+
+        'department' =>
+            callDepartment($c),
+
+        'site' =>
+            callSite($c),
+
+        'from' =>
+            callFromName($c),
+
+        'fromNumber' =>
+            (callFromNumber($c) !== '' ? callFromNumber($c) : callFrom($c)),
+
+        'dialed' =>
+            callDialed($c),
+
+        'to' =>
+            callTo($c),
+
+        'talking' =>
+            seconds(
+                $c,
+                'call-talking-duration-seconds'
+            ),
+
+        'ringing' =>
+            ringSeconds($c),
+
+        'disconnectReason' =>
+            callDisconnectReason($c),
+
+        'total' =>
+            seconds(
+                $c,
+                'call-total-duration-seconds'
+            ),
+
+        'id' =>
+            $c['id']
+            ?? $c['call-parent-cdr-id']
+            ?? ''
+    ];
+
+    return $row;
+}
+
 
 try {
 
@@ -363,6 +441,46 @@ try {
 
 
     /*
+     * CSV EXPORT
+     * ----------
+     * The modal's export button used to re-request every page (100 rows at a
+     * time) and rebuild the CSV in the browser, which repeated the full CDR
+     * scan once per page. It now streams the same rows from a single request.
+     */
+    if (wantsCsvExport($requested)) {
+        auditView($user, $filters + ['export' => 'call-details:' . $metric], 'calls_export:' . $metric);
+
+        csvBegin('calls-' . $metric . '-' . ($filters['start'] ?? '') . '-' . ($filters['end'] ?? '') . '.csv');
+        $out = csvOpen();
+        csvRow($out, ['date', 'time', 'type', 'from_name', 'from', 'dialed', 'to', 'agent', 'talk', 'ring', 'reason', 'total']);
+
+        $written = 0;
+        foreach ($calls as $c) {
+            if ($written >= CSV_EXPORT_MAX_ROWS) {
+                break;
+            }
+            $r = callsRow($c);
+            $stamp = csvStamp((string)($r['startedAt'] ?? ''));
+            csvRow($out, [
+                $stamp['date'] !== '' ? $stamp['date'] : (string)($r['date'] ?? ''),
+                $stamp['time'] !== '' ? $stamp['time'] : (string)($r['time'] ?? ''),
+                $r['type'],
+                $r['from'],
+                csvPhone($r['fromNumber']),
+                csvPhone($r['dialed']),
+                csvPhone($r['to']),
+                $r['agent'],
+                csvDuration($r['talking']),
+                csvDuration($r['ringing']),
+                $r['disconnectReason'],
+                csvDuration($r['total']),
+            ]);
+            $written++;
+        }
+        csvEnd($out);
+    }
+
+    /*
      * =========================================================
      * PAGINATION
      * =========================================================
@@ -406,78 +524,7 @@ try {
      * =========================================================
      */
 
-    $rows = array_map(
-        static function (array $c): array {
-
-            return [
-
-                'startedAt' =>
-                    $c['call-start-datetime']
-                    ?? null,
-
-                'date' => (static function (array $call): string {
-                    $dt = parseEasternDateTime((string)($call['call-start-datetime'] ?? ''));
-                    return $dt instanceof DateTimeImmutable ? $dt->format('Y-m-d') : '';
-                })($c),
-
-                'time' => (static function (array $call): string {
-                    $dt = parseEasternDateTime((string)($call['call-start-datetime'] ?? ''));
-                    return $dt instanceof DateTimeImmutable ? $dt->format('g:i A') : '';
-                })($c),
-
-                'type' =>
-                    callType($c),
-
-                'agent' =>
-                    callAgent($c),
-
-                'queue' =>
-                    (string)($c['call-through-user'] ?? ''),
-
-                'department' =>
-                    callDepartment($c),
-
-                'site' =>
-                    callSite($c),
-
-                'from' =>
-                    callFromName($c),
-
-                'fromNumber' =>
-                    (callFromNumber($c) !== '' ? callFromNumber($c) : callFrom($c)),
-
-                'dialed' =>
-                    callDialed($c),
-
-                'to' =>
-                    callTo($c),
-
-                'talking' =>
-                    seconds(
-                        $c,
-                        'call-talking-duration-seconds'
-                    ),
-
-                'ringing' =>
-                    ringSeconds($c),
-
-                'disconnectReason' =>
-                    callDisconnectReason($c),
-
-                'total' =>
-                    seconds(
-                        $c,
-                        'call-total-duration-seconds'
-                    ),
-
-                'id' =>
-                    $c['id']
-                    ?? $c['call-parent-cdr-id']
-                    ?? ''
-            ];
-        },
-        $slice
-    );
+    $rows = array_map('callsRow', $slice);
 
 
     /*

@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../includes/reporting.php';
+require_once __DIR__ . '/../includes/export.php';
 
 if (!defined('APP_TZ')) {
     define(
@@ -216,6 +217,60 @@ function handleGet(
         if ($siteName !== '') {
             $siteMap[$siteName] = true;
         }
+    }
+
+    /*
+     * CSV EXPORT
+     * ----------
+     * Streams the complete inventory for the selected range and site /
+     * department filter: every number (enabled or not, with or without calls),
+     * unaffected by the search box and the type / Active-only toggles, which
+     * are browser-side filters. The old button was not present at all on this
+     * page — the table is paginated at ten rows.
+     */
+    if (wantsCsvExport($input)) {
+        auditView($user, $filters + ['export' => 'telephone_numbers'], 'telephone_numbers_export');
+
+        csvBegin('telephone-numbers-' . ($start ?? '') . '-' . ($end ?? '') . '.csv');
+        $out = csvOpen();
+        csvRow($out, ['number', 'type', 'enabled', 'routes_to', 'extension', 'department', 'site', 'calls', 'missed', 'talk']);
+
+        $written = 0;
+        $exportedCalls = 0;
+        $exportedMissed = 0;
+        $exportedTalk = 0;
+        foreach ($numbers as $row) {
+            if ($written >= CSV_EXPORT_MAX_ROWS) {
+                break;
+            }
+            $calls = is_array($row['calls'] ?? null) ? $row['calls'] : [];
+            $destination = is_array($row['destination'] ?? null) ? $row['destination'] : [];
+            $routing = is_array($row['routing'] ?? null) ? $row['routing'] : [];
+            $inbound = (int)($calls['inbound'] ?? 0);
+            $missed = (int)($calls['missed'] ?? 0);
+            $talk = (int)($calls['talkSeconds'] ?? 0);
+
+            csvRow($out, [
+                (string)($row['number'] ?? ''),
+                (string)($row['type'] ?? ''),
+                !empty($row['enabled']) ? 'yes' : 'no',
+                (string)(($destination['name'] ?? '') !== '' ? $destination['name'] : ($routing['destinationUser'] ?? '')),
+                (string)($destination['extension'] ?? ''),
+                (string)($destination['department'] ?? ''),
+                (string)($destination['site'] ?? ''),
+                $inbound,
+                $missed,
+                csvDuration($talk),
+            ]);
+            $exportedCalls += $inbound;
+            $exportedMissed += $missed;
+            $exportedTalk += $talk;
+            $written++;
+        }
+
+        /* Totals row, so a spreadsheet can reconcile against the page KPIs. */
+        csvRow($out, ['TOTAL', '', '', '', '', '', '', $exportedCalls, $exportedMissed, csvDuration($exportedTalk)]);
+        csvEnd($out);
     }
 
     $departments = array_keys($departmentMap);

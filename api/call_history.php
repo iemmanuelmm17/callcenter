@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../includes/reporting.php';
+require_once __DIR__ . '/../includes/export.php';
 
 requireMethod('POST');
 
@@ -17,6 +18,78 @@ function histDisplayOutcome(array $c, array $directory = [], array $queueIds = [
     }
     return 'missed';
 }
+
+/**
+ * One call-history row, exactly as the JSON page returns it. The CSV export
+ * uses the same function, so a column can never drift between the table and
+ * the file it produces.
+ */
+function histRow(array $c, array $directory, array $queueIds): array
+{
+    $term = trim((string)($c['call-term-user'] ?? ''));
+    $orig = trim((string)($c['call-orig-user'] ?? ''));
+    $agentExt = trim((string)callAgent($c));
+    $hosts = [];
+    foreach ([
+        'call-orig-by-hostname',
+        'call-term-by-hostname',
+        'call-action-by-hostname',
+        'call-via-hostname',
+        'call-orig-from-host',
+        'call-term-to-host',
+    ] as $hk) {
+        $h = trim((string)($c[$hk] ?? ''));
+        if ($h !== '' && !in_array($h, $hosts, true)) {
+            $hosts[] = $h;
+        }
+    }
+    return [
+        'id' => (string)($c['id'] ?? $c['call-parent-cdr-id'] ?? ''),
+        'startedAt' => $c['call-start-datetime'] ?? null,
+        'disconnectedAt' => $c['call-disconnect-datetime'] ?? null,
+        'from' => callFromName($c),
+        'fromNumber' => (callFromNumber($c) !== '' ? callFromNumber($c) : callFrom($c)),
+        'dialed' => callDialed($c),
+        'to' => callTo($c),
+        'ringing' => ringSeconds($c),
+        /* DATA-1 FIX: talking duration (was total = ring + talk + hold). */
+        'talking' => seconds($c, 'call-talking-duration-seconds'),
+        'disconnectReason' => callDisconnectReason($c),
+        'outcome' => histDisplayOutcome($c, $directory, $queueIds),
+        'type' => callType($c),
+        'agent' => $agentExt,
+        'agentName' => (string)($directory[$agentExt]['name'] ?? ''),
+        'origCallId' => (string)($c['call-orig-call-id'] ?? ''),
+        'termCallId' => (string)($c['call-term-call-id'] ?? ''),
+        'termUser' => $term,
+        'origUser' => $orig,
+        'recordingCallId' => (static function (array $row, string $type, string $origId, string $termId): string {
+            if ($type === 'outbound' || $type === 'onnet') {
+                return $origId !== '' ? $origId : $termId;
+            }
+            return $termId !== '' ? $termId : $origId;
+        })($c, callType($c), (string)($c['call-orig-call-id'] ?? ''), (string)($c['call-term-call-id'] ?? '')),
+        'recordingUser' => (static function (string $type, string $origU, string $termU): string {
+            if ($type === 'outbound' || $type === 'onnet') {
+                return $origU !== '' ? $origU : $termU;
+            }
+            return $termU !== '' ? $termU : $origU;
+        })(callType($c), $orig, $term),
+        'throughUser' => (string)($c['call-through-user'] ?? ''),
+        'servers' => implode(',', $hosts),
+        'traceApi' => html_entity_decode(
+            (string)($c['prefilled-trace-api'] ?? $c['prefilled_trace_api'] ?? ''),
+            ENT_QUOTES | ENT_HTML5,
+            'UTF-8'
+        ),
+        'hasRecordingHint' => (
+            (callType($c) === 'outbound' || callType($c) === 'onnet')
+                ? trim((string)($c['call-orig-call-id'] ?? '')) !== ''
+                : trim((string)($c['call-term-call-id'] ?? '')) !== ''
+        ) && ($term !== '' || $orig !== ''),
+    ];
+}
+
 
 try {
     $user = currentUser();
@@ -79,6 +152,45 @@ try {
         return strcmp((string)($b['call-start-datetime'] ?? ''), (string)($a['call-start-datetime'] ?? ''));
     });
 
+    /*
+     * CSV EXPORT
+     * ----------
+     * Streams EVERY row matching the current view: the search terms, the
+     * outcome filter, the call-type toggles and the page-wide range / site /
+     * department filters. The previous button wrote only the page that
+     * happened to be loaded (25 rows) to the file.
+     */
+    if (wantsCsvExport($requested)) {
+        auditView($user, $filters + ['export' => 'call_history'], 'call_history_export');
+
+        csvBegin('call-history-' . ($filters['start'] ?? '') . '-' . ($filters['end'] ?? '') . '.csv');
+        $out = csvOpen();
+        csvRow($out, ['Date', 'From name', 'From', 'Dialed', 'To', 'Agent', 'Queue', 'Outcome', 'Ring', 'Talk', 'Disconnect']);
+
+        $written = 0;
+        foreach ($calls as $c) {
+            if ($written >= CSV_EXPORT_MAX_ROWS) {
+                break;
+            }
+            $r = histRow($c, $directory, $queueIds);
+            csvRow($out, [
+                csvHistStamp((string)($r['startedAt'] ?? '')),
+                $r['from'],
+                $r['fromNumber'],
+                $r['dialed'],
+                $r['to'],
+                $r['agentName'] !== '' ? $r['agentName'] : $r['agent'],
+                $r['throughUser'],
+                $r['outcome'],
+                csvMmss($r['ringing']),
+                csvMmss($r['talking']),
+                $r['disconnectReason'],
+            ]);
+            $written++;
+        }
+        csvEnd($out);
+    }
+
     $stats = [
         'total' => 0,
         'answered' => 0,
@@ -138,68 +250,7 @@ try {
 
     $rows = [];
     foreach ($slice as $c) {
-        $term = trim((string)($c['call-term-user'] ?? ''));
-        $orig = trim((string)($c['call-orig-user'] ?? ''));
-        $agentExt = trim((string)callAgent($c));
-        $hosts = [];
-        foreach ([
-            'call-orig-by-hostname',
-            'call-term-by-hostname',
-            'call-action-by-hostname',
-            'call-via-hostname',
-            'call-orig-from-host',
-            'call-term-to-host',
-        ] as $hk) {
-            $h = trim((string)($c[$hk] ?? ''));
-            if ($h !== '' && !in_array($h, $hosts, true)) {
-                $hosts[] = $h;
-            }
-        }
-        $rows[] = [
-            'id' => (string)($c['id'] ?? $c['call-parent-cdr-id'] ?? ''),
-            'startedAt' => $c['call-start-datetime'] ?? null,
-            'disconnectedAt' => $c['call-disconnect-datetime'] ?? null,
-            'from' => callFromName($c),
-            'fromNumber' => (callFromNumber($c) !== '' ? callFromNumber($c) : callFrom($c)),
-            'dialed' => callDialed($c),
-            'to' => callTo($c),
-            'ringing' => ringSeconds($c),
-            /* DATA-1 FIX: talking duration (was total = ring + talk + hold). */
-            'talking' => seconds($c, 'call-talking-duration-seconds'),
-            'disconnectReason' => callDisconnectReason($c),
-            'outcome' => histDisplayOutcome($c, $directory, $queueIds),
-            'type' => callType($c),
-            'agent' => $agentExt,
-            'agentName' => (string)($directory[$agentExt]['name'] ?? ''),
-            'origCallId' => (string)($c['call-orig-call-id'] ?? ''),
-            'termCallId' => (string)($c['call-term-call-id'] ?? ''),
-            'termUser' => $term,
-            'origUser' => $orig,
-            'recordingCallId' => (static function (array $row, string $type, string $origId, string $termId): string {
-                if ($type === 'outbound' || $type === 'onnet') {
-                    return $origId !== '' ? $origId : $termId;
-                }
-                return $termId !== '' ? $termId : $origId;
-            })($c, callType($c), (string)($c['call-orig-call-id'] ?? ''), (string)($c['call-term-call-id'] ?? '')),
-            'recordingUser' => (static function (string $type, string $origU, string $termU): string {
-                if ($type === 'outbound' || $type === 'onnet') {
-                    return $origU !== '' ? $origU : $termU;
-                }
-                return $termU !== '' ? $termU : $origU;
-            })(callType($c), $orig, $term),
-            'throughUser' => (string)($c['call-through-user'] ?? ''),
-            'servers' => implode(',', $hosts),
-            'traceApi' => html_entity_decode(
-                (string)($c['prefilled-trace-api'] ?? $c['prefilled_trace_api'] ?? ''),
-                ENT_QUOTES | ENT_HTML5,
-                'UTF-8'
-            ),
-            'hasRecordingHint' => (
-                (callType($c) === 'outbound' || callType($c) === 'onnet')
-                    ? trim((string)($c['call-orig-call-id'] ?? '')) !== ''
-                    : trim((string)($c['call-term-call-id'] ?? '')) !== ''
-            ) && ($term !== '' || $orig !== ''),
-        ];
+        $rows[] = histRow($c, $directory, $queueIds);
     }
 
     auditView($user, $filters, 'call_history');

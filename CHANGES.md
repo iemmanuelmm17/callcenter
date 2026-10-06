@@ -1,3 +1,85 @@
+# CHANGES — CSV exports export everything, not just the visible page (2026-10-06)
+
+**Scope:** export correctness + the bugs found while auditing every export in
+the app. No chart, table or endpoint contract changed.
+**Files:** `includes/export.php` (new), `api/{call_history,calls,telephone_numbers}.php`,
+`assets/js/src/app.js`, `includes/bootstrap.php`, `tests/php/export.mjs` (new),
+`tests/js/{harness,smoke}.mjs`, `tests/run.mjs`.
+
+## The bug: "Export CSV" wrote the page, not the data
+
+| where | before | after |
+| --- | --- | --- |
+| Call History | serialised the 25 rows of the *current page* (a 30 000-row range exported 25 rows, while the KPI above said 30 000) | server streams every row matching the filters |
+| Call details modal | re-requested the result 100 rows at a time and rebuilt the CSV in the browser — one full CDR scan **per page** | one request, streamed from the single scan the endpoint already does |
+| Telephone Numbers | **no export at all**, and the table only ever renders 10 rows | new export of the complete inventory for the range |
+
+The endpoints now answer `export: true` with `Content-Type: text/csv` and a
+`Content-Disposition: attachment` filename; the browser writes the bytes to
+disk. Nothing is JSON-encoded on the server for an export or parsed and
+re-serialised in the client, and no pagination limit applies.
+
+Row mapping is shared, not duplicated: `histRow()` and `callsRow()` are the
+functions the JSON pages already used, so a column can never drift between the
+table and the file. Values are formatted exactly like the UI
+(`fmt` → `csvDuration`, `formatMmss` → `csvMmss`, `formatPhoneNumber` →
+`csvPhone`, `nsTimestampParts`/`formatHistDate` → `csvStamp`/`csvHistStamp`) —
+verified against the same inputs in `tests/php/export.mjs`.
+
+## Security and housekeeping for exports
+
+* CSV-injection (`=`, `@` and control characters are neutralised with a leading
+  apostrophe): caller-ID names come from the PBX and are attacker-controlled, so
+  `=HYPERLINK("http://evil","click")` as a "name" must not execute when the file
+  is opened in Excel or Sheets. `+`/`-` are deliberately left alone (country
+  codes, negative deltas).
+* UTF-8 BOM so Excel reads accented names correctly; `X-Content-Type-Options:
+  nosniff`; the filename is sanitised before it reaches the header.
+* `CSV_EXPORT_MAX_ROWS` (200 000) bounds a runaway range.
+* Exports are audited (`auditView(..., 'call_history_export')`) and inherit the
+  existing role gates — a supervisor still cannot export the DID inventory.
+* Filters are honoured: search terms, outcome, call types and the page-wide
+  range/site/department filters all reach the export. The Telephone Numbers
+  export deliberately ignores the *browser-side* toggles (search box, type,
+  "Active only") so the file is the complete inventory, which is the point of
+  an inventory export.
+
+## Other bugs fixed while auditing
+
+* **Telephone Numbers pagination reset.** `visibleNumbers` was rebuilt on every
+  parent render, so the table's `useEffect(..., [data])` reset the page to 1 on
+  any unrelated re-render (typing a search, a tab switch, the cache banner).
+  Now memoised.
+* **Queue summary CSV header** labelled the queue column `extension` while
+  writing the queue id into it.
+* **Queue "Recent calls" export** silently shipped a server-capped 200-row list
+  as if it were the range; the button now says so and points at Call History.
+* **Call History export button** was disabled only when the current page was
+  empty; it now reflects the real total and shows an "Exporting…" state.
+
+## Suspicions checked and disproved (no change made)
+
+* Dashboard "Agent status" donut: `statusSlices` reads `data.agentStatus`, which
+  `api/queue.php` returns — it is served correctly (empty until a queue is
+  selected, as its hint says).
+* Dashboard export `pctDelta(c.outbound, ...)`: `c` is `report.summary.counts`,
+  so `c.outbound === outboundCount` — the same value.
+* Call details modal: `api/calls.php` does return `total` and `last_page`, so
+  the modal's pagination was never the export's problem.
+
+## Verification
+
+* `npm test` → **ALL SUITES PASSED**: php lint, CSS coverage, dead code,
+  build, JS smoke, API matrix 86 checks, URL policy 62 checks, **csv exports 17
+  checks**.
+* `tests/php/export.mjs` proves on real PHP 8.4: the export row count equals the
+  filtered total and ignores `page` (asked for page 2, got all 17 rows); headers
+  match the UI columns; `Aug 2, 9:00 AM` / `00:05` / `00:55` identical to the
+  table; the formula-like caller name is neutralised; each export is audited;
+  and the 403 role gates hold.
+* `tests/js/smoke.mjs` clicks all three export buttons in the real bundle and
+  asserts each one POSTs `export: true` with the active filters (12 new checks).
+
 # CHANGES — Dead code removal and entry-point cleanup (2026-10-06)
 
 **Scope:** delete what nothing calls, plus the duplicate entry point. No feature
