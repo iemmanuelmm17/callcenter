@@ -29,21 +29,40 @@ git on this branch**, **third-party JS loaded from public CDNs at runtime**, and
 handful of small inconsistencies that will confuse whoever maintains it next.
 None of them change a reported number; all of them are cheap to fix.
 
+## Round 1 — what has been fixed since this review
+
+All P0s and P2s are done; see `CHANGES.md` ("QA round 1") for the full record
+and the test evidence. In short:
+
+| finding | commit | what a reader should verify |
+| --- | --- | --- |
+| QA-1 XSS | `092bbc0` | `tests/js/smoke.mjs` mounts every text column the way Tabulator does; it fails against the pre-fix source |
+| QA-2 tracked runtime state | `c92750d` | `git ls-files cache logs` is empty; the files are still on disk |
+| QA-6 queue rows | `23d9c86` | queue recent rows now carry the CDR id, and Open sends it as `callId` |
+| QA-7 dead `paused` | `67db536` | no `paused` in `queue.js`/`app-shell.js` |
+| QA-8 metric vocabulary | `7b0ae4e` | `includes/reporting/metrics.php`; unknown metric → 422; `api/filters.php` serves labels |
+| QA-9 error states | `67db536` | `ui.js::ErrorState`; the smoke suite forces a 502 and asserts Retry recovers |
+| QA-10 playback audit | `23d9c86` | `logs/audit-*.jsonl` gets `"resource":"recording"` on both paths |
+| QA-11 big modules | `750d4d7` | `call-modal-columns.js`, `lib/aa-call-fields.js`; the smoke suite pins the column set/order |
+
+QA-3, QA-4 and QA-5 (all P1) are deliberately untouched and still need your
+answers to Q1/Q3/Q4 below.
+
 ## Findings
 
-| # | Sev | Area | Finding |
-| --- | --- | --- | --- |
-| QA-1 | **P0** | security | Caller-ID name (and 4 other text columns) rendered as HTML in the drill-down table → stored XSS |
-| QA-2 | **P0** | hygiene / privacy | 93 runtime files under `cache/` + `logs/` are tracked in git on this branch (CDR payloads, audit trail); `origin/main` has them removed, so every merge re-adds them |
-| QA-3 | **P1** | supply chain | React/Chart.js loaded from public CDNs; Tabulator JS+CSS fetched from unpkg on first modal open; no SRI, no CSP |
-| QA-4 | **P1** | ops | App assets are not minified (JS 444 kB, CSS 139 kB) and not cache-busted (`assets/js/app.js` with no `?v=`) |
-| QA-5 | **P1** | policy | Settings is shown to every role, readable by every role, and writable by supervisors — tenants-wide thresholds that colour every report |
-| QA-6 | **P2** | consistency | "Recent calls" on the Queues screen carry no call id (`parentId` is an internal grouping key) → the one screen that cannot drill into a single call |
-| QA-7 | **P2** | dead code | `paused` prop on `QueueDashboard` is unreachable (`paused: false` hardcoded) and the live-ops screen never refreshes itself |
-| QA-8 | **P2** | correctness | Metric names are an implicit contract; unknown metrics silently return "no calls" instead of an error, and `metricLabels` duplicates the vocabulary in the modal |
-| QA-9 | **P2** | polish | Error copy is inconsistent ("Failed to load…" vs "Unable to load…", no Retry), and `formatPhoneNumber` is NANP-only + duplicated |
-| QA-10 | **P2** | audit | Playing a recording is not audited (views and exports are) |
-| QA-11 | **P2** | maintainability | `auto-attendant-report.js` is 1789 of the 2000-line module budget; `call-modal.js` 1469 |
+| # | Sev | Area | Finding | Status |
+| --- | --- | --- | --- | --- |
+| QA-1 | **P0** | security | Caller-ID name (and 4 other text columns) rendered as HTML in the drill-down table → stored XSS | **Fixed** `092bbc0` — text formatters return Text nodes; regression test mounts them the Tabulator way |
+| QA-2 | **P0** | hygiene / privacy | 93 runtime files under `cache/` + `logs/` are tracked in git on this branch (CDR payloads, audit trail); `origin/main` has them removed, so every merge re-adds them | **Fixed** `c92750d` — `git rm --cached`; history left alone by choice (no force-push), so old blobs remain |
+| QA-3 | **P1** | supply chain | React/Chart.js loaded from public CDNs; Tabulator JS+CSS fetched from unpkg on first modal open; no SRI, no CSP | Open — P1, out of this round (needs the internal-only answer, Q3) |
+| QA-4 | **P1** | ops | App assets are not minified (JS 444 kB, CSS 139 kB) and not cache-busted (`assets/js/app.js` with no `?v=`) | Open — P1, out of this round (needs the build/deploy decision, Q4) |
+| QA-5 | **P1** | policy | Settings is shown to every role, readable by every role, and writable by supervisors — tenants-wide thresholds that colour every report | Open — P1, out of this round (needs the policy answer, Q1) |
+| QA-6 | **P2** | consistency | "Recent calls" on the Queues screen carry no call id (`parentId` is an internal grouping key) → the one screen that cannot drill into a single call | **Fixed** `23d9c86` — recent rows carry the CDR id + an Open button; tested both sides |
+| QA-7 | **P2** | dead code | `paused` prop on `QueueDashboard` is unreachable (`paused: false` hardcoded) and the live-ops screen never refreshes itself | **Fixed** `67db536` — prop removed; the live mode it implied is backlog F2 |
+| QA-8 | **P2** | correctness | Metric names are an implicit contract; unknown metrics silently return "no calls" instead of an error, and `metricLabels` duplicates the vocabulary in the modal | **Fixed** `7b0ae4e` — `includes/reporting/metrics.php`, 422 on unknown, served via `api/filters.php` |
+| QA-9 | **P2** | polish | Error copy is inconsistent ("Failed to load…" vs "Unable to load…", no Retry), and `formatPhoneNumber` is NANP-only + duplicated | **Fixed** `67db536` — one `ErrorState` with Retry in every panel; duplicate formatter merged; audio ids safe |
+| QA-10 | **P2** | audit | Playing a recording is not audited (views and exports are) | **Fixed** `23d9c86` — playback audited (`stream:0` and `stream:1`) |
+| QA-11 | **P2** | maintainability | `auto-attendant-report.js` is 1789 of the 2000-line module budget; `call-modal.js` 1469 | **Partly fixed** `750d4d7` — the two named files split (1,469→1,139 and 1,789→1,698); next: `agents.js` 1,100, `date-range-picker.js` 1,079 |
 
 ---
 
