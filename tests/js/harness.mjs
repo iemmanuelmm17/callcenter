@@ -187,6 +187,73 @@ export const FIXTURES = {
       { extension: '6081', name: 'Alan Turing', department: 'Support', site: 'HQ', total: 185, ib: 150, ob: 20, mc: 20, ab: 15, onnet: 3, ibAht: 190, ibAat: 14, ibLtt: 700, ibTct: 28500, obArt: 9, obAat: 11, obLtt: 240, obTct: 800, offered: 185, mcRate: 18.9, abRate: 8.1, obConnected: 8, obConnectPct: 40, holdTotal: 120, holdCalls: 4, holdAvg: 30 }
     ],
     inventory: { agents: 2, totalNumbers: 4, enabledNumbers: 3, autoAttendants: 2, aaCalls: 300, queues: 3 },
+    /*
+     * Sprint C: the month-end pack. Shapes match includes/reporting/pack.php
+     * exactly, including the bases that must ride with each rate: slaBase,
+     * missedBase, the staffing assumption fields, and the baseline's window vs
+     * the days that actually had data.
+     */
+    pack: {
+      queues: [
+        { callqueue: '700', description: 'Sales queue', slaSeconds: 15, offered: 3, answered: 2, missed: 0, abandoned: 1,
+          sla: 50, slaBase: 2, abandonRate: 33.3, avgRing: 20, avgTalk: 45, totalTalk: 90, holdAvg: 25, holdTotal: 50 },
+        { callqueue: '701', description: 'Support queue', slaSeconds: 30, offered: 1, answered: 1, missed: 0, abandoned: 0,
+          sla: 100, slaBase: 1, abandonRate: 0, avgRing: 20, avgTalk: 40, totalTalk: 40, holdAvg: 0, holdTotal: 0 },
+        { callqueue: '702', description: 'Idle queue', slaSeconds: 20, offered: 0, answered: 0, missed: 0, abandoned: 0,
+          sla: 0, slaBase: 0, abandonRate: 0, avgRing: 0, avgTalk: 0, totalTalk: 0, holdAvg: 0, holdTotal: 0 }
+      ],
+      numbers: [
+        { number: '8457620001', key: '8457620001', calls: 5, inbound: 2, missed: 2, abandoned: 1,
+          missedBase: 4, missedRate: 50, abandonRate: 50, totalTalk: 90, zeroTraffic: false, highAbandon: false },
+        { number: '8457620004', key: '8457620004', calls: 0, inbound: 0, missed: 0, abandoned: 0,
+          missedBase: 0, missedRate: 0, abandonRate: 0, totalTalk: 0, zeroTraffic: true, highAbandon: false },
+        { number: '8457620005', key: '8457620005', calls: 6, inbound: 1, missed: 5, abandoned: 1,
+          missedBase: 6, missedRate: 83.3, abandonRate: 20, totalTalk: 25, zeroTraffic: false, highAbandon: true }
+      ],
+      quality: {
+        calls: 17, answered: 6,
+        missingAnswerTime: { count: 0, base: 17, pct: 0 },
+        zeroTalkAnswered: { count: 0, base: 6, pct: 0 },
+        missingDisconnectReason: { count: 17, base: 17, pct: 100 },
+        duplicateLegs: { count: 0, base: 17, pct: 0 }
+      },
+      staffing: {
+        occupancyPct: 85, intervalMinutes: 60,
+        formula: 'offered x AHT / interval / occupancy',
+        label: 'baseline, not a forecast',
+        basis: 'Talk time is the only work content the CDRs carry; after-call work, breaks and meetings are not in this estimate, and there is no roster to compute real occupancy from.',
+        totalWorkHours: 0.16, totalAgentHours: 0.19,
+        hours: [
+          { hour: 8, offered: 3, aht: 150, workSeconds: 450, agents: 0.15 },
+          { hour: 9, offered: 2, aht: 60, workSeconds: 120, agents: 0.04 }
+        ]
+      },
+      baseline: {
+        label: 'baseline over the same weekday in the prior weeks',
+        windowFrom: '2026-07-05', windowTo: '2026-08-01', weeks: 4,
+        from: '2026-07-06', to: '2026-07-27',
+        byWeekday: [
+          { weekday: 0, label: 'Sunday', weeks: 4, total: 40, avg: 10 },
+          { weekday: 1, label: 'Monday', weeks: 4, total: 48, avg: 12 },
+          { weekday: 2, label: 'Tuesday', weeks: 4, total: 44, avg: 11 },
+          { weekday: 3, label: 'Wednesday', weeks: 4, total: 36, avg: 9 },
+          { weekday: 4, label: 'Thursday', weeks: 4, total: 32, avg: 8 },
+          { weekday: 5, label: 'Friday', weeks: 4, total: 28, avg: 7 },
+          { weekday: 6, label: 'Saturday', weeks: 0, total: 0, avg: 0 }
+        ],
+        days: [
+          { date: '2026-08-02', weekday: 0, volume: 12, baseline: 10, index: 120 },
+          { date: '2026-08-03', weekday: 1, volume: 6, baseline: null, index: null }
+        ]
+      }
+    },
+    dataQuality: {
+      days: {
+        '2026-08-02': { records: 812, complete: true, cached: true },
+        '2026-08-03': { records: 410, complete: false, cached: true }
+      },
+      incompleteDays: 1, emptyDays: 0, hours: 'all', businessHoursConfigured: false
+    },
     timezone: 'US/Eastern'
   },
   agents: { data: [

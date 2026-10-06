@@ -3446,3 +3446,60 @@ html[data-theme="light"] .grid-totals td {
   border-radius: 10px; color: var(--color-slate-300); background: none;
 }
 .ops-sent-topic:hover { border-color: var(--color-cyan-500, #06b6d4); }
+
+/* ---------------------------------------------------------------------------
+ * The month-end report (Sprint C): one page that prints to PDF.
+ *
+ * The report is a normal route inside the app, so printing it would otherwise
+ * carry the navigation, the header and the filter bar onto every page. Those
+ * three carry .app-nav / .app-header / .filters-bar and are hidden in print;
+ * the action buttons hide themselves, and the tables stop being scroll boxes so
+ * nothing is clipped. Colours are forced to ink on paper instead of the dark
+ * theme, because a printed dark theme is unreadable and wastes toner.
+ * ------------------------------------------------------------------------ */
+.rep { padding: 16px 20px 40px; max-width: 1100px; margin: 0 auto; color: var(--color-slate-200); }
+.rep-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.rep-btn {
+  border: 1px solid var(--color-slate-600); background: var(--color-slate-800); color: var(--color-slate-100);
+  font-size: 12px; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+}
+.rep-btn:hover { border-color: var(--color-cyan-500, #06b6d4); }
+.rep-hint { font-size: 11px; color: var(--color-slate-500); }
+.rep-error { border: 1px solid var(--color-rose-500, #f43f5e); border-radius: 6px; padding: 12px; font-size: 12px; }
+.rep-head { border-bottom: 2px solid var(--color-slate-700); padding-bottom: 8px; margin-bottom: 14px; }
+.rep-title { font-size: 20px; font-weight: 600; color: var(--color-slate-100); }
+.rep-meta { display: flex; flex-wrap: wrap; gap: 2px 6px; font-size: 11px; color: var(--color-slate-400); margin-top: 4px; }
+.rep-sec { margin-top: 20px; }
+.rep-sec-title { font-size: 13px; font-weight: 600; color: var(--color-cyan-300, #67e8f9); text-transform: uppercase; letter-spacing: .04em; }
+.rep-note { font-size: 11px; color: var(--color-slate-400); margin: 4px 0 8px; line-height: 1.5; }
+.rep-kpi-wrap { margin-top: 6px; }
+.rep-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.rep-kpi { border: 1px solid var(--color-slate-700); border-radius: 6px; padding: 8px 10px; }
+.rep-kpi-label { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--color-slate-500); }
+.rep-kpi-value { font-size: 18px; font-weight: 600; color: var(--color-slate-100); margin-top: 2px; font-variant-numeric: tabular-nums; }
+.rep-kpi-sub { font-size: 10px; color: var(--color-slate-400); margin-top: 2px; }
+.rep-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 4px; }
+.rep-th { text-align: left; font-weight: 600; color: var(--color-slate-300); border-bottom: 1px solid var(--color-slate-600); padding: 5px 6px; }
+.rep-td { color: var(--color-slate-200); border-bottom: 1px solid var(--color-slate-800); padding: 4px 6px; }
+.rep-num { text-align: right; font-variant-numeric: tabular-nums; }
+.rep-flag-bad { color: var(--color-rose-400, #fb7185); font-weight: 600; }
+.rep-flag-warn { color: var(--color-amber-400, #fbbf24); }
+.rep-inline { display: flex; gap: 16px; flex-wrap: wrap; font-size: 11px; color: var(--color-slate-300); margin-top: 6px; }
+.rep-inline-wrap { gap: 10px; }
+.rep-days { margin-top: 10px; }
+.rep-foot { margin-top: 24px; border-top: 2px solid var(--color-slate-700); padding-top: 8px; font-size: 10px; color: var(--color-slate-400); display: grid; gap: 6px; line-height: 1.5; }
+
+@media print {
+  .app-nav, .app-header, .filters-bar, .rep-actions { display: none !important; }
+  html, body { background: #ffffff !important; }
+  .rep { max-width: none; padding: 0; color: #111111; }
+  .rep-title, .rep-kpi-value, .rep-td { color: #111111 !important; }
+  .rep-sec-title { color: #0e7490 !important; }
+  .rep-meta, .rep-note, .rep-kpi-label, .rep-kpi-sub, .rep-inline, .rep-foot, .rep-hint { color: #444444 !important; }
+  .rep-kpi, .rep-table, .rep-sec, .rep-head { border-color: #999999 !important; }
+  .rep-th { color: #111111 !important; border-bottom: 1px solid #666666 !important; }
+  .rep-td { border-bottom: 1px solid #cccccc !important; }
+  .rep-sec, .rep-kpi { break-inside: avoid; }
+  .ops-heat-scroll, .ops-heat-table { overflow: visible !important; }
+  .ops-card { border-color: #999999 !important; background: #ffffff !important; color: #111111 !important; }
+}

@@ -1,3 +1,71 @@
+# CHANGES — Sprint C, phase 8: the printable month-end report
+
+**What this phase is about.** The pack's row sets and trust blocks existed but
+nothing showed them. This phase is the page the owner reads: one route
+(**Reports**, manager and supervisor) that prints to PDF and downloads its own
+CSVs, with every figure server-computed.
+
+## The page
+
+`assets/js/src/components/reports.js`, mounted at `route === 'reports'`:
+
+- **Headline KPIs** — offered, answered, missed, abandoned, service level, AHT
+  and hold. Each carries its base in the sub-line (service level prints the base
+  it was taken over and, when per-queue targets are in play, the *mean target
+  actually applied*; hold prints how many calls held).
+- **Against the baseline period** — this period vs the comparison the filter bar
+  selected (so month-on-month and year-on-year come from F3's modes), with the
+  baseline named and its dates printed.
+- **By queue** — target, offered, answered, missed, abandoned, SLA + base,
+  abandon %, ring/talk and hold, including the zero rows.
+- **By number** — the DID roll-up with the missed share over arrivals and the
+  zero-traffic / high-abandon flags.
+- **Sentiment** — over scored calls only, with the base printed and the footnote
+  that an abandoned call is never scored.
+- **Daily volume vs the same weekday in the prior weeks** — the days table plus
+  every weekday's own baseline, labelled a baseline.
+- **Staffing estimate** — per hour, with the occupancy assumption, the formula
+  and the "no roster, so this is not occupancy" basis printed on the page.
+- **Data quality** — the four F7 checks with their bases, plus the per-day fetch
+  table (records, complete/partial).
+- **Weekday × hour** — the Sprint B heatmap, reusing `WeekHourHeatmap`.
+- **Definitions footer** — offered/missed/AHT/on-net stated once, with the scope
+  and timezone.
+
+The page fetches its own payload in one request with `baseline: 1` (the pack,
+the comparison and the 4-week baseline together) rather than riding on the
+dashboard's request, and it re-fetches when the filters change.
+
+## Print and exports
+
+`assets/css/src/custom.css` gains the `.rep-*` block and a `@media print` section
+that hides the shell chrome (`.app-nav`, `.app-header`, `.filters-bar`) and the
+action row, forces ink-on-paper colours, keeps sections off page breaks and turns
+the heatmap's scroll box back into a table so nothing is clipped. The page's two
+buttons are **Print / save as PDF** and **Download the CSVs** (summary, queues,
+numbers, hourly, baseline, data quality).
+
+## Evidence
+
+`tests/js/smoke.mjs` walks the new route in the real bundle and asserts the facts
+the client is responsible for: the request carries `baseline: 1`; the queue table
+prints the target beside the SLA **and its base**; an idle queue is a zero row,
+not an omission; both DID flags are printed; the staffing assumption (85 %, no
+roster) and the "baseline, not a forecast" label are on the page; the baseline
+prints its window and says "no prior weeks" instead of 0 %; the quality appendix
+prints counts with bases; the sentiment base is stated; the action row and the
+shell chrome carry the print-hiding classes. 16 checks. `tests/js/harness.mjs`
+gains `pack` + `dataQuality` fixtures shaped exactly like the endpoint's.
+`npm test` = 25 suites green; `ui audit --strict`, `css coverage` and
+`dead code --strict` clean.
+
+**Behaviour change to disclose:** a new nav entry and route for managers and
+supervisors; the dashboard payload is unchanged apart from the blocks shipped in
+phases 6–7, which every `report.php` response now computes (a single extra pass
+over rows already loaded).
+
+---
+
 # CHANGES — Sprint C, phase 7: the trust blocks (quality, staffing, baseline)
 
 **What this phase is about.** Three of the month-end pack's lines need data the

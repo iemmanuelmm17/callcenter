@@ -16,6 +16,7 @@ import { CallTypeFilters, Filters } from './filters.js';
 import { AlertsBell } from './login.js';
 import { OverviewDashboard } from './overview.js';
 import { QueueDashboard } from './queue.js';
+import { ReportsDashboard } from './reports.js';
 import { SettingsModal } from './settings.js';
 import { TelephoneNumbers } from './telephone-numbers.js';
 import { ErrorState, NavIcon, ThemeToggle, ToastHost, navItems, useToasts } from './ui.js';
@@ -763,6 +764,10 @@ if (route === 'agents') {
     });
 } else if (route === 'call_history') {
     main = h(CallHistoryDashboard, { filters, callTypes });
+} else if (route === 'reports') {
+    /* The month-end pack fetches its own payload (the pack + the comparison +
+     * the 4-week baseline), so it does not ride on the dashboard's request. */
+    main = h(ReportsDashboard, { filters, user });
 } else if (route === 'telephone_numbers') {
     main = h(TelephoneNumbers, {
         filters,
@@ -867,7 +872,7 @@ if (route === 'agents') {
 return h('div', { className: 'min-h-screen' },
     h('div', { className: 'min-h-screen flex' },
         h('nav', {
-            className: 'relative flex-shrink-0 border-r border-slate-700 bg-slate-900 transition-all duration-150 ' + (collapsed ? 'w-12' : 'w-44')
+            className: 'app-nav relative flex-shrink-0 border-r border-slate-700 bg-slate-900 transition-all duration-150 ' + (collapsed ? 'w-12' : 'w-44')
         },
             h('button', { onClick: () => setCollapsed(!collapsed), className: 'w-full border-b border-slate-700 py-3 text-cyan-400' }, '☰'),
             h('div', { ref: navPanelRef, className: 'nav-panel pt-2' }, ...item,
@@ -907,7 +912,7 @@ return h('div', { className: 'min-h-screen' },
             )
         ),
         h('div', { ref: mainScrollRef, className: 'min-w-0 flex-1 overflow-auto' },
-            h('header', { className: 'relative z-30 flex h-12 items-center justify-between border-b border-slate-700 bg-slate-900 px-3' },
+            h('header', { className: 'app-header relative z-30 flex h-12 items-center justify-between border-b border-slate-700 bg-slate-900 px-3' },
                 h('div', null,
                     h('span', { className: 'text-sm font-semibold text-slate-100' }, 'Reporting dashboard'),
                     h('span', { className: 'ml-2 text-[10px] text-slate-500' }, 'US/Eastern · ' + user.displayName)

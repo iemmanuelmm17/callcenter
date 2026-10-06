@@ -46,7 +46,8 @@ const routes = [
   ['Queues', ['Queue']],
   ['Telephone Numbers', ['Where each DID routes']],
   ['Auto-Attendants', ['auto attendant', 'Select an auto attendant']],
-  ['Call History', ['Caller']]
+  ['Call History', ['Caller']],
+  ['Reports', ['Month-end report']]
 ];
 
 for (const [label, landmarks] of routes) {
@@ -57,6 +58,53 @@ for (const [label, landmarks] of routes) {
   const hit = landmarks.some(l => text.toLowerCase().includes(l.toLowerCase()));
   check(`route "${label}" renders (${landmarks[0]})`, hit, text.slice(0, 200));
   check(`route "${label}" threw nothing`, errors.length === before, errors.slice(before).join(' | '));
+}
+
+/*
+ * Sprint C: the month-end pack. The page is one printable report, and every
+ * figure on it is server-computed - so this asserts the two things the CLIENT
+ * is responsible for: that a rate is printed with its base, and that the
+ * assumptions (occupancy, baseline, scoring) are stated on the page rather
+ * than left to the reader.
+ */
+await goTo('Reports');
+await flush(10);
+{
+  const text = root().textContent;
+  const packRequest = [...requested].reverse().find(r => r.endpoint === 'report');
+  check('the reports route fetches the pack and the baseline in one request',
+    /* The harness records the raw body string, so read it as JSON. */
+    (() => {
+      try { return Number(JSON.parse(packRequest.body || '{}').baseline) === 1; } catch { return false; }
+    })(),
+    packRequest ? JSON.stringify(packRequest.body).slice(0, 200) : 'no report request');
+  check('the queue table prints the queue target beside the SLA and its base',
+    text.includes('Sales queue') && text.includes('15 s') && text.includes('50.0 % (2)'), text.slice(0, 300));
+  check('an idle queue is on the page as a zero row, not omitted',
+    text.includes('Idle queue'), text.includes('Idle queue'));
+  check('a rate never travels without its base: the missed share prints its base',
+    text.includes('50.0 % (4)'), text.slice(0, 300));
+  check('the DID table carries the abandon base (the missed calls)',
+    text.includes('50.0 % (2)'), text.slice(0, 300));
+  check('the two DID flags are printed, not just computed',
+    text.includes('zero traffic') && text.includes('high abandon'), text.slice(0, 400));
+  check('the staffing estimate states its occupancy beside the numbers',
+    text.includes('85.0 %') && /no roster/i.test(text), text.slice(0, 400));
+  check('the estimate is labelled a baseline rather than a forecast',
+    /baseline, not a forecast/i.test(text), text.slice(0, 400));
+  check('the baseline section prints its window and refuses a 0 % day with no history',
+    text.includes('2026-07-05 – 2026-08-01') && text.includes('no prior weeks'), text.slice(0, 400));
+  check('the data-quality appendix prints counts with their bases',
+    text.includes('Legs with no disconnect reason') && text.includes('100.0 %'), text.slice(0, 400));
+  check('the sentiment line states the scored base',
+    /Base: 3 scored calls, 1 negative-led/.test(text), text.slice(0, 400));
+  check('the page offers print and the CSVs',
+    document.querySelectorAll('.rep-btn').length === 2, document.querySelectorAll('.rep-btn').length);
+  check('the action row is marked no-print',
+    !!document.querySelector('.rep-actions'), 'no .rep-actions node');
+  check('the shell chrome carries the print-hiding classes',
+    !!document.querySelector('.app-nav') && !!document.querySelector('.app-header'),
+    'missing .app-nav / .app-header');
 }
 
 console.log('\n== telephone numbers tabs ==');
