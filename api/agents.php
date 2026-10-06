@@ -427,13 +427,7 @@ try {
         $e->getMessage()
     );
 
-    jsonResponse(
-        [
-            'error' =>
-                'Unable to load agents.'
-        ],
-        502
-    );
+    jsonResponseThrowable($e, 'Unable to load agents.');
 }
 
 

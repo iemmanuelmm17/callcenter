@@ -27,6 +27,9 @@ const SUITES = {
     { name: 'build', cmd: ['node', 'tools/build.mjs'] },
     { name: 'prod build', cmd: ['node', 'tools/prod-build.mjs'] },
     { name: 'php lint', cmd: ['node', 'tools/php-lint.mjs'] },
+    /* The CDR allowlist is generated from the source: a new field read that
+     * was not regenerated fails here, before it can silently drop data. */
+    { name: 'cdr fields', cmd: ['node', 'tools/cdr-fields.mjs'] },
     { name: 'css coverage', cmd: ['node', 'tools/css-coverage.mjs'] },
     { name: 'ui audit', cmd: ['node', 'tools/ui-audit.mjs', '--strict'] },
     { name: 'module budget', cmd: ['node', 'tools/module-budget.mjs'] },
@@ -50,6 +53,7 @@ const SUITES = {
     { name: 'csv exports', cmd: ['node', 'tests/php/export.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'cdr store', cmd: ['node', 'tests/php/cdr-store.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'cdr cache', cmd: ['node', 'tests/php/cdr-cache.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
+    { name: 'cdr memory', cmd: ['node', 'tests/php/cdr-memory.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'outcome parity', cmd: ['node', 'tests/php/outcomes.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'report metrics', cmd: ['node', 'tests/php/report-metrics.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'call links', cmd: ['node', 'tests/php/call-links.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },

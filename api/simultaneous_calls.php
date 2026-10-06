@@ -70,10 +70,7 @@ try {
 
 } catch (Throwable $e) {
     appExceptionLog('simultaneous_calls.php', $e);
-    jsonResponse(
-        ['error' => 'Unable to load simultaneous call data.'],
-        500
-    );
+    jsonResponseThrowable($e, 'Unable to load simultaneous call data.');
 }
 
 

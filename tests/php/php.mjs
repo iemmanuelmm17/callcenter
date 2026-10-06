@@ -131,32 +131,44 @@ final class PbxClient
          * fetchCdrs.json          → one complete page (the default)
          * fetchCdrsPages.json     → [[newRowsOfPage, nextOffset, complete], ...]
          *                           so a test can drive the multi-page path.
-         *                           The stub accumulates the pages and hands
-         *                           the callback the accumulated list, which
-         *                           is what the real client passes (its
-         *                           $serverRows grows per CDR_PAGE_SIZE page).
+         *
+         * The callback contract mirrors the real client: it is handed ONLY
+         * the rows that page added (the real one grew $serverRows per page and
+         * used to hand over the whole accumulated list every time, which is an
+         * O(n^2) copy and doubled the peak - see includes/PbxClient.php). The
+         * stub trims rows the same way the real client does.
          */
+        $trim = static function (array $rows): array {
+            return function_exists('cdrTrimRecords') ? cdrTrimRecords($rows) : $rows;
+        };
         $pages = (array)$this->canned('fetchCdrsPages', []);
         if ($pages !== []) {
             $accumulated = [];
+            $seen = [];
             $result = ['records' => [], 'complete' => false, 'nextOffset' => 0];
             foreach ($pages as $page) {
-                $rows = is_array($page[0] ?? null) ? $page[0] : [];
-                foreach ($rows as $row) {
-                    if (is_array($row)) $accumulated[] = $row;
+                $rows = $trim(is_array($page[0] ?? null) ? $page[0] : []);
+                $new = [];
+                foreach ($rows as $index => $row) {
+                    if (!is_array($row)) continue;
+                    $key = $row['id'] ?? ('page:' . $index . ':' . count($new));
+                    if (isset($seen[$key])) continue;
+                    $seen[$key] = true;
+                    $new[] = $row;
                 }
+                foreach ($new as $row) $accumulated[] = $row;
                 $offset = isset($page[1]) ? (int)$page[1] : count($accumulated);
                 $complete = !empty($page[2]);
-                if (is_callable($onPage)) {
-                    $onPage($accumulated, $offset, $complete);
+                if (is_callable($onPage) && $new !== []) {
+                    $onPage($new, $offset, $complete);
                 }
                 $result = ['records' => $accumulated, 'complete' => $complete, 'nextOffset' => $offset];
             }
             return $result;
         }
 
-        $rows = (array)$this->canned('fetchCdrs', []);
-        if (is_callable($onPage)) {
+        $rows = $trim((array)$this->canned('fetchCdrs', []));
+        if (is_callable($onPage) && $rows !== []) {
             $onPage($rows, count($rows), true);
         }
         return ['records' => $rows, 'complete' => true, 'nextOffset' => count($rows)];

@@ -17,6 +17,62 @@ session_start([
     'cookie_secure' => !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off',
 ]);
 
+/**
+ * Last line of defence for an API request: a PHP fatal (an exhausted
+ * memory_limit being the one that happened in production) is not catchable,
+ * so PHP prints an HTML fatal and the browser gets no JSON at all. This
+ * registers a shutdown check that turns that into the JSON error shape the
+ * client already handles - only for api/*.php, only when nothing has gone out
+ * yet, and never over a download or a recording (those have their own
+ * Content-Type by then).
+ */
+function installApiFatalHandler(): void
+{
+    static $installed = false;
+    if ($installed || PHP_SAPI === 'cli') {
+        return;
+    }
+    $installed = true;
+    $script = (string)($_SERVER['SCRIPT_NAME'] ?? ($_SERVER['PHP_SELF'] ?? ''));
+    if (!str_contains(str_replace('\\', '/', $script), '/api/')) {
+        return;
+    }
+    register_shutdown_function(static function (): void {
+        $error = error_get_last();
+        if (!is_array($error)) {
+            return;
+        }
+        $fatal = [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR];
+        if (!in_array((int)$error['type'], $fatal, true)) {
+            return;
+        }
+        foreach (headers_list() as $header) {
+            if (stripos($header, 'content-type: application/json') === 0) {
+                return;
+            }
+            if (stripos($header, 'content-type:') === 0 && stripos($header, 'json') === false) {
+                return;
+            }
+        }
+        $detail = (string)($error['message'] ?? '');
+        $isMemory = stripos($detail, 'memory') !== false && stripos($detail, 'exhausted') !== false;
+        appLog('FATAL ' . $detail . ' in ' . (string)($error['file'] ?? '') . ':' . (int)($error['line'] ?? 0));
+        if (headers_sent()) {
+            return;
+        }
+        discardBufferedOutput();
+        http_response_code($isMemory ? 413 : 500);
+        header('Content-Type: application/json; charset=utf-8');
+        header('Cache-Control: no-store');
+        echo json_encode([
+            'error' => $isMemory
+                ? 'This report needs more memory than this server allows (PHP memory_limit). Narrow the range, or raise memory_limit in php.ini. The size that failed is in logs/app-*.log.'
+                : 'The report stopped before it could finish. The detail is in logs/app-*.log.',
+            'code' => $isMemory ? 'out_of_memory' : 'fatal',
+        ], JSON_INVALID_UTF8_SUBSTITUTE);
+    });
+}
+
 function appLog(string $message, ?Throwable $e = null): void {
     if ($e instanceof Throwable) {
         $code = $e->getCode();
@@ -53,6 +109,23 @@ function jsonResponse(array $data, int $status = 200): never {
     header('Cache-Control: no-store');
     echo json_encode($data, JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
+}
+
+/**
+ * The failure response for an endpoint catch block.
+ *
+ * A ReportingLimitException is not a server fault: the request was answered
+ * correctly, the answer is "that range does not fit" (413), and its message is
+ * written for the person reading the screen - how big the range is, what the
+ * server allows and what to do. Everything else keeps the endpoint's own
+ * wording and a 502, so an unexpected error is still an unexpected error.
+ */
+function jsonResponseThrowable(Throwable $e, string $fallback): never {
+    if ($e instanceof ReportingLimitException) {
+        appLog('Report capacity: ' . $e->getMessage());
+        jsonResponse(['error' => $e->getMessage(), 'code' => 'range_too_large'], 413);
+    }
+    jsonResponse(['error' => $fallback], 502);
 }
 
 /**
@@ -102,3 +175,5 @@ function readJsonBody(?string $raw = null): array {
     }
     return $data;
 }
+
+installApiFatalHandler();

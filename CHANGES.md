@@ -1,3 +1,112 @@
+# CHANGES — the 512 MB fatal: CDR records are trimmed to what the app reads
+
+**What this phase is about.** On the deployed host a report died with
+
+    Fatal error: Allowed memory size of 536870912 bytes exhausted (tried to
+    allocate 655360 bytes) in includes\reporting\cache.php on line 299
+
+line 299 being the loop that merges a day's raw CDRs into the range. A CDR from
+the ns-api is a wide flat record - well over a hundred fields per call, most of
+them empty - and the app reads a few dozen. The reports layer now asks for wide
+windows (Last 90 days, QTD, YTD, MoM plus a 4-week baseline), so the array of
+raw rows became the largest thing in the process, and several places were
+copying it. Four changes, in order of how much they give back:
+
+## 1. Records are trimmed where they ENTER the process
+
+`includes/reporting/cdr_trim.php` keeps the fields the application can read and
+drops the rest, and it runs at every entry point: the PBX page in
+`includes/PbxClient.php` (so the wide shape never accumulates at all), the day
+cache read, the legacy JSONL reader and the SQLite store read (so an existing
+cache costs the new amount too).
+
+The allowlist is **generated from the source**, not hand-maintained:
+`tools/cdr-fields.mjs` walks every production tree (`includes/`, `api/`,
+`assets/js/src/`, `tools/*.php`, `portal.php`, `index.php`) and collects every
+string literal that can name a field, and regenerates
+`includes/reporting/cdr_keep_fields.php`. A new field read that was not
+regenerated fails `node tools/cdr-fields.mjs`, which runs as the **cdr fields**
+suite. The list is over-inclusive on purpose: a name the PBX never sends costs
+nothing, a name missing from it costs a wrong number.
+
+Two kinds of key are kept by rule rather than by name:
+
+* anything matching `/disconnect|release|hangup/i`, because
+  `callDisconnectReason()` scans keys at RUNTIME rather than naming them (it is
+  the only reader in the app that does - the suite asserts that);
+* anything starting with `_`, which is how the app tags rows it has decorated.
+
+Empty values are dropped as well (a real CDR is mostly empty strings) with one
+documented exception: `call-direction` and `direction`, which are read as
+`?? -1`, where present-but-empty and absent are different answers. Every other
+reader uses `?? ''`, `empty()` or a numeric default that `''` coerces to the
+same - and the suite pins the exception list to exactly those two keys.
+
+## 2. The fetch callback gets one page, not the whole list
+
+`PbxClient::fetchCdrs()` handed `$onPage` `array_values($serverRows)` on every
+page: an O(n) copy per page (O(n^2) per day) on top of the day cache's own
+merge, and a second full copy of the day live at once. It now hands over only
+the rows that page added, and the day cache's callback appends exactly those.
+`loadRawCdrs()` also releases each day's array as soon as it is merged, so the
+peak is a day rather than the whole range plus a copy.
+
+The test double in `tests/php/php.mjs` encoded the OLD contract (it passed the
+accumulated list, "which is what the real client passes"), which is why no
+suite could have caught this; it now mirrors the real one and the suite asserts
+that the real file no longer passes `array_values($serverRows)`.
+
+## 3. A range that cannot fit is refused, not fatal
+
+`includes/reporting/capacity.php`: a report may use 60 % of `memory_limit`
+(`REPORTING_MEMORY_HEADROOM_BYTES` overrides it per deployment). Before a single
+day is loaded, the range is measured from the store's per-day counts and
+refused if it cannot fit; while walking, the projection is re-checked after each
+day, self-calibrated from the memory actually used (or the conservative 3 kB per
+record where PHP cannot measure). Either way it raises
+`ReportingLimitException` with a message written for the person on the screen:
+
+> This range is too large for this server: about 412,300 calls (2026-06-01 to
+> 2026-08-30) need roughly 1.2 GB of memory, but a report may use about 307 MB
+> (PHP memory_limit is 512 MB). Narrow the range - about 102,400 calls fit per
+> request - or raise memory_limit in php.ini.
+
+The CDR-serving endpoints answer **413** with that text (`jsonResponseThrowable()`
+in `includes/bootstrap.php`; everything else still answers its own 502), and
+`installApiFatalHandler()` turns any remaining PHP **fatal** on an `api/*` route
+into JSON of the same shape instead of an HTML fatal page.
+
+## 4. An operator can see the numbers
+
+`php tools/cdr-memory.php <domain> [days]` (read-only, never touches the PBX)
+prints the memory_limit and the budget, the calls cached in the window, and - on
+the most recent cached day - records, bytes per record as stored, how many
+fields the app keeps, how many it drops, and how many calls (days) fit in one
+request.
+
+## What it measured
+
+`tests/php/cdr-memory.mjs`, on a 122-field record built to look like a real one
+(the field families the app reads plus vendor fields nobody reads, most of the
+record empty):
+
+* **122 fields -> 51 kept**, 28,800 empty values dropped over 1,200 records;
+* payload 5,413 kB -> **2,426 kB (45 %)**, and a load of the day produces exactly
+  the trimmed shape;
+* the trim is **behaviour-preserving**: `summary()` and `agentPerformance()` are
+  byte-identical on the wide and the trimmed rows, and a fingerprint of 25
+  accessors (type, agent, site, queue match, disconnect reason, voicemail, flow,
+  recordings, ids, ring/wait/hold/talk, local date, outcome, cache key) is
+  identical too.
+
+## Verification
+
+`npm test` - **28 suites** (was 26: `cdr memory` and `cdr fields` added), all
+green, all PHP suites in strict mode. Every reporting suite (report metrics,
+outcome parity, csv exports, call links, cdr cache, cdr store) re-ran over the
+trimmed pipeline unchanged. `dead-code --strict`, `ui-audit --strict`,
+`css-coverage`, `module-budget`, `no-cdn`, `vendor --check`, `prod-build` clean.
+
 # CHANGES — production hotfix: the four failures reported from the live app
 
 **What this phase is about.** Four things broke in the deployed app, and each

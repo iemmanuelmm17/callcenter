@@ -58,10 +58,7 @@ try {
 
 } catch (Throwable $e) {
     appExceptionLog('telephone_numbers.php', $e);
-    jsonResponse(
-        ['error' => 'Unable to load telephone numbers.'],
-        500
-    );
+    jsonResponseThrowable($e, 'Unable to load telephone numbers.');
 }
 
 

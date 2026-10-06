@@ -603,11 +603,5 @@ $current['topAgents'] = $topAgents;
 
     appExceptionLog('Report', $e);
 
-    jsonResponse(
-        [
-            'error' =>
-                'Unable to load reporting data.'
-        ],
-        502
-    );
+    jsonResponseThrowable($e, 'Unable to load reporting data.');
 }

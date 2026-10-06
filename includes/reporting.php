@@ -10,6 +10,8 @@ declare(strict_types=1);
  * keeps its name, signature and behaviour, so no caller changed.
  * 
  * Module map (see tools/split-php-file.mjs, which produced the split):
+ *   reporting/cdr_trim.php  raw-record field trimming (generated allowlist)
+ *   reporting/capacity.php  report memory guard and ReportingLimitException
  *   reporting/cache.php     day cache read/write, range status, warming, raw load
  *   reporting/support.php   timezone/date maths, durations, logging
  *   reporting/outcomes.php  the one definition of answered/abandoned/voicemail/no-answer
@@ -35,6 +37,8 @@ if (!defined('CDR_PAGE_SIZE')) {
  * The implementation lives in includes/reporting/*.php. This file stays as the
  * single entry point every caller already requires, so no call site changed.
  */
+require_once __DIR__ . '/reporting/cdr_trim.php';
+require_once __DIR__ . '/reporting/capacity.php';
 require_once __DIR__ . '/reporting/cdr_store.php';
 require_once __DIR__ . '/reporting/cache.php';
 require_once __DIR__ . '/reporting/support.php';

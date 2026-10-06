@@ -389,7 +389,10 @@ function cdrStoreDayLoad(string $domain, string $day): ?array
             }
             $record = json_decode((string)$row['raw'], true);
             if (is_array($record)) {
-                $records[] = $record;
+                /* Rows stored before the trim carry every PBX field. Trimming
+                 * on the way out is what makes an existing cache cheap; new
+                 * rows are stored trimmed already (includes/PbxClient.php). */
+                $records[] = cdrTrimRecord($record);
             }
         }
     } catch (Throwable $e) {

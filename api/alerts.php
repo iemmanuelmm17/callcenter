@@ -216,5 +216,5 @@ try {
     ]);
 } catch (Throwable $e) {
     appExceptionLog('Alerts', $e);
-    jsonResponse(['error' => 'Unable to load alerts.'], 502);
+    jsonResponseThrowable($e, 'Unable to load alerts.');
 }

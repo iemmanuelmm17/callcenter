@@ -1,5 +1,23 @@
 {
-  "__facade__": "Facade for the reporting layer.\n *\n * includes/reporting.php used to be 2,348 lines holding the day cache, time\n * helpers, CDR field accessors, row sets, PBX-list caches, cradle helpers and\n * domain settings. It is now a facade over the modules below; every function\n * keeps its name, signature and behaviour, so no caller changed.\n *\n * Module map (see tools/split-php-file.mjs, which produced the split):\n *   reporting/cache.php     day cache read/write, range status, warming, raw load\n *   reporting/support.php   timezone/date maths, durations, logging\n *   reporting/cdr_fields.php per-CDR accessors and call classification\n *   reporting/rows.php      row sets, aggregation, SLA resolution, AA/inventory reads\n *   reporting/inventory.php PBX list caches, phone normalisation, user directory\n *   reporting/cradle.php    cradle path helpers (guarded: also defined elsewhere)\n *   reporting/settings.php  domain settings file handling\n *\n * Adding a reporting function? Put it in the module that matches its concern\n * and make sure includes/reporting.php still requires that module.\n * NOTE (P5): includes/reporting/cache.php has since been refactored on purpose \u2014\n * the day cache now runs on the SQLite store when CDR_CACHE_DRIVER selects it\n * (includes/reporting/cdr_store.php). This map documents the P3b split of\n * commit 616e86a, where the move was verified byte-for-byte; re-running\n * tools/split-php-file.mjs against today's cache.php is not meaningful.\n * NOTE (P6): includes/reporting/outcomes.php was added as its own module and now\n * owns the answered / abandoned / voicemail / no-answer definitions; cdr_fields.php\n * no longer defines missedKind() (see CHANGES.md, the P6 block).",
+  "__facade__": "Facade for the reporting layer.\n *\n * includes/reporting.php used to be 2,348 lines holding the day cache, time\n * helpers, CDR field accessors, row sets, PBX-list caches, cradle helpers and\n * domain settings. It is now a facade over the modules below; every function\n * keeps its name, signature and behaviour, so no caller changed.\n *\n * Module map (see tools/split-php-file.mjs, which produced the split):\n *   reporting/cache.php     day cache read/write, range status, warming, raw load\n *   reporting/support.php   timezone/date maths, durations, logging\n *   reporting/cdr_fields.php per-CDR accessors and call classification\n *   reporting/rows.php      row sets, aggregation, SLA resolution, AA/inventory reads\n *   reporting/inventory.php PBX list caches, phone normalisation, user directory\n *   reporting/cradle.php    cradle path helpers (guarded: also defined elsewhere)\n *   reporting/settings.php  domain settings file handling\n *\n * Adding a reporting function? Put it in the module that matches its concern\n * and make sure includes/reporting.php still requires that module.\n * NOTE (P5): includes/reporting/cache.php has since been refactored on purpose —\n * the day cache now runs on the SQLite store when CDR_CACHE_DRIVER selects it\n * (includes/reporting/cdr_store.php). This map documents the P3b split of\n * commit 616e86a, where the move was verified byte-for-byte; re-running\n * tools/split-php-file.mjs against today's cache.php is not meaningful.\n * NOTE (P6): includes/reporting/outcomes.php was added as its own module and now\n * owns the answered / abandoned / voicemail / no-answer definitions; cdr_fields.php\n * no longer defines missedKind() (see CHANGES.md, the P6 block).",
+  "includes/reporting/cdr_trim.php": [
+    "cdrKeepFieldPatterns",
+    "cdrKeepFieldList",
+    "cdrKeepFieldMap",
+    "cdrFieldIsKept",
+    "cdrTrimRecord",
+    "cdrTrimRecords",
+    "cdrTrimReport"
+  ],
+  "includes/reporting/capacity.php": [
+    "reportingMemoryLimitBytes",
+    "reportingMemoryHeadroomBytes",
+    "reportingBytesLabel",
+    "reportingCapacityMessage",
+    "reportingDayRecordEstimates",
+    "reportingRangeGuard",
+    "reportingProjectedOverflow"
+  ],
   "includes/reporting/cache.php": [
     "isClosedRange",
     "cacheFile",
