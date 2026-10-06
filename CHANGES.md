@@ -1,3 +1,150 @@
+# CHANGES — assets/js/src/app.js (12,292 lines) split into 25 ES modules (P4b)
+
+**Scope:** structure only. Every declaration keeps its exact source text; the
+only edits are the `import`/`export` lines, one setter (see below) and the
+deletion of one dead helper. No component, endpoint, style or response changed.
+
+**Files:** `assets/js/src/app.js` (12,292 → 36 lines, now the entry),
+`assets/js/src/lib/*.js` (7 new), `assets/js/src/components/*.js` (17 new),
+`tools/split-js-file.mjs` + `tools/app-modules.json` (new),
+`tools/module-budget.mjs` (new), `tools/ui-audit.mjs`, `tests/run.mjs`,
+`assets/js/app.js` (rebuilt), `package.json` (+ `acorn`).
+
+## Layout
+
+| module | lines | contents |
+| --- | --- | --- |
+| `app.js` (entry) | 36 | React root, `App`, the auth-expiry wiring |
+| `lib/react.js` | 65 | hook shortcuts, `h`, `keyActivate`, `useEscape`, lazy Tabulator loader |
+| `lib/theme.js` | 42 | stored theme + the stylesheet injection that runs first |
+| `lib/api.js` | 140 | `api`/`apiDownload`, auth expiry, role → route policy |
+| `lib/time.js` | 200 | time zone, timestamps, day/date labels |
+| `lib/format.js` | 61 | numbers, percentages, phone numbers, history labels |
+| `lib/sla.js` | 38 | SLA storage + ring helpers |
+| `lib/recording.js` | 84 | recording URLs and audio element |
+| `components/ui.js` | 364 | icons, skeletons, tooltips, toasts, tabs, theme toggle |
+| `components/charts.js` | 168 | gradients, sparklines, KPI cards, donut |
+| `components/date-range-picker.js` | 1,079 | the range control |
+| `components/filters.js` | 357 | filter bar + call-type toggles |
+| `components/call-history.js` | 740 | history table, cradle dialog, recording player |
+| `components/call-modal.js` | 1,252 | drill-down calls dialog |
+| `components/agents.js` | 1,073 | agent table, sidebar, compare, overview |
+| `components/overview.js` | 655 | operations dashboard |
+| `components/queue.js` | 775 | queue dashboard |
+| `components/telephone-numbers.js` | 796 | inventory + graphs |
+| `components/simultaneous.js` | 604 | simultaneous-call counting |
+| `components/auto-attendants.js` | 515 | list + calls sheet |
+| `components/auto-attendant-structure.js` | 439 | option tree |
+| `components/auto-attendant-report.js` | 1,812 | performance report |
+| `components/settings.js` | 276 | domain settings dialog |
+| `components/login.js` | 76 | login + alerts bell |
+| `components/app-shell.js` | 850 | nav, routing, global filters, modals |
+
+## How the split was done, and why that is safe
+
+`tools/split-js-file.mjs` parses the committed single-file version
+(`--from HEAD`, i.e. the pre-split commit) with acorn, treats every top-level
+statement as a unit, and moves whole statements — **byte-identical, original
+indentation included** — into the files named by `tools/app-modules.json`.
+`import`/`export` lines are derived from the real usage graph: an identifier
+used inside a unit whose declaration lives in another module becomes an import
+from that module. The tool refuses to run if a unit is unassigned, claimed
+twice, needs something that stays in the entry, or if the module graph has a
+cycle.
+
+Verification, all reproducible:
+
+* `node tools/split-js-file.mjs --verify` — hashes every declaration's source
+  text before and after: **115 declarations before, 115 after, 0 missing,
+  0 added, 0 changed bytes**. One declaration (`inSelectedRange`) was dead code
+  and is recorded as dropped; one (`setAuthExpiredHandler`) was added by hand.
+* **A/B render check:** the pre-split bundle and the post-split bundle were
+  mounted in the jsdom harness and the rendered HTML was dumped after visiting
+  all six routes plus every Telephone Numbers tab and the modals: **12/12
+  snapshots byte-identical**, no console errors.
+* `npm test` — all 10 suites pass (php lint, css coverage, ui audit --strict,
+  module budget, dead code --strict, build, js smoke, api matrix 86 checks,
+  url policy 62, csv exports 17).
+* The rebuild is deterministic (two consecutive builds are byte-identical) and
+  the bundle got 21 kB smaller (453,575 → 432,664 bytes) because esbuild now
+  sees real module boundaries instead of one 12k-line IIFE.
+
+## The one manual edit
+
+An ES module cannot assign to an imported binding, and `App` replaced the
+auth-expiry callback on mount/unmount. That single cross-module write is routed
+through `setAuthExpiredHandler()` next to the variable in `lib/api.js`; the map
+records it under `manual`, so `--verify` reports "edited by hand: App" instead
+of hiding it. The tool detects this class of error for any other declaration
+(the split cannot even be generated when a cross-module write exists).
+
+## Guards added
+
+* `tools/module-budget.mjs` (in `npm test`): fails if any module grows past
+  2,000 lines, if an import points at a file that does not exist, or if a
+  module is imported by nobody.
+* `tools/ui-audit.mjs` now audits all 25 modules instead of the single file and
+  names `file:line` for every finding; its component-boundary detection uses
+  the parser instead of indentation (the modules keep the original mixed
+  indentation, which a regex could not handle).
+
+## Known remaining large components (next candidates)
+
+`AutoAttendantReport` (1,812 lines), `CallModal` (1,252), `DateRangePicker`
+(1,079), `AgentPerformanceTable` (378) and `QueueDashboard` (759) are single
+functions; splitting them is functional decomposition, not a file move, so it
+was deliberately left out of a change whose guarantee is "moved, not edited".
+
+---
+
+# CHANGES — UI quality pass: cursors, keyboard parity, dialogs, skeletons, lazy Tabulator (2026-10-06)
+
+**Scope:** presentation only. No endpoint, no response shape, no query changed;
+the PHP suite is untouched and still passes.
+
+**Files:** `assets/js/src/app.js` (+ `assets/js/app.js` rebuilt),
+`portal.php`, `assets/css/app.css` (rebuilt), `tests/js/harness.mjs`,
+`tests/js/smoke.mjs`, `tests/run.mjs`, `README.md`, new `tools/ui-audit.mjs`.
+
+## New audit tool
+
+`tools/ui-audit.mjs` walks all 1,365 `h(...)` elements in the dashboard source
+and reports what a compiler cannot: clickable elements with no cursor styling,
+clickable elements with no keyboard path, interactive controls with no tooltip,
+JS colour literals that duplicate a theme token, clickable classes with no
+stylesheet cursor rule, loading states with no skeleton, hand-rolled
+placeholders that bypass the shared shimmer helper, eagerly loaded heavy
+dependencies, and the remote assets the shell still pulls.
+`tools/ui-audit.mjs --strict` (also part of `npm test`) fails on the four
+classes of finding that must stay at zero; it was itself validated by injecting
+a violation of each kind and confirming exit 1.
+
+## What it found and what changed
+
+| finding | fix |
+| --- | --- |
+| 8 clickable backdrops/modals (`hist-modal-bg`, `hist-modal`, `set-overlay`, `set-modal`, `aa-call-sheet`, `call-modal`) with no cursor styling — they inherited the text cursor although a click on them dismisses the dialog | `cursor-default` on all eight; a backdrop must never look like a button |
+| 4 clickable table rows (`CallHistory`, simultaneous intervals, queue recent calls, agent activity) and the auto-attendant list item were mouse-only | `tabIndex` + `onKeyDown` through a new `keyActivate()` helper: Tab reaches them, Enter/Space activates (with `preventDefault` so Space does not scroll) |
+| dialogs had no semantics: screen readers saw a plain div, and Escape did nothing anywhere | `role="dialog"`, `aria-modal`, `aria-label` on all four dialogs and `role="presentation"` on their backdrops; new `useEscape()` hook closes each dialog with Escape (bound once per open, via a ref) |
+| 4 hand-rolled `animate-pulse bg-slate-800` placeholders (agents sidebar, telephone table, agent comparison, auto-attendant list) ignored the light theme and shimmered at a different rate than every other loader | replaced with the shared `skel()` helper |
+| Tabulator (≈500 kB JS + its midnight stylesheet) was loaded eagerly from a CDN on every page although only the call modal uses it | `ensureTabulator()` injects the pinned stylesheet and script on first use; the modal waits for the global before creating the table and reports an error instead of hanging if the CDN fails. Shell now loads 3 remote assets instead of 5, all `defer` |
+
+The three remaining components the audit first flagged as "loading without a
+skeleton" were false positives of the audit itself: it cut component bodies at
+the next `const` declaration, including nested helpers like `const tile = (`.
+It now only treats PascalCase declarations as component boundaries, and accepts
+`loading` forwarded to a child that renders the skeleton. `CallHistoryDashboard`
+and `TelephoneNumbers` always had skeletons.
+
+## Verification
+
+`npm test`: php lint, css coverage, **ui audit --strict**, dead code --strict,
+build, js smoke (now also asserts keyboard activation, dialog roles, backdrop
+styling and Escape), api matrix 86 checks, url policy 62, csv exports 17 — all
+pass. The rebuild of `assets/js/app.js` and `assets/css/app.css` is committed.
+
+---
+
 # CHANGES — Reporting layer split behind a facade, plus the splitter tool (2026-10-06)
 
 **Scope:** structure only. Every function keeps its name, signature, guards and

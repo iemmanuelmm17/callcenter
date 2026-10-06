@@ -310,13 +310,23 @@ export async function createHarness(options = {}) {
     await flush();
   };
 
+  /* Keyboard activation: rows and list items carry tabIndex + onKeyDown, and
+   * the dialogs listen for Escape on `document`, so the target can be any
+   * element or the document itself. */
+  const press = async (target, key = 'Enter') => {
+    await act(async () => {
+      target.dispatchEvent(new window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    });
+    await flush();
+  };
+
   const byText = (selector, text) =>
     [...window.document.querySelectorAll(selector)].find(el => el.textContent.trim() === text);
   const containing = (selector, text) =>
     [...window.document.querySelectorAll(selector)].find(el => el.textContent.includes(text));
   const root = () => window.document.getElementById('root');
 
-  return { dom, window, document: window.document, React, ReactDOM, flush, click, byText, containing, root, errors, warnings, requested };
+  return { dom, window, document: window.document, React, ReactDOM, flush, click, press, byText, containing, root, errors, warnings, requested };
 }
 
 export const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
