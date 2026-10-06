@@ -1,3 +1,227 @@
+# CHANGES — QA round 2: the remaining P1s, the history purge, the large modules
+
+**Scope:** the three P1 findings round 1 left for a decision (QA-3, QA-4,
+QA-5), the QA-2 history purge, and the module-size work QA-11 pointed at —
+including the two files it named as "next" (`agents.js`, `date-range-picker.js`)
+and `call-modal.js` after the round-1 split left it at 1,139 lines.
+
+**The four decisions this round was waiting on** (answered 2026-10-06):
+
+1. **QA-5** — supervisors may *read* the thresholds, only an office manager may
+   change them; the GET is role-gated *and* the thresholds ship inside the
+   dashboard payload, so no role can colour a report differently from the server.
+2. **QA-3** — vendor React, ReactDOM, Chart.js, Tabulator, Font Awesome and IBM
+   Plex Mono into `assets/vendor`; nothing is fetched from a CDN at runtime.
+3. **QA-4** — commit the *minified, content-hashed* production build only; the
+   unminified dev build stays local (git-ignored) for the jsdom harness.
+4. **QA-2** — purge `cache/` + `logs/` from history, force-push both refs, and
+   make the repository private.
+
+**Read this before you pull.** The QA-2 purge rewrote every commit in this
+repository, so every SHA changed and a normal `git pull` will not fast-forward.
+The working trees are unchanged: the branch tip tree is byte-identical
+(`38790995…`) and `main`'s tree is byte-identical (`241a9e84…`) to what they were
+before the rewrite. See "History rewrite" below for the fetch/reset commands.
+
+## Commits (post-rewrite)
+
+| commit | what |
+| --- | --- |
+| `53928ab` | QA-5 — settings read/write split, thresholds in the dashboard payload |
+| `dbd9f7a` | QA-3 — vendored third-party assets, SRI, `tools/no-cdn.mjs`, portal suite |
+| `966ca19` | QA-4 — minified content-hashed prod build + `tools/prod-build.mjs` |
+| `dd27ab5` | AA report — derived numbers moved to `lib/aa-report-model.js` |
+| `0a37a41` | date-range picker — calendar arithmetic moved to `lib/date-range.js` |
+| `3ddb9c4` | agents — one file split into four views |
+| `5d7e728` | call modal — pagination arithmetic moved to `lib/pagination.js` |
+| *(rewrite)* | QA-2 — `cache/` + `logs/` dropped from all history, both refs force-pushed |
+
+## History rewrite (QA-2)
+
+**What was in there.** 93 files — `cache/cdr-day-*.json`,
+`cache/aa/<tenant>.json`, `cache/callqueues-*.json`, `logs/app-*.log`,
+`logs/audit-2026-09.jsonl`, `logs/audit-2026-10.jsonl`: caller numbers, tenant
+domains, PBX payloads and a per-user record of who viewed and exported what.
+They entered at `bfbc3f5` ("First commit"), were deleted from the tracking in
+round 1 (`c92750d`), and stayed reachable in history — including through the
+two "Delete cache/logs directory" commits on `main`.
+
+**What was done** (all local, before any push):
+
+```
+git filter-branch --force --prune-empty \
+  --index-filter 'git rm -r --cached --ignore-unmatch cache logs' \
+  --msg-filter '…' -- --all
+git update-ref -d refs/original/…   # then reflog expire --expire=now --all && git gc --prune=now
+```
+
+* `--prune-empty` also dropped the three commits whose *only* change was those
+  paths (`c92750d` "stop tracking runtime state", `2f2c8f7` "Delete logs
+  directory", `3149a5c` "Delete cache directory"): keeping a no-op commit with
+  that message would be misleading.
+* The `--msg-filter` fixed four round-2 commit messages whose suite count was
+  off by one (`npm test: 20/20` → `19/19`, etc.). The counts per phase are 17
+  (QA-3), 18 (QA-4), 19 (AA split), 20 (date range), 20 (agents), 21
+  (pagination).
+* **Before:** branch 28 commits, `main` 29. **After:** branch 28, `main` 26
+  (28 − the three no-op commits; `main` also lost its own two "Delete …"
+  commits).
+* **Verified:** `git log --all --name-only -- cache logs` is empty;
+  `git rev-list --objects --all | grep -c " cache/\| logs/"` is 0; the old tip
+  objects no longer resolve (`git cat-file -t 7e3449e` → fatal); `.git` shrank
+  from ~10 MB to 2.0 MB.
+* **Pushed with leases** so a concurrent push would have aborted:
+  `--force-with-lease=refs/heads/arena/ecdba782-callcenter:<old>` and
+  `--force-with-lease=refs/heads/main:<old>`. `main` is force-pushed here and
+  only here — the purge does not change a single byte of its tree.
+* **Still public.** The sandbox's GitHub token can push but has no
+  administration scope, so `gh api -X PATCH … -f private=true` returned
+  `403 Resource not accessible by integration`. The repository must be flipped
+  to private by hand: **Settings → General → Danger zone → Change visibility**.
+* **What GitHub may still hold.** Unreachable commits can remain addressable by
+  SHA on GitHub until its own housekeeping runs; nobody can reach them from a
+  normal clone. The repository was public with **0 forks**, which bounds the
+  exposure.
+* **Any existing clone must be re-pointed:**
+
+  ```
+  git fetch --force origin
+  git checkout main
+  git reset --hard origin/main
+  git remote set-head origin -a
+  ```
+
+## QA-5 — Settings: supervisors read, managers write
+
+`api/settings.php` had one `GET`/`POST` for everyone: the panel was in every
+role's nav, the endpoint answered any signed-in user, and a supervisor could
+rewrite the tenant thresholds that colour every report.
+
+* `requirePageRoles` now sits above both method branches: `GET` is
+  `['office_manager','supervisor']`, `POST` is `['office_manager']`. An `agent`
+  or `basic_user` gets 403 on both; a supervisor gets 200 on `GET` with
+  `canEdit: false` and 403 on `POST`.
+* The GET response carries `canEdit`, and `assets/js/src/lib/roles.js` (new)
+  mirrors the policy for the UI: `CAN_READ_SETTINGS`, `CAN_WRITE_SETTINGS`,
+  `ROLES_READING_SETTINGS`.
+* `app-shell.js` only fetches settings (and only renders the nav button) when
+  the role may read them; the panel opens read-only for supervisors — no Save,
+  no Reset, and the copy says so ("View only. Only an office manager can change
+  the domain thresholds.").
+* **The colours agree for every role:** `api/report.php` now includes
+  `settings` in the dashboard payload, and `app-shell.js` applies it, so a
+  supervisor who cannot call `settings.php` still sees the same SLA/missed/
+  abandoned thresholds as the manager in the next seat.
+* Evidence: `tests/php/endpoints.mjs` grew a six-check QA-5 block plus four
+  matrix rows (101/101 checks), and `tests/js/smoke.mjs` renders the panel for
+  agent / basic_user / supervisor / office_manager and asserts that a
+  supervisor's DOM contains no `.set-save` and no `.set-reset` at all.
+
+## QA-3 — the front end has no third-party runtime dependency
+
+React, ReactDOM and Chart.js came from unpkg/jsdelivr at parse time, Tabulator
+(JS + 29 kB CSS) from unpkg the first time a drill-down opened, the icon font
+from cdnjs and IBM Plex Mono from Google Fonts — none of it with an integrity
+hash, inside an authenticated session, on networks that often cannot reach any
+of them.
+
+* `tools/vendor.mjs` copies the 13 needed files out of the *pinned npm
+  packages* (devDependencies), writes each file's sha256 + sha384 into
+  `assets/vendor/VENDOR.json`, and copies the six upstream licenses into
+  `assets/vendor/licenses/`. `--check` re-verifies every hash (part of
+  `npm test`).
+* `portal.php` reads that manifest and emits the tags with `integrity`
+  attributes; a missing vendor tree degrades with a visible message instead of
+  a blank page.
+* `lib/react.js` loads Tabulator lazily from `assets/vendor/tabulator/`, with
+  the integrity hash taken from the `#vendor-manifest` JSON the shell renders —
+  the lazy path gets SRI too. `lib/theme.js` lost its two runtime CDN `<link>`
+  injections.
+* `tools/no-cdn.mjs` (new, in the suite) fails if a template or source starts
+  referencing one of the CDN hosts again.
+* 13 files, 1.3 MB of assets (Tabulator 432 kB, Font Awesome webfonts 293 kB,
+  Chart.js 201 kB, ReactDOM 129 kB of that).
+
+## QA-4 — the deployed bundle is minified, hashed and checkable
+
+The front end shipped as a fixed-name, unminified `assets/js/app.js` (444 kB),
+so a deploy could not be proven to have reached a browser.
+
+* `npm run build` → dev: `assets/js/app.js` + `assets/css/app.css`,
+  unminified, git-ignored (this is what the jsdom harness mounts).
+* `npm run build:prod` → deploy: `assets/js/app.<sha256[:10]>.js` +
+  `assets/css/app.<hash>.css`, minified, plus `assets/build-manifest.json` with
+  both names and their sha384. **JS 444 kB → 225 kB, CSS 136 kB → 111 kB.**
+* `portal.php` reads the manifest and emits the hashed pair with integrity
+  hashes; without a manifest (a dev checkout) it falls back to the unversioned
+  files, and a malformed manifest falls back instead of breaking the page.
+* `tools/build.mjs --prod --check` fails when the committed artifacts are stale
+  — the exact failure a fixed filename used to hide — and
+  `tools/prod-build.mjs` (new suite) asserts the filename carries the file's own
+  hash, the manifest integrity matches the bytes, the minified pair is
+  materially smaller, exactly one hashed pair is committed, and a second run is
+  byte-identical.
+* `tests/run.mjs` builds first, because `css coverage`, `ui-audit` and the smoke
+  suite read build output a fresh clone does not have.
+* README: the deploy section says cache the hashed pair immutably; a new
+  "Third-party assets" section documents the vendor workflow.
+
+## Module splits
+
+| module | before | after | what moved |
+| --- | --- | --- | --- |
+| `components/auto-attendant-report.js` | 1,698 | 1,459 | `lib/aa-report-model.js` (303) — totals, abandonment, outcome buckets, digits, destinations, hourly peak |
+| `components/call-modal.js` | 1,140 | 973 | `lib/pagination.js` (155) — page windowing, clamp, range wording, page sizes |
+| `components/agents.js` | 1,100 | 131 | `agent-table.js` (399), `agent-compare.js` (277), `agent-overview.js` (340) |
+| `components/date-range-picker.js` | 1,079 | 943 | `lib/date-range.js` (150) — calendar/date arithmetic |
+
+Every move was done by cutting whole declarations and re-parsing both sides to
+compare the source text byte-for-byte (`units verified byte-identical: N`), the
+same technique the P4b entry file split used. Nothing is over 1,459 lines now;
+`app-shell.js` (937), `telephone-numbers.js` (813), `queue.js` (791) and
+`overview.js` (655) were checked for seams and left alone — they are under half
+the 2,000-line budget and their parts share state.
+
+## Tests added this round
+
+| suite | what it pins |
+| --- | --- |
+| `tests/js/aa-model.mjs` | the AA report's arithmetic on a five-call fixture: totals, unique callers, mean duration, the abandoned flag beating the reason text, outcome buckets summing to the call count, digit ordering, local-hour buckets, peak ranking, `formatHourLabel` |
+| `tests/js/date-range.mjs` | inclusive day spans, month/year boundaries in `addDays`, leap Februaries, the 31-day cap (at the cap, one over, today wins), the month grid's leading blanks |
+| `tests/js/pagination.mjs` | the three page-window shapes, first/last/current page always present, ascending numbers, `clampPage` at both ends, the range wording |
+| `tests/php/portal.mjs` | the real `portal.php` renders only local, existing, hash-carrying tags; the prod manifest is honoured; a malformed manifest falls back |
+| `tools/prod-build.mjs` | the committed prod build matches the sources, the name carries the content hash, the integrity matches, one pair only, reproducible |
+| `tools/no-cdn.mjs` | no CDN host in templates or sources |
+| `tools/vendor.mjs --check` | the vendored bytes still match `VENDOR.json` |
+| `tests/js/smoke.mjs` (+38 checks) | the settings-panel role matrix; the date-range popup driven for real (open, page back, pick two days, apply); the call modal footer (range line, four page sizes, one button per page, next → page 2, size 100 → page 1) |
+
+Two real bugs fell out of writing those tests: the harness handed the app
+`react-dom/client`, which has no `createPortal`, so *every* portalled dialog
+threw the moment a test opened one (and React's error text was being ignored as
+a console.error); and the calendar extraction left the picker without its
+`maxDate` binding, which only showed up once the popup was opened.
+
+## Evidence
+
+* `npm test` — **21/21 suites**, `ALL SUITES PASSED`
+  (build, prod build, php lint, css coverage, ui audit, module budget, dead
+  code, no cdn, vendor check, js smoke, aa fields, aa model, date range,
+  pagination, api matrix, url policy, csv exports, cdr store, cdr cache,
+  outcome parity, portal).
+* `tests/php/endpoints.mjs` — 101/101 checks (QA-5 matrix + behaviour).
+* `node tools/module-budget.mjs` — 37 modules, 13,310 lines, largest 1,459.
+* `node tools/prod-build.mjs` — `PROD BUILD OK — hashed, minified,
+  integrity-checked, in sync with the sources`.
+* History purge — see the verification list above (all four checks pass, both
+  remote refs confirmed).
+
+## Still open
+
+* **Repository visibility** — flip to private (token has no admin scope).
+* **`main` is a merge away from this branch**: all round-2 work lives on
+  `arena/ecdba782-callcenter` (`5d7e728`); `main` (`8567672`) still carries the
+  round-1 tree it was merged from.
+
 # CHANGES — QA round 1: the P0s and P2s from QA-REVIEW.md
 
 **Scope:** everything `QA-REVIEW.md` rated **P0** or **P2**. The P1s (CDN

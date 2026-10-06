@@ -1,7 +1,11 @@
 # QA review — CallScope reporting
 
-**Reviewed:** branch `arena/ecdba782-callcenter` @ `3b8b838` (P7), the same tree
+**Reviewed:** branch `arena/ecdba782-callcenter` @ `59475b7` (P7), the same tree
 that is merged into `main`.
+**Note (QA round 2):** the QA-2 history purge rewrote every commit, so the SHAs
+below are the current ones. Round-1 SHAs map as follows: `092bbc0`→`8872d72`,
+`c92750d`→*removed by the purge*, `7b0ae4e`→`1437ef8`, `67db536`→`7e2e706`,
+`23d9c86`→`982e971`, `750d4d7`→`2b12fd5`, `3b8b838`→`59475b7`.
 **Method:** full read-through of `api/`, `includes/`, `assets/js/src/`, `tools/`
 and `tests/`; targeted instrumentation of the real bundle in the jsdom harness;
 two reproduction probes against a real PHP 8.4 interpreter; `npm test` (13
@@ -36,33 +40,41 @@ and the test evidence. In short:
 
 | finding | commit | what a reader should verify |
 | --- | --- | --- |
-| QA-1 XSS | `092bbc0` | `tests/js/smoke.mjs` mounts every text column the way Tabulator does; it fails against the pre-fix source |
-| QA-2 tracked runtime state | `c92750d` | `git ls-files cache logs` is empty; the files are still on disk |
-| QA-6 queue rows | `23d9c86` | queue recent rows now carry the CDR id, and Open sends it as `callId` |
-| QA-7 dead `paused` | `67db536` | no `paused` in `queue.js`/`app-shell.js` |
-| QA-8 metric vocabulary | `7b0ae4e` | `includes/reporting/metrics.php`; unknown metric → 422; `api/filters.php` serves labels |
-| QA-9 error states | `67db536` | `ui.js::ErrorState`; the smoke suite forces a 502 and asserts Retry recovers |
-| QA-10 playback audit | `23d9c86` | `logs/audit-*.jsonl` gets `"resource":"recording"` on both paths |
-| QA-11 big modules | `750d4d7` | `call-modal-columns.js`, `lib/aa-call-fields.js`; the smoke suite pins the column set/order |
+| QA-1 XSS | `8872d72` | `tests/js/smoke.mjs` mounts every text column the way Tabulator does; it fails against the pre-fix source |
+| QA-2 tracked runtime state | `c92750d` → purged | `git ls-files cache logs` is empty, and round 2 removed the blobs from history as well |
+| QA-6 queue rows | `982e971` | queue recent rows now carry the CDR id, and Open sends it as `callId` |
+| QA-7 dead `paused` | `7e2e706` | no `paused` in `queue.js`/`app-shell.js` |
+| QA-8 metric vocabulary | `1437ef8` | `includes/reporting/metrics.php`; unknown metric → 422; `api/filters.php` serves labels |
+| QA-9 error states | `7e2e706` | `ui.js::ErrorState`; the smoke suite forces a 502 and asserts Retry recovers |
+| QA-10 playback audit | `982e971` | `logs/audit-*.jsonl` gets `"resource":"recording"` on both paths |
+| QA-11 big modules | `2b12fd5` | `call-modal-columns.js`, `lib/aa-call-fields.js`; the smoke suite pins the column set/order |
 
-QA-3, QA-4 and QA-5 (all P1) are deliberately untouched and still need your
-answers to Q1/Q3/Q4 below.
+QA-3, QA-4 and QA-5 (all P1) were deliberately left for a decision in round 1;
+all three are answered and done now, and so is QA-2 in full:
+
+| finding | commit | what a reader should verify |
+| --- | --- | --- |
+| QA-2 history purge | *(rewrite)* | `git log --all --name-only -- cache logs` is empty in a fresh clone; the old objects are gone; **the repository still needs to be switched to private** (the sandbox token has no admin scope) |
+| QA-3 vendored assets | `dbd9f7a` | `tools/no-cdn.mjs` fails if a CDN host reappears; `tests/php/portal.mjs` renders the real shell and checks every tag is local + hashed |
+| QA-4 prod build | `966ca19` | `assets/build-manifest.json` names the two hashed files; `tools/prod-build.mjs` fails when a source changes without a rebuild |
+| QA-5 settings policy | `53928ab` | supervisors get the panel read-only (`tests/php/endpoints.mjs` asserts the 403 on POST); thresholds ship in the dashboard payload so no role colours a report differently |
+| QA-11 module size | `dd27ab5`, `0a37a41`, `3ddb9c4`, `5d7e728` | `node tools/module-budget.mjs`; the four splits are byte-for-byte moves with new unit tests |
 
 ## Findings
 
 | # | Sev | Area | Finding | Status |
 | --- | --- | --- | --- | --- |
-| QA-1 | **P0** | security | Caller-ID name (and 4 other text columns) rendered as HTML in the drill-down table → stored XSS | **Fixed** `092bbc0` — text formatters return Text nodes; regression test mounts them the Tabulator way |
-| QA-2 | **P0** | hygiene / privacy | 93 runtime files under `cache/` + `logs/` are tracked in git on this branch (CDR payloads, audit trail); `origin/main` has them removed, so every merge re-adds them | **Fixed** `c92750d` — `git rm --cached`; history left alone by choice (no force-push), so old blobs remain |
-| QA-3 | **P1** | supply chain | React/Chart.js loaded from public CDNs; Tabulator JS+CSS fetched from unpkg on first modal open; no SRI, no CSP | Open — P1, out of this round (needs the internal-only answer, Q3) |
-| QA-4 | **P1** | ops | App assets are not minified (JS 444 kB, CSS 139 kB) and not cache-busted (`assets/js/app.js` with no `?v=`) | Open — P1, out of this round (needs the build/deploy decision, Q4) |
-| QA-5 | **P1** | policy | Settings is shown to every role, readable by every role, and writable by supervisors — tenants-wide thresholds that colour every report | Open — P1, out of this round (needs the policy answer, Q1) |
-| QA-6 | **P2** | consistency | "Recent calls" on the Queues screen carry no call id (`parentId` is an internal grouping key) → the one screen that cannot drill into a single call | **Fixed** `23d9c86` — recent rows carry the CDR id + an Open button; tested both sides |
-| QA-7 | **P2** | dead code | `paused` prop on `QueueDashboard` is unreachable (`paused: false` hardcoded) and the live-ops screen never refreshes itself | **Fixed** `67db536` — prop removed; the live mode it implied is backlog F2 |
-| QA-8 | **P2** | correctness | Metric names are an implicit contract; unknown metrics silently return "no calls" instead of an error, and `metricLabels` duplicates the vocabulary in the modal | **Fixed** `7b0ae4e` — `includes/reporting/metrics.php`, 422 on unknown, served via `api/filters.php` |
-| QA-9 | **P2** | polish | Error copy is inconsistent ("Failed to load…" vs "Unable to load…", no Retry), and `formatPhoneNumber` is NANP-only + duplicated | **Fixed** `67db536` — one `ErrorState` with Retry in every panel; duplicate formatter merged; audio ids safe |
-| QA-10 | **P2** | audit | Playing a recording is not audited (views and exports are) | **Fixed** `23d9c86` — playback audited (`stream:0` and `stream:1`) |
-| QA-11 | **P2** | maintainability | `auto-attendant-report.js` is 1789 of the 2000-line module budget; `call-modal.js` 1469 | **Partly fixed** `750d4d7` — the two named files split (1,469→1,139 and 1,789→1,698); next: `agents.js` 1,100, `date-range-picker.js` 1,079 |
+| QA-1 | **P0** | security | Caller-ID name (and 4 other text columns) rendered as HTML in the drill-down table → stored XSS | **Fixed** `8872d72` — text formatters return Text nodes; regression test mounts them the Tabulator way |
+| QA-2 | **P0** | hygiene / privacy | 93 runtime files under `cache/` + `logs/` are tracked in git on this branch (CDR payloads, audit trail); `origin/main` has them removed, so every merge re-adds them | **Closed** `c92750d` (removed by the purge) untracked them; the round-2 purge removed them from history and force-pushed both refs. Repository visibility still needs to be flipped to private |
+| QA-3 | **P1** | supply chain | React/Chart.js loaded from public CDNs; Tabulator JS+CSS fetched from unpkg on first modal open; no SRI, no CSP | **Fixed** `dbd9f7a` — everything comes from `assets/vendor` with SRI from `VENDOR.json`; `tools/no-cdn.mjs` guards the regression |
+| QA-4 | **P1** | ops | App assets are not minified (JS 444 kB, CSS 139 kB) and not cache-busted (`assets/js/app.js` with no `?v=`) | **Fixed** `966ca19` — `npm run build:prod` emits `app.<hash>.js/css` + a manifest; JS 225 kB, CSS 111 kB; the dev build is git-ignored |
+| QA-5 | **P1** | policy | Settings is shown to every role, readable by every role, and writable by supervisors — tenants-wide thresholds that colour every report | **Fixed** `53928ab` — supervisors read, only the office manager writes (server + UI); the GET is role-gated and thresholds ship with the dashboard payload |
+| QA-6 | **P2** | consistency | "Recent calls" on the Queues screen carry no call id (`parentId` is an internal grouping key) → the one screen that cannot drill into a single call | **Fixed** `982e971` — recent rows carry the CDR id + an Open button; tested both sides |
+| QA-7 | **P2** | dead code | `paused` prop on `QueueDashboard` is unreachable (`paused: false` hardcoded) and the live-ops screen never refreshes itself | **Fixed** `7e2e706` — prop removed; the live mode it implied is backlog F2 |
+| QA-8 | **P2** | correctness | Metric names are an implicit contract; unknown metrics silently return "no calls" instead of an error, and `metricLabels` duplicates the vocabulary in the modal | **Fixed** `1437ef8` — `includes/reporting/metrics.php`, 422 on unknown, served via `api/filters.php` |
+| QA-9 | **P2** | polish | Error copy is inconsistent ("Failed to load…" vs "Unable to load…", no Retry), and `formatPhoneNumber` is NANP-only + duplicated | **Fixed** `7e2e706` — one `ErrorState` with Retry in every panel; duplicate formatter merged; audio ids safe |
+| QA-10 | **P2** | audit | Playing a recording is not audited (views and exports are) | **Fixed** `982e971` — playback audited (`stream:0` and `stream:1`) |
+| QA-11 | **P2** | maintainability | `auto-attendant-report.js` is 1789 of the 2000-line module budget; `call-modal.js` 1469 | **Fixed** `2b12fd5` + round 2 — AA 1,698→1,459 (model extracted), call-modal 1,140→973, `agents.js` 1,100→four files, `date-range-picker.js` 1,079→943; nothing is over 1,459 |
 
 ---
 
@@ -302,3 +314,15 @@ node tools/module-budget.mjs        :: line-budget report (QA-11)
 // DID maps to queue 700 + one abandon in 700. queue.php: 700.totalCalls = 1,
 // 701.totalCalls = 1; calls.php?queue=700 → ['q2'], queue=701 → ['q1'].
 ```
+
+---
+
+## Round 2 — QA-2 in full, and the P1s
+
+The three P1s and the QA-2 follow-up are done; `CHANGES.md` ("QA round 2") has
+the detail and the test evidence. The one item this environment could not
+complete is the repository visibility change: the sandbox's GitHub token can
+push but has no administration scope, so `main` and this branch were
+force-pushed with the purged history while the repository is **still public**.
+Flip it in Settings → General → Danger zone → Change visibility (no data is
+affected by that step; it only stops anonymous reads of what remains).
