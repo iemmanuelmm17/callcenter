@@ -1,9 +1,9 @@
 /* CallScope reporting dashboard — entry point.
  *
  * The application used to live in this one 12,000-line file; it is now
- * assembled from the modules under lib/ and components/. The table of
- * contents is tools/app-modules.json. This file keeps the React root and
- * the two top-level components that mount it. */
+ * assembled from the modules under lib/ (api, time, format, …) and
+ * components/ (one file per screen). The map is tools/app-modules.json. This
+ * file keeps the React root, `App` and the auth-expiry wiring. */
 
 import { Dashboard } from './components/app-shell.js';
 import { Login } from './components/login.js';

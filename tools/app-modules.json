@@ -1,5 +1,6 @@
 {
   "note": "Map for tools/split-js-file.mjs: which top-level unit of the original assets/js/src/app.js lives in which module. A unit is named by any declaration it makes, or by #<line> when it declares nothing. Anything not listed stays in the entry. `dropped` lists declarations that were deleted instead of moved (dead code).",
+  "from": "42a8ee0",
   "dropped": [
     "inSelectedRange"
   ],

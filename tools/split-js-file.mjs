@@ -7,9 +7,10 @@
  *   node tools/split-js-file.mjs --from HEAD          # write the modules + new entry
  *   node tools/split-js-file.mjs --verify             # hash every unit before/after
  *
- * `--from <git-ref>` (default HEAD) is the commit that still holds the
- * single-file version; the split has already happened in the working tree, so
- * the original is read from git rather than from disk.
+ * `--from <git-ref>` overrides the source commit; by default it is the one
+ * recorded as `from` in tools/app-modules.json (the last commit before the
+ * split). The original is read from git, not from disk, because the working
+ * tree already holds the split.
  *
  * Why a tool instead of hand-editing: the file holds ~115 top-level
  * declarations inside one IIFE, and the only way to prove a move happened
@@ -36,16 +37,18 @@ const ENTRY = path.join(ROOT, 'assets/js/src/app.js');
 const MAP_FILE = path.join(ROOT, 'tools/app-modules.json');
 const dry = process.argv.includes('--dry');
 const verify = process.argv.includes('--verify');
+const map = JSON.parse(readFileSync(MAP_FILE, 'utf8'));
 const fromIndex = process.argv.indexOf('--from');
-const from = fromIndex === -1 ? 'HEAD' : process.argv[fromIndex + 1];
+/* Default to the commit recorded in the map: HEAD is the split result, so it
+ * cannot be its own source. */
+const from = fromIndex === -1 ? (map.from || 'HEAD') : process.argv[fromIndex + 1];
 
-/* The pre-split file: a git ref (default HEAD) or a path. */
+/* The pre-split file: a git ref or a path. */
 const originalOf = ref => {
   if (existsSync(ref)) return readFileSync(ref, 'utf8');
   return execFileSync('git', ['show', `${ref}:assets/js/src/app.js`], { cwd: ROOT, encoding: 'utf8' });
 };
 const source = originalOf(from);
-const map = JSON.parse(readFileSync(MAP_FILE, 'utf8'));
 const lineOf = index => source.slice(0, index).split('\n').length;
 const sha = text => createHash('sha256').update(text).digest('hex').slice(0, 16);
 
