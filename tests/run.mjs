@@ -32,7 +32,8 @@ const SUITES = {
     { name: 'module budget', cmd: ['node', 'tools/module-budget.mjs'] },
     { name: 'dead code', cmd: ['node', 'tools/dead-code.mjs', '--strict'] },
     { name: 'no cdn', cmd: ['node', 'tools/no-cdn.mjs'] },
-    { name: 'vendor check', cmd: ['node', 'tools/vendor.mjs', '--check'] }
+    { name: 'vendor check', cmd: ['node', 'tools/vendor.mjs', '--check'] },
+    { name: 'deploy check', cmd: ['node', 'tests/js/deploy-check.mjs'] }
   ],
   js: [
     { name: 'js smoke', cmd: ['node', 'tests/js/smoke.mjs'] },
