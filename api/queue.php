@@ -70,39 +70,15 @@ try {
         return $value;
     };
 
-    $cdrIdBag = static function (array $row): array {
-        $ids = [];
-        foreach ([
-            'call-orig-call-id',
-            'call-parent-call-id',
-            'call-parent-cdr-id',
-            'call-through-call-id',
-            'call-term-call-id',
-            'call-id',
-            'cdr-id',
-            'id',
-        ] as $field) {
-            $v = trim((string)($row[$field] ?? ''));
-            if ($v !== '') {
-                $ids[$v] = true;
-            }
-        }
-        /*
-         * BUGFIX: array_map('strval', ...) is required.
-         *
-         * PHP silently casts numeric-string array keys to int, so a
-         * purely numeric call id like "20260115143022" comes back from
-         * array_keys() as an INT. Under declare(strict_types=1) that
-         * then fatals in the string-typed helpers below:
-         *
-         *   {closure}(): Argument #1 ($a) must be of type string,
-         *   int given  (queue.php line 213, called from line 233)
-         *
-         * Forcing every id back to string keeps $ufUnion/$ufFind and the
-         * id index working for both numeric and alphanumeric call ids.
-         */
-        return array_map('strval', array_keys($ids));
-    };
+    /*
+     * cdrIdBag() moved to includes/reporting/links.php: api/cradle.php had its
+     * own copy WITHOUT the numeric-id fix below, so the same call could be one
+     * interaction on the queue screen and several on the cradle. One definition
+     * now, in the reporting layer, next to the transfer/callback/repeat metrics
+     * that depend on it. (The strval fix it carries: PHP casts numeric-string
+     * array keys to int, which under strict_types fatals in string-typed
+     * helpers - a purely numeric call id hit exactly that.)
+     */
 
     $directory = userDirectory($user);
     $agentNames = [];
@@ -252,7 +228,7 @@ try {
         if (!is_array($row)) {
             continue;
         }
-        $ids = $cdrIdBag($row);
+        $ids = cdrIdBag($row);
         if ($ids === []) {
             $ids[] = 'row:' . $i;
         }
@@ -272,7 +248,7 @@ try {
         if (!is_array($row)) {
             continue;
         }
-        $ids = $cdrIdBag($row);
+        $ids = cdrIdBag($row);
         $key = $ids !== [] ? $ufFind($ids[0]) : ('row:' . $i);
         $legsByRoot[$key][] = $row;
     }
@@ -295,7 +271,7 @@ try {
         if (!is_array($row)) {
             continue;
         }
-        foreach ($cdrIdBag($row) as $id) {
+        foreach (cdrIdBag($row) as $id) {
             $rowsById[$id][$i] = true;
         }
     }
@@ -307,7 +283,7 @@ try {
      */
     $relatedCdrs = static function (array $row) use ($raw, $rowsById, $cdrIdBag): array {
         $hits = [];
-        foreach ($cdrIdBag($row) as $id) {
+        foreach (cdrIdBag($row) as $id) {
             if (!isset($rowsById[$id])) {
                 continue;
             }
@@ -510,7 +486,7 @@ try {
             $sentDot = 'negative';
         }
 
-        $ids = $cdrIdBag($row);
+        $ids = cdrIdBag($row);
         $origKey = trim((string)($row['call-orig-call-id'] ?? $row['call-parent-call-id'] ?? ''));
         $parentKey = $origKey !== '' ? $origKey : ($ids !== [] ? $ufFind($ids[0]) : '');
         /*

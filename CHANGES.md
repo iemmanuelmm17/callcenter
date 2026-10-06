@@ -1,3 +1,78 @@
+# CHANGES — Sprint A, phase 2: one call, many legs (transfers, callbacks, repeats)
+
+**What this phase is about.** A NetSapiens call is not a row: a transferred call
+is two or three rows sharing `call-orig-call-id`/`call-parent-call-id`. Three
+different copies of "which rows are the same conversation" had grown in the tree,
+and none of them could answer the two questions a manager asks every morning —
+*how often do we bounce a caller between two agents*, and *which missed calls did
+we return*.
+
+## New: `includes/reporting/links.php`
+
+The one definition of call identity, and the three metrics that need it:
+
+| function | what it answers |
+| --- | --- |
+| `cdrIdBag()` / `cdrLegIndex()` / `cdrRootKey()` / `cdrInteractionLegs()` | which rows are one conversation (union-find over every shared id, PBX leg order preserved, a stable fingerprint for rows with no ids at all) |
+| `cdrOfferedInteractions()` | how many calls did we receive — one entry per conversation, not per leg. This is the denominator the app never had |
+| `cdrTransferCount()` / `cdrTransferPairs()` | how many times a conversation was handed to a **different** agent, and the pairs |
+| `cdrTransferSummary()` | hand-offs, transferred conversations, the pair lists, and the rate |
+| `cdrCallbacks()` | which missed calls were returned, by whom, and how fast; plus the unreturned worklist |
+| `cdrRepeatCallers()` | the same customer calling again, split 24 h / 72 h, with the honest FCR-proxy rate |
+| `callLinkReport()` | everything above in one payload, so the dashboard, the queue screen and the printable pack cannot disagree |
+
+`api/report.php` now ships that block as `links`.
+
+## Fixed (found by the new suite, each one a wrong published number)
+
+1. **The same call was one interaction on one screen and several on another.**
+   `cdrIdBag` existed three times: `api/queue.php`, `api/cradle.php` and a
+   six-field list inside `rows.php:findRelatedCdrs()` (it did not read `call-id`
+   or `cdr-id`). All three now use the shared eight-field version. The cradle
+   copy was also **missing** queue.php's numeric-call-id fix, so a purely numeric
+   id (which PHP casts to an int array key) would fatal there and not on the
+   queue screen; the shared version carries the fix and a test pins it.
+2. **`+1 (845) 425-9810` did not match `8454259810`.** Comparing raw strings made
+   every callback look unreturned — every single one, silently, which is the most
+   dangerous direction this metric can fail in. `normalizeCallNumber()` now
+   canonicalises NANP (`+1…` → 10 digits) and `00`-prefixed international
+   numbers, and both the callback and repeat matchers use it.
+3. **An outbound leg counted as a transfer hop.** `cdrIsAnsweredAgentLeg()`
+   documented a direction check it did not make, so an answered outbound call
+   inflated `handled` and depressed the transfer rate. Fixed.
+4. **A transfer rate of 200 %.** The rate divided the *hand-off count* by handled
+   calls, so a call bounced through three agents published "200 %" — the kind of
+   figure that discredits the whole page. The rate is now transferred
+   *conversations* / handled interactions (cannot exceed 100 %), with the
+   hand-off count and `perTransferred` beside it. A test asserts ≤ 100 %.
+5. **A queue pair that was not a queue transfer.** The first version recorded
+   "previous agent → this queue"; the review asked for queue→queue, so it now
+   records a genuine queue change inside one conversation.
+
+## Deliberate rules, pinned by tests rather than left implicit
+
+* A transfer needs a **person** to take the call: an unanswered leg offered to
+  another agent is not a transfer (that would let an unanswered transfer inflate
+  a coaching conversation), and a terminus that looks like an outside number is
+  not an agent.
+* The same agent answering twice on one interaction is the same person still on
+  the call — not a transfer.
+* A callback is looked for only in **outbound** legs. A customer calling back in
+  is a repeat call; counting it as a callback would flatter every desk.
+* An outbound leg's own from-number is ignored: it is usually the desk's caller
+  ID, and matching it would "return" missed calls to the first number in the
+  outbound caller-ID pool.
+* The `call-back` CDR field is never consulted. It is always false in the data
+  this app reads, so trusting it would report "nothing was ever returned".
+
+## Evidence
+
+`node tests/php/call-links.mjs` — 40 checks over hand-built leg trees, plus
+`api/report.php` end-to-end. Registered in `tests/run.mjs` (`npm test` = 24
+suites, all green).
+
+---
+
 # CHANGES — Sprint A, phase 1: opening hours, wait buckets, hold, service targets
 
 **The task (2026-10-06):** implement the manager review (`REPORTING-REVIEW.md`)

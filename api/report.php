@@ -162,6 +162,14 @@ if (
     $current = summary($calls, $slaSeconds, $directory, $queueIds, $settings);
 
     /*
+     * Sprint A: the links layer. Transfers, the returned-call worklist and the
+     * repeat callers are derived from the SAME scoped row set as every other
+     * number in this payload, so the hours filter, the department filter and the
+     * site filter move them together with the counts beside them.
+     */
+    $links = callLinkReport($calls, $directory);
+
+    /*
      * Previous period.
      *
      * PERF: this is a SECOND full CDR fetch. On a wide date range it can
@@ -372,13 +380,17 @@ $current['topAgents'] = $topAgents;
 		'trends' => $trends,
 		'topAgents' => $topAgents,
 		'agentPerformance' => $agentPerformance,
+		'links' => $links,
 		'inventory' => reportingInventory($user, $directory, $calls),
 		/*
 		 * QA-5: the effective domain thresholds ride along for EVERY role, so a
 		 * screen's red/green is the same red/green the manager sees without
 		 * handing non-privileged users the settings endpoint.
 		 */
-		'settings' => loadDomainSettings((string)($user['domain'] ?? '')),
+		/* The settings actually used for the numbers above, not a second read:
+		 * a file written between the two reads would have shipped a threshold
+		 * that did not colour these figures. */
+		'settings' => $settings,
 		'timezone' => DEFAULT_TIMEZONE
 	]);
 

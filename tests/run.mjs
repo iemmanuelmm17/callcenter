@@ -50,6 +50,7 @@ const SUITES = {
     { name: 'cdr cache', cmd: ['node', 'tests/php/cdr-cache.mjs'] },
     { name: 'outcome parity', cmd: ['node', 'tests/php/outcomes.mjs'] },
     { name: 'report metrics', cmd: ['node', 'tests/php/report-metrics.mjs'] },
+    { name: 'call links', cmd: ['node', 'tests/php/call-links.mjs'] },
     { name: 'portal', cmd: ['node', 'tests/php/portal.mjs'] }
   ]
 };

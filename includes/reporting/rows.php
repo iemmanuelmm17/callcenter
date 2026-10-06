@@ -777,24 +777,15 @@ function findRelatedCdrs(
     array $cdr
 ): array {
 
+    /*
+     * The id vocabulary lives in links.php. This function used to read six
+     * fields where api/queue.php read eight (`call-id`, `cdr-id` were missing),
+     * so the same call could be one interaction here and two there - exactly the
+     * kind of drift that makes two screens disagree about one call.
+     */
     $ids = [];
-
-    foreach ([
-        'id',
-        'call-orig-call-id',
-        'call-parent-call-id',
-        'call-parent-cdr-id',
-        'call-through-call-id',
-        'call-term-call-id'
-    ] as $field) {
-
-        $value = trim(
-            (string)($cdr[$field] ?? '')
-        );
-
-        if ($value !== '') {
-            $ids[$value] = true;
-        }
+    foreach (cdrIdBag($cdr) as $id) {
+        $ids[$id] = true;
     }
 
     if (!$ids) {
@@ -809,23 +800,9 @@ function findRelatedCdrs(
             continue;
         }
 
-        foreach ([
-            'id',
-            'call-orig-call-id',
-            'call-parent-call-id',
-            'call-parent-cdr-id',
-            'call-through-call-id',
-            'call-term-call-id'
-        ] as $field) {
+        foreach (cdrIdBag($item) as $value) {
 
-            $value = trim(
-                (string)($item[$field] ?? '')
-            );
-
-            if (
-                $value !== '' &&
-                isset($ids[$value])
-            ) {
+            if (isset($ids[$value])) {
 
                 $related[] = $item;
 

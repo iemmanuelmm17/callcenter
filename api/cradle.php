@@ -69,25 +69,9 @@ try {
         return $value;
     };
 
-    $cdrIdBag = static function (array $row): array {
-        $ids = [];
-        foreach ([
-            'call-orig-call-id',
-            'call-parent-call-id',
-            'call-parent-cdr-id',
-            'call-through-call-id',
-            'call-term-call-id',
-            'call-id',
-            'cdr-id',
-            'id',
-        ] as $field) {
-            $v = trim((string)($row[$field] ?? ''));
-            if ($v !== '') {
-                $ids[$v] = true;
-            }
-        }
-        return array_keys($ids);
-    };
+    /* Shared with api/queue.php and the reporting layer (links.php). This copy
+     * used to return array_keys() directly, which hands back INT keys for a
+     * numeric call id and fatals under strict_types; the shared one fixes that. */
 
     $directory = userDirectory($user);
     $agentNames = [];
@@ -220,7 +204,7 @@ try {
         if (!is_array($row)) {
             continue;
         }
-        $ids = $cdrIdBag($row);
+        $ids = cdrIdBag($row);
         if ($ids === []) {
             $ids[] = 'row:' . $i;
         }
@@ -240,7 +224,7 @@ try {
         if (!is_array($row)) {
             continue;
         }
-        $ids = $cdrIdBag($row);
+        $ids = cdrIdBag($row);
         $key = $ids !== [] ? $ufFind($ids[0]) : ('row:' . $i);
         $legsByRoot[$key][] = $row;
     }
@@ -421,7 +405,7 @@ try {
             $sentDot = 'negative';
         }
 
-        $ids = $cdrIdBag($row);
+        $ids = cdrIdBag($row);
         $origKey = trim((string)($row['call-orig-call-id'] ?? $row['call-parent-call-id'] ?? ''));
         $parentKey = $origKey !== '' ? $origKey : ($ids !== [] ? $ufFind($ids[0]) : '');
         $legs = [];
