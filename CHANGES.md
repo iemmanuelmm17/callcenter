@@ -1,3 +1,81 @@
+# CHANGES — Sprint C, phase 6: the pack's row sets, and one DID definition
+
+**What this phase is about.** The printable month-end report (the next phase) needs
+two tables that no payload published as rows: a line per queue *with the target it
+was judged against*, and a line per dialled number with the two flags the review
+asked for. Both are built here, from the same scoped call list and the same
+helpers every other figure uses, so the printed page cannot contradict the
+dashboard it was printed from.
+
+## The pack rows
+
+`includes/reporting/pack.php` (new):
+
+- **`packQueueRows()`** — one row per queue that saw traffic, **plus a zero row for
+  every known queue that saw none** (a staffed-and-silent queue is a finding, and
+  a total that omits it is wrong). Each row carries `offered`, `answered`,
+  `missed`, `abandoned`, `sla` **and its base `slaBase`**, `abandonRate`, `avgRing`,
+  `avgTalk`, `totalTalk`, `holdAvg`, `holdTotal`, and the `slaSeconds` it was
+  measured against — the queue's own override when one is configured, otherwise
+  the domain default, through the same `resolveQueueSlaSeconds()` the dashboard
+  uses. Hold is averaged only over the calls that actually held, exactly as on the
+  queues screen.
+- **`packNumberRows()`** — one row per number, computed by
+  `buildNumberStats()`, the function the Telephone Numbers screen itself uses, so
+  the pack shows a number's volume, missed and abandoned counts exactly as that
+  screen does. Two flags, both derived server-side: `zeroTraffic` (live in the
+  inventory, took no call at all — only a number the caller actually has can be
+  silently dead, so an unlisted number seen in the CDRs is never flagged) and
+  `highAbandon` (at least 5 missed calls **and** an abandon share at or over
+  20 %, where the share's base is the missed calls — the calls that could have
+  been abandoned; a three-call line is not a finding). Both counts travel on the
+  row, so the flags can be checked by hand.
+
+`api/report.php` ships both as `pack.queues` / `pack.numbers`, from the same
+`$calls` as `summary`, and reuses one inventory read (`packInventory`) for the
+counts and the pack.
+
+**The bases, stated:** a queue's abandon share is over the calls **offered** to
+it; a number's missed share is over the calls that **arrived** (inbound + missed
+— an outbound leg the desk placed is not a chance to miss anybody), while
+`calls` itself is every call type on the line, which is what the Telephone
+Numbers screen shows.
+
+## One definition for a DID
+
+The four functions that map a CDR onto one of the customer's numbers and bucket
+that number's traffic (`didCandidatesFromCdr`, `resolveDidKey`, `buildNumberStats`,
+and the now-removed `firstDidFromCdr`) lived in `api/telephone_numbers.php`. The
+pack needed them, and a second copy of a mapping rule is how one DID becomes two
+rows — so they moved to `includes/reporting/dids.php`, and the API keeps calling
+them. `numberKey()` (the one phone-number normaliser, digits with a leading
+country code dropped) and `numberIsEnabled()` (absent/yes/1/true → enabled, an
+allow-list so an unrecognised spelling can never silently disable a line) moved
+to `includes/reporting/support.php`; the screen's `statsKey()` and its enabled
+check now delegate to them. `safeTimestamp()` went with the module that uses it.
+No behaviour changes on the Telephone Numbers screen — the same code runs, from
+a different file.
+
+## Evidence
+
+`tests/php/report-metrics.mjs` §11 (23 checks) seeds a day and an inventory and
+states the arithmetic in full before asserting it: a queue judged against its own
+15 s target (SLA 1 of 2 = 50 %, base published) beside one judged against the
+30 s domain default; an idle third queue published as zeroes rather than omitted;
+a DID where the outbound leg is in the volume but **not** in the missed share's
+base; 5 missed at exactly 20 % abandoned flagged while a worse 66.7 % on a
+3-call base is not (the floor); a live-but-silent line flagged while an unlisted
+number that took a call is not; the disabled line absent; and both row sets
+reconciled against `summary.counts` (every call lands on a number row; the queues'
+offered total is the calls that reached a queue). `npm test` = 25 suites green;
+`dead code --strict` clean.
+
+**Behaviour change to disclose:** the report payload gains `pack.queues` and
+`pack.numbers`. Nothing on screen consumes them yet — the printable page (next
+phase) does. No published figure moves.
+
+---
+
 # CHANGES — Sprint B, phase 5: sentiment for the period, and the negative scope
 
 **What this phase is about.** The call-intelligence fields

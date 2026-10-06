@@ -1325,6 +1325,190 @@ if (holdCradle.status === 200) {
     (rows['700']?.holdTotal || 0) === ada.holdTotal, [rows['700']?.holdTotal, ada.holdTotal]);
 }
 
+
+/* =========== 11. the month-end pack: per-queue and per-number rows */
+
+console.log('\n== the pack row sets: per queue (with its target) and per number ==');
+
+/*
+ * A fresh day (2026-08-25) and a DID inventory, so one fixture proves the whole
+ * pack. The hand count, in full:
+ *
+ *   QUEUES          offered  answered  abandoned  target  SLA            ring/talk
+ *   Sales (700)        3        2         1        15 s   1 of 2 = 50.0 %   20 / 45
+ *   Support (701)      1        1         0        30 s   1 of 1 = 100.0 %  20 / 40
+ *   Idle (702)         0        0         0        (never judged)  -        -
+ *
+ *   NUMBERS                     calls  missed  aband  missedRate  abandonRate  flags
+ *   Main line  ...0001            4       2       1     50.0 %       50.0 %   -
+ *   Support line ...0002          2       1       0     50.0 %        0.0 %   -
+ *   Backline  ...0005             6       5       1     83.3 %       20.0 %   highAbandon
+ *   Trial line ...0006            3       3       2    100.0 %       66.7 %   -  (3 missed is
+ *                                                                              below the 5-call floor)
+ *   unlisted  ...0007             1       0       0      0.0 %        0.0 %   -  (not zeroTraffic)
+ *   Silent line ...0004           0       0       0        -            -      zeroTraffic
+ *   Retired line ...0003          - absent: disabled and silent is not a finding
+ *
+ * "missed" here is the same bucket the dashboard counts: a call that never
+ * reached a person, split into abandoned (it reached a queue or an AA) and rung
+ * out. The DID rows come from buildNumberStats() - the function the Telephone
+ * Numbers screen itself uses - so the two screens cannot disagree.
+ */
+await harness.seedPbx('callqueues', [
+  { callqueue: '700', description: 'Sales queue', site: 'HQ' },
+  { callqueue: '701', description: 'Support queue', site: 'HQ' },
+  { callqueue: '702', description: 'Idle queue', site: 'HQ' }
+]);
+/*
+ * The inventory is CACHED for an hour, and the earlier queue section already
+ * cached a two-queue list - so the third queue would be invisible and the pack
+ * would look wrong when it is the cache that is stale. Drop both caches, the
+ * way a changed PBX list does after its TTL.
+ */
+await harness.script(`
+foreach (glob(CACHE_DIR . '/callqueues-*.json') ?: [] as $file) { @unlink($file); }
+foreach (glob(CACHE_DIR . '/phonenumbers-*.json') ?: [] as $file) { @unlink($file); }
+`);
+await harness.seedPbx('phonenumbers', [
+  { phonenumber: '8457620001', description: 'Main line', enabled: 'yes' },
+  { phonenumber: '8457620002', description: 'Support line', enabled: 'yes' },
+  { phonenumber: '8457620003', description: 'Retired line', enabled: 'no' },
+  { phonenumber: '8457620004', description: 'Silent line', enabled: 'yes' },
+  { phonenumber: '8457620005', description: 'Backline', enabled: 'yes' },
+  { phonenumber: '8457620006', description: 'Trial line', enabled: 'yes' }
+]);
+await harness.seedPbx('fetchCdrs', [
+  /* Sales queue: ring 10 (inside 15 s), ring 30 (outside), then an abandon. */
+  { id: 'q1', 'call-direction': 1, 'call-start-datetime': '2026-08-25T09:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-25T09:00:10Z[US/Eastern]', 'call-orig-to-user': '8457620001',
+    'call-term-user': '6080', 'call-through-user': '700', 'call-talking-duration-seconds': 60 },
+  { id: 'q2', 'call-direction': 1, 'call-start-datetime': '2026-08-25T09:10:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-25T09:10:30Z[US/Eastern]', 'call-orig-to-user': '8457620001',
+    'call-term-user': '6080', 'call-through-user': '700', 'call-talking-duration-seconds': 30 },
+  { id: 'q3', 'call-direction': 1, 'call-start-datetime': '2026-08-25T09:20:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-25T09:20:25Z[US/Eastern]', 'call-orig-to-user': '8457620001',
+    'call-through-user': '700' },
+  { id: 'q4', 'call-direction': 1, 'call-start-datetime': '2026-08-25T09:30:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-25T09:30:25Z[US/Eastern]', 'call-orig-to-user': '8457620001' },
+  /* Support queue: one answered call, judged against the DOMAIN default (30 s). */
+  { id: 'q5', 'call-direction': 1, 'call-start-datetime': '2026-08-25T10:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-25T10:00:20Z[US/Eastern]', 'call-orig-to-user': '8457620002',
+    'call-term-user': '6081', 'call-through-user': '701', 'call-talking-duration-seconds': 40 },
+  { id: 'q6', 'call-direction': 1, 'call-start-datetime': '2026-08-25T10:10:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-25T10:10:20Z[US/Eastern]', 'call-orig-to-user': '8457620002' },
+  /* Backline: 6 calls, 5 missed, 1 of them abandoned -> flagged at exactly the bar. */
+  { id: 'b1', 'call-direction': 1, 'call-start-datetime': '2026-08-25T11:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-25T11:00:05Z[US/Eastern]', 'call-orig-to-user': '8457620005',
+    'call-term-user': '6081', 'call-talking-duration-seconds': 25 },
+  { id: 'b2', 'call-direction': 1, 'call-start-datetime': '2026-08-25T11:10:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-25T11:10:20Z[US/Eastern]', 'call-orig-to-user': '8457620005',
+    'call-batch-start-datetime': '2026-08-25T11:10:05Z[US/Eastern]' },
+  { id: 'b3', 'call-direction': 1, 'call-start-datetime': '2026-08-25T11:20:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-25T11:20:20Z[US/Eastern]', 'call-orig-to-user': '8457620005' },
+  { id: 'b4', 'call-direction': 1, 'call-start-datetime': '2026-08-25T11:30:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-25T11:30:20Z[US/Eastern]', 'call-orig-to-user': '8457620005' },
+  { id: 'b5', 'call-direction': 1, 'call-start-datetime': '2026-08-25T11:40:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-25T11:40:20Z[US/Eastern]', 'call-orig-to-user': '8457620005' },
+  { id: 'b6', 'call-direction': 1, 'call-start-datetime': '2026-08-25T11:50:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-25T11:50:20Z[US/Eastern]', 'call-orig-to-user': '8457620005' },
+  /* Trial line: a worse RATE than the Backline but a smaller base -> not flagged. */
+  { id: 't1', 'call-direction': 1, 'call-start-datetime': '2026-08-25T12:00:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-25T12:00:20Z[US/Eastern]', 'call-orig-to-user': '8457620006',
+    'call-batch-start-datetime': '2026-08-25T12:00:05Z[US/Eastern]' },
+  { id: 't2', 'call-direction': 1, 'call-start-datetime': '2026-08-25T12:10:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-25T12:10:20Z[US/Eastern]', 'call-orig-to-user': '8457620006',
+    'call-batch-start-datetime': '2026-08-25T12:10:05Z[US/Eastern]' },
+  { id: 't3', 'call-direction': 1, 'call-start-datetime': '2026-08-25T12:20:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-25T12:20:20Z[US/Eastern]', 'call-orig-to-user': '8457620006' },
+  /* A number the customer does NOT have: it must appear, but never as "silent". */
+  { id: 'u1', 'call-direction': 1, 'call-start-datetime': '2026-08-25T13:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-25T13:00:30Z[US/Eastern]', 'call-orig-to-user': '8457620007',
+    'call-term-user': '6080', 'call-talking-duration-seconds': 15 },
+  /*
+   * An OUTBOUND leg the desk placed to its own main line. It belongs in the
+   * line's call volume (that is what the Telephone Numbers screen shows) but it
+   * is not a chance to miss anybody, so it must NOT move the missed share.
+   */
+  { id: 'o1', 'call-direction': 0, 'call-start-datetime': '2026-08-25T14:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-25T14:00:10Z[US/Eastern]', 'call-orig-user': '6081',
+    'dialed': '8457620001', 'call-talking-duration-seconds': 20 }
+]);
+
+const packSettings = await harness.script(`
+require_once TEST_TMP . '/includes/reporting.php';
+/* Sales is judged against its own 15 s; Support against the domain's 30 s. */
+saveDomainSettings('test.example', ['slaSeconds' => 30, 'queueSla' => ['700' => 15]]);
+$s = loadDomainSettings('test.example');
+echo json_encode(['sla' => $s['slaSeconds'], 'queueSla' => $s['queueSla']]);
+`);
+check('the pack day is set up with one queue override and a 30 s domain default',
+  parseJson(packSettings, '{', '}')?.sla === 30
+    && parseJson(packSettings, '{', '}')?.queueSla?.['700'] === 15, packSettings.slice(0, 200));
+
+const packRes = await harness.request('report.php', {
+  body: { start: '2026-08-25', end: '2026-08-25', hours: 'all', skipPrevious: true },
+  user: USERS.office_manager
+});
+check('report.php answers with the pack row sets', packRes.status === 200, packRes.log ?? packRes.status);
+
+if (packRes.status === 200) {
+  const Q = Object.fromEntries((packRes.body.pack?.queues ?? []).map(r => [r.callqueue, r]));
+  const N = Object.fromEntries((packRes.body.pack?.numbers ?? []).map(r => [r.key ?? r.number, r]));
+
+  /* ---- queues ---- */
+  check('three queues are published, including the one that saw no traffic',
+    Object.keys(Q).length === 3 && !!Q['702'], Object.keys(Q));
+  check('the sales row carries the counts the dashboard counts (3 offered, 2 answered, 1 abandoned)',
+    Q['700']?.offered === 3 && Q['700']?.answered === 2 && Q['700']?.abandoned === 1, Q['700']);
+  check('the sales row is judged against ITS OWN 15 s target',
+    Q['700']?.slaSeconds === 15, Q['700']?.slaSeconds);
+  check('the sales SLA is 1 of 2 answered inside 15 s = 50 % with its base',
+    Q['700']?.sla === 50 && Q['700']?.slaBase === 2, [Q['700']?.sla, Q['700']?.slaBase]);
+  check('the sales abandon share is over the calls offered (1 of 3 = 33.3 %)',
+    Q['700']?.abandonRate === 33.3, Q['700']?.abandonRate);
+  check('the sales ring and talk averages are over the calls that produced them ((10+30)/2 and (60+30)/2)',
+    Q['700']?.avgRing === 20 && Q['700']?.avgTalk === 45, [Q['700']?.avgRing, Q['700']?.avgTalk]);
+  check('a queue with no override is judged against the domain default (30 s)',
+    Q['701']?.slaSeconds === 30, Q['701']?.slaSeconds);
+  check('the support row is 1 offered / 1 answered inside 30 s = 100 %',
+    Q['701']?.offered === 1 && Q['701']?.answered === 1 && Q['701']?.sla === 100, Q['701']);
+  check('an idle queue is published as zeroes rather than omitted',
+    Q['702']?.offered === 0 && Q['702']?.answered === 0 && Q['702']?.sla === 0, Q['702']);
+
+  /* ---- numbers ---- */
+  check('every live number plus the unlisted one gets a row (7 = 6 listed of 7 enabled, one of them silent, + 1 unlisted)',
+    Object.keys(N).length === 6, Object.keys(N));
+  check('the disabled number is absent: a retired line taking no calls is not a finding',
+    !N['8457620003'], Object.keys(N));
+  check('the main line carries 5 calls (4 in + 1 out), 2 missed, 1 abandoned',
+    N['8457620001']?.calls === 5 && N['8457620001']?.missed === 2 && N['8457620001']?.abandoned === 1,
+    N['8457620001']);
+  check("the outbound leg is in the volume but not in the missed share's base (2 of 4, not 2 of 5)",
+    N['8457620001']?.missedBase === 4 && N['8457620001']?.missedRate === 50, N['8457620001']);
+  check('the main line abandon share is over its MISSED calls (1 of 2 = 50 %)',
+    N['8457620001']?.abandonRate === 50, N['8457620001']?.abandonRate);
+  check('a line with 5 missed calls and 20 % abandoned is flagged',
+    N['8457620005']?.highAbandon === true && N['8457620005']?.missed === 5
+      && N['8457620005']?.abandonRate === 20, N['8457620005']);
+  check('the same abandon rate on a 3-call base is NOT flagged (the floor is 5 missed)',
+    N['8457620006']?.highAbandon === false && N['8457620006']?.abandonRate === 66.7, N['8457620006']);
+  check('a silent but live line is flagged zero-traffic',
+    N['8457620004']?.zeroTraffic === true && N['8457620004']?.calls === 0, N['8457620004']);
+  check('a number the customer does not have is listed but never called silent',
+    N['8457620007']?.calls === 1 && N['8457620007']?.zeroTraffic === false, N['8457620007']);
+  check('every call in the scope lands on a number row (the DID volumes add up to the day)',
+    Object.values(N).reduce((a, r) => a + r.calls, 0) === packRes.body.summary.counts.total,
+    [Object.values(N).reduce((a, r) => a + r.calls, 0), packRes.body.summary.counts.total]);
+  check("the number rows' inbound and missed counts are the dashboard's",
+    Object.values(N).reduce((a, r) => a + r.inbound, 0) === packRes.body.summary.counts.inbound
+      && Object.values(N).reduce((a, r) => a + r.missed, 0) === packRes.body.summary.counts.missed,
+    [Object.values(N).reduce((a, r) => a + r.inbound, 0), packRes.body.summary.counts.inbound,
+      Object.values(N).reduce((a, r) => a + r.missed, 0), packRes.body.summary.counts.missed]);
+  check('the queue rows add up to the calls that reached a queue',
+    Object.values(Q).reduce((a, r) => a + r.offered, 0) === 4,
+    Object.values(Q).map(r => [r.callqueue, r.offered]));
+}
+
 console.log('');
 if (failures.length) {
   console.log(`FAILED: ${failures.length} check(s)`);

@@ -69,6 +69,7 @@ if (
      */
     $directory = userDirectory($user);
     $queueIds = [];
+    $queueLabels = [];
     foreach (cachedCallQueues($user) as $qrow) {
         if (!is_array($qrow)) {
             continue;
@@ -76,6 +77,8 @@ if (
         $qid = trim((string)($qrow['callqueue'] ?? ''));
         if ($qid !== '') {
             $queueIds[$qid] = true;
+            $label = trim((string)($qrow['description'] ?? ''));
+            $queueLabels[$qid] = $label !== '' ? $label : $qid;
         }
     }
 
@@ -480,6 +483,41 @@ $current['topAgents'] = $topAgents;
 
 
     /*
+     * Sprint C: the month-end pack's two row sets. Built here, from the same
+     * scoped $calls and through the same helpers as every figure above, so the
+     * printed page cannot disagree with the dashboard it came from. The
+     * inventory is passed in so a queue or number that saw NO traffic in the
+     * scope still gets a row (zeros are findings too), and so "zero traffic" is
+     * only ever claimed about a line the caller actually has.
+     */
+    $packInventory = reportingInventory($user, $directory, $calls);
+    $knownNumbers = [];
+    foreach (cachedPhoneNumbers($user) as $nrow) {
+        if (!is_array($nrow)) {
+            continue;
+        }
+        $number = trim((string)(
+            $nrow['phonenumber']
+            ?? $nrow['phone-number']
+            ?? $nrow['number']
+            ?? ''
+        ));
+        if ($number === '') {
+            continue;
+        }
+        /* Only live numbers are listed: a disabled-and-silent line is not a
+         * finding, and "zero traffic" must keep meaning "nobody called it". */
+        if (!numberIsEnabled($nrow['enabled'] ?? true)) {
+            continue;
+        }
+        $knownNumbers[$number] = true;
+    }
+    $packRows = [
+        'queues' => packQueueRows($calls, $directory, $queueIds, $settings, $queueLabels),
+        'numbers' => packNumberRows($calls, $directory, $queueIds, array_keys($knownNumbers)),
+    ];
+
+    /*
      * Audit and return.
      */
     auditView(
@@ -497,7 +535,9 @@ $current['topAgents'] = $topAgents;
 		'topAgents' => $topAgents,
 		'agentPerformance' => $agentPerformance,
 		'links' => $links,
-		'inventory' => reportingInventory($user, $directory, $calls),
+		'inventory' => $packInventory,
+		/* The month-end pack's per-queue and per-number lines (Sprint C). */
+		'pack' => $packRows,
 		/*
 		 * QA-5: the effective domain thresholds ride along for EVERY role, so a
 		 * screen's red/green is the same red/green the manager sees without

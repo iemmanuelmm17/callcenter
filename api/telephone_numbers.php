@@ -540,12 +540,9 @@ function normalizePhoneNumber2(
 
     $enabledValue = $phone['enabled'] ?? true;
 
-    $enabled =
-        $enabledValue === true ||
-        $enabledValue === 1 ||
-        $enabledValue === '1' ||
-        strtolower((string)$enabledValue) === 'yes' ||
-        strtolower((string)$enabledValue) === 'true';
+    /* One rule, defined once (includes/reporting/support.php) so the report's
+     * DID roll-up and this screen agree about which numbers are live. */
+    $enabled = numberIsEnabled($enabledValue);
 
     $application = trim((string)(
         $phone['dial-rule-application'] ?? $phone['application'] ?? ''
@@ -621,179 +618,11 @@ function normalizePhoneNumber2(
 }
 
 
-function didCandidatesFromCdr(array $call): array
-{
-    $fields = [
-        'call-orig-to-user',
-        'call-orig-request-user',
-        'call-orig-request-uri',
-        'call-orig-to-uri',
-        'call-term-to-uri',
-        'dialed',
-        'to',
-        'call-term-to-user',
-    ];
-
-    $out = [];
-
-    foreach ($fields as $field) {
-
-        $raw = (string)($call[$field] ?? '');
-
-        if ($raw === '') {
-            continue;
-        }
-
-        if (function_exists('normalizePhoneNumber')) {
-            $digits = normalizePhoneNumber($raw);
-        } else {
-            $digits = preg_replace('/\D+/', '', $raw) ?? '';
-
-            if (
-                strlen($digits) === 11 &&
-                $digits[0] === '1'
-            ) {
-                $digits = substr($digits, 1);
-            }
-        }
-
-        $key = statsKey((string)$digits);
-
-        if (strlen($key) >= 10) {
-            $out[$key] = true;
-        }
-    }
-
-    return array_map(
-        static fn($key): string => (string)$key,
-        array_keys($out)
-    );
-}
-
-
-function resolveDidKey(array $call, array $inventoryKeys): string
-{
-    $candidates = didCandidatesFromCdr($call);
-
-    foreach ($candidates as $candidate) {
-
-        $candidate = (string)$candidate;
-
-        if (
-            $candidate !== '' &&
-            isset($inventoryKeys[$candidate])
-        ) {
-            return $candidate;
-        }
-    }
-
-    if ($candidates !== []) {
-        return (string)$candidates[0];
-    }
-
-    $fallback = function_exists('phoneNumberFromCdr')
-        ? phoneNumberFromCdr($call)
-        : firstDidFromCdr($call);
-
-    return statsKey((string)$fallback);
-}
-
-
 /*
- * $directory and $queueIds are what callMissedBucket() needs to tell an abandon
- * (a caller who reached a queue or the auto attendant and hung up) from a call
- * that merely rang out. They are passed in rather than re-derived here so the
- * DID grid uses the same classification as the dashboard instead of a second
- * definition that can drift.
+ * How a call maps onto one of the customer's numbers, and how a number's
+ * traffic is bucketed, live in includes/reporting/dids.php: the report prints
+ * the same per-number roll-up and the two must not be able to disagree.
  */
-function buildNumberStats(array $cdrs, array $inventoryKeys = [], array $directory = [], array $queueIds = []): array
-{
-    $stats = [];
-
-    foreach ($cdrs as $call) {
-
-        if (!is_array($call)) {
-            continue;
-        }
-
-        $key = resolveDidKey($call, $inventoryKeys);
-
-        if ($key === '') {
-            continue;
-        }
-
-        if (!isset($stats[$key])) {
-
-            $stats[$key] = [
-                'total' => 0,
-                'inbound' => 0,
-                'outbound' => 0,
-                'missed' => 0,
-                'abandoned' => 0,
-                'onnet' => 0,
-                'talkSeconds' => 0,
-                'firstCall' => null,
-                'lastCall' => null
-            ];
-        }
-
-        /*
-         * Same buckets as dashboard report.summary.counts:
-         * inbound / outbound / missed / onnet are exclusive.
-         */
-        $type = callType($call);
-
-        if ($type === 'missed') {
-            $stats[$key]['missed']++;
-            /* The abandon subset, by the one shared definition. */
-            if (callMissedBucket($call, $directory, $queueIds) === 'abandon') {
-                $stats[$key]['abandoned']++;
-            }
-        } elseif ($type === 'inbound') {
-            $stats[$key]['inbound']++;
-        } elseif ($type === 'outbound') {
-            $stats[$key]['outbound']++;
-        } elseif ($type === 'onnet') {
-            $stats[$key]['onnet']++;
-        }
-
-        $stats[$key]['total']++;
-
-        if (function_exists('seconds')) {
-            $talkSeconds = seconds($call, 'call-talking-duration-seconds');
-        } else {
-            $talkSeconds = (int)($call['call-talking-duration-seconds'] ?? 0);
-        }
-
-        $stats[$key]['talkSeconds'] += $talkSeconds;
-
-        $timestamp = (string)(
-            $call['startedAt']
-            ?? $call['call-start-datetime']
-            ?? ''
-        );
-
-        if ($timestamp !== '') {
-
-            if (
-                $stats[$key]['firstCall'] === null ||
-                safeTimestamp($timestamp) < safeTimestamp($stats[$key]['firstCall'])
-            ) {
-                $stats[$key]['firstCall'] = $timestamp;
-            }
-
-            if (
-                $stats[$key]['lastCall'] === null ||
-                safeTimestamp($timestamp) > safeTimestamp($stats[$key]['lastCall'])
-            ) {
-                $stats[$key]['lastCall'] = $timestamp;
-            }
-        }
-    }
-
-    return $stats;
-}
-
 
 function repeatCallerKey(array $call): string
 {
@@ -910,46 +739,12 @@ function buildRepeatCallers(array $cdrs, array $inventoryKeys = []): array
 }
 
 
-function firstDidFromCdr(array $call): string
-{
-    $values = [
-        $call['call-orig-to-user'] ?? '',
-        $call['call-orig-request-user'] ?? '',
-        $call['call-orig-request-uri'] ?? '',
-        $call['call-orig-to-uri'] ?? '',
-        $call['dialed'] ?? '',
-        $call['to'] ?? '',
-        $call['call-term-to-user'] ?? '',
-    ];
-
-    foreach ($values as $value) {
-
-        $digits = preg_replace('/\D+/', '', (string)$value);
-
-        if ($digits === null || strlen($digits) < 10) {
-            continue;
-        }
-
-        return $digits;
-    }
-
-    return '';
-}
-
-
+/* Single implementation: the reporting module owns the normaliser
+ * (includes/reporting/support.php) so the report's per-number rows group a DID
+ * exactly the way this screen does. */
 function statsKey(string $number): string
 {
-    $digits = preg_replace('/\D+/', '', $number);
-
-    if ($digits === null || $digits === '') {
-        return '';
-    }
-
-    if (strlen($digits) === 11 && $digits[0] === '1') {
-        $digits = substr($digits, 1);
-    }
-
-    return $digits;
+    return numberKey($number);
 }
 
 
@@ -1033,14 +828,6 @@ function validDate(string $date): bool
     $parsed = DateTimeImmutable::createFromFormat('!Y-m-d', $date);
 
     return $parsed !== false && $parsed->format('Y-m-d') === $date;
-}
-
-
-function safeTimestamp(string $value): int
-{
-    $timestamp = strtotime($value);
-
-    return $timestamp === false ? 0 : $timestamp;
 }
 
 

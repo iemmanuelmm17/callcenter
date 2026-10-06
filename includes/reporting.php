@@ -43,6 +43,8 @@ require_once __DIR__ . '/reporting/metrics.php';
 require_once __DIR__ . '/reporting/cdr_fields.php';
 require_once __DIR__ . '/reporting/rows.php';
 require_once __DIR__ . '/reporting/links.php';
+require_once __DIR__ . '/reporting/dids.php';
+require_once __DIR__ . '/reporting/pack.php';
 require_once __DIR__ . '/reporting/inventory.php';
 require_once __DIR__ . '/reporting/cradle.php';
 require_once __DIR__ . '/reporting/settings.php';

@@ -240,6 +240,44 @@ function appExceptionLog(string $context, Throwable $e): void
     ));
 }
 
+/**
+ * The one way this codebase turns a printed phone number into a key.
+ *
+ * Digits only, and a leading country code 1 dropped for 11-digit values, so
+ * "+1 (800) 555-1212", "18005551212" and "8005551212" are the same DID. It
+ * lives here (not in api/telephone_numbers.php, where it started) because the
+ * report's per-number rows must group numbers exactly the way the Telephone
+ * Numbers screen does - two normalisers is how one DID becomes two rows.
+ */
+function numberKey(string $number): string {
+    $digits = preg_replace('/\D+/', '', $number);
+
+    if ($digits === null || $digits === '') {
+        return '';
+    }
+
+    if (strlen($digits) === 11 && $digits[0] === '1') {
+        $digits = substr($digits, 1);
+    }
+
+    return $digits;
+}
+
+/**
+ * Is this DID live? The PBX spells the flag several ways ("yes", 1, true) and
+ * ABSENT means enabled, so this is an allow-list, never a deny-list: an
+ * unrecognised value (a typo, a new spelling) must not silently disable a
+ * number on the report. Shares its home with numberKey() for the same reason -
+ * one rule, one place.
+ */
+function numberIsEnabled($value): bool {
+    if ($value === true || $value === 1 || $value === '1' || $value === null) {
+        return true;
+    }
+    $text = strtolower(trim((string)$value));
+    return $text === 'yes' || $text === 'true';
+}
+
 function seconds(array $row, string $field): int { return max(0, (int)($row[$field] ?? 0)); }
 
 /**
