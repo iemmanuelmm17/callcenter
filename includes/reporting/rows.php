@@ -199,6 +199,17 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
     $sets = ['inbound'=>[], 'outbound'=>[]];
     $counts = ['total'=>0,'inbound'=>0,'outbound'=>0,'missed'=>0,'onnet'=>0];
     $hours = array_fill(0, 24, 0);
+    /*
+     * Per-hour detail, keyed by the same hour index as $hours: a count answers
+     * "when is it busy", and the review needs the two follow-ups - "how long do
+     * calls take at 09:00" (AHT by hour, and the base of the Sprint C staffing
+     * estimate) and "how many were missed at 09:00". Only inbound answered calls
+     * carry talk time into AHT; an outbound leg's talk belongs to the campaign,
+     * not to the desk's answering speed.
+     */
+    $hourInbound = array_fill(0, 24, 0);
+    $hourMissed = array_fill(0, 24, 0);
+    $hourTalk = array_fill(0, 24, 0);
     $days = [];
     $missedBreakdown = ['noanswer'=>0,'voicemail'=>0,'abandon'=>0];
     $inboundRings = [];
@@ -270,7 +281,14 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
         $raw = (string)($call['call-start-datetime'] ?? $call['startedAt'] ?? '');
         $at = parseEasternDateTime($raw);
         if ($at instanceof DateTimeImmutable) {
-            $hours[(int)$at->format('G')]++;
+            $hourIndex = (int)$at->format('G');
+            $hours[$hourIndex]++;
+            if ($type === 'inbound') {
+                $hourInbound[$hourIndex]++;
+                $hourTalk[$hourIndex] += seconds($call, 'call-talking-duration-seconds');
+            } elseif ($type === 'missed') {
+                $hourMissed[$hourIndex]++;
+            }
             $day = $at->format('Y-m-d');
             $days[$day] = ($days[$day] ?? 0) + 1;
         }
@@ -331,6 +349,23 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
         'inbound' => $panel($sets['inbound'], 'inbound'),
         'outbound' => $panel($sets['outbound'], 'outbound'),
         'hours' => $hours,
+        /*
+         * The same 24 hours with their detail, so a totals row under the hourly
+         * grid adds up the numbers a manager can see rather than re-deriving
+         * them per screen. `calls` counts every call in scope (the $hours series
+         * unchanged); `answered` is inbound answered, which is AHT's denominator.
+         */
+        'hourly' => array_map(
+            static fn(int $h): array => [
+                'hour' => $h,
+                'calls' => $hours[$h],
+                'answered' => $hourInbound[$h],
+                'missed' => $hourMissed[$h],
+                'talkSeconds' => $hourTalk[$h],
+                'aht' => $hourInbound[$h] > 0 ? (int)round($hourTalk[$h] / $hourInbound[$h]) : 0,
+            ],
+            range(0, 23)
+        ),
         'days' => $days,
         'missedBreakdown' => $missedBreakdown,
         'serviceLevel' => $serviceLevel,

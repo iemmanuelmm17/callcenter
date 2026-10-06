@@ -134,7 +134,21 @@ function handleGet(
         }
     }
 
-    $cdrStats = buildNumberStats($cdrs, $inventoryKeys);
+    /*
+     * The queue ids this desk has, so a missed DID call that reached a queue is
+     * counted as an abandon and one that never did is not.
+     */
+    $queueIds = [];
+    foreach (cachedCallQueues($user) as $queueRow) {
+        if (!is_array($queueRow)) {
+            continue;
+        }
+        $queueId = trim((string)($queueRow['callqueue'] ?? ''));
+        if ($queueId !== '') {
+            $queueIds[$queueId] = true;
+        }
+    }
+    $cdrStats = buildNumberStats($cdrs, $inventoryKeys, $directory, $queueIds);
     $charts = buildTelephoneCharts($cdrs, $start, $end, $timezone);
 
     $numbers = [];
@@ -147,6 +161,7 @@ function handleGet(
         'totalCalls' => 0,
         'totalInbound' => 0,
         'totalMissed' => 0,
+        'totalAbandoned' => 0,
         'totalTalkSeconds' => 0
     ];
 
@@ -233,11 +248,12 @@ function handleGet(
 
         csvBegin('telephone-numbers-' . ($start ?? '') . '-' . ($end ?? '') . '.csv');
         $out = csvOpen();
-        csvRow($out, ['number', 'type', 'enabled', 'routes_to', 'extension', 'department', 'site', 'calls', 'missed', 'talk']);
+        csvRow($out, ['number', 'type', 'enabled', 'routes_to', 'extension', 'department', 'site', 'calls', 'missed', 'abandoned', 'talk']);
 
         $written = 0;
         $exportedCalls = 0;
         $exportedMissed = 0;
+        $exportedAbandoned = 0;
         $exportedTalk = 0;
         foreach ($numbers as $row) {
             if ($written >= CSV_EXPORT_MAX_ROWS) {
@@ -248,6 +264,7 @@ function handleGet(
             $routing = is_array($row['routing'] ?? null) ? $row['routing'] : [];
             $inbound = (int)($calls['inbound'] ?? 0);
             $missed = (int)($calls['missed'] ?? 0);
+            $abandoned = (int)($calls['abandoned'] ?? 0);
             $talk = (int)($calls['talkSeconds'] ?? 0);
 
             csvRow($out, [
@@ -260,16 +277,18 @@ function handleGet(
                 (string)($destination['site'] ?? ''),
                 $inbound,
                 $missed,
+                $abandoned,
                 csvDuration($talk),
             ]);
             $exportedCalls += $inbound;
             $exportedMissed += $missed;
+            $exportedAbandoned += $abandoned;
             $exportedTalk += $talk;
             $written++;
         }
 
         /* Totals row, so a spreadsheet can reconcile against the page KPIs. */
-        csvRow($out, ['TOTAL', '', '', '', '', '', '', $exportedCalls, $exportedMissed, csvDuration($exportedTalk)]);
+        csvRow($out, ['TOTAL', '', '', '', '', '', '', $exportedCalls, $exportedMissed, $exportedAbandoned, csvDuration($exportedTalk)]);
         csvEnd($out);
     }
 
@@ -282,9 +301,16 @@ function handleGet(
     $sites = array_values($sites);
 
     if (function_exists('summary')) {
-        $counts = summary($cdrs)['counts'] ?? [];
+        $totals = summary($cdrs);
+        $counts = $totals['counts'] ?? [];
         $summary['totalInbound'] = (int)($counts['inbound'] ?? 0);
         $summary['totalMissed'] = (int)($counts['missed'] ?? 0);
+        /*
+         * The abandon half of the missed count, taken from the summary's own
+         * breakdown rather than recounted here: the dashboard's abandon metric
+         * and this card must never be two different numbers.
+         */
+        $summary['totalAbandoned'] = (int)($totals['missedBreakdown']['abandon'] ?? 0);
         $summary['totalCalls'] = $summary['totalInbound'];
     } else {
         foreach ($cdrs as $call) {
@@ -297,6 +323,9 @@ function handleGet(
                 $summary['totalCalls']++;
             } elseif ($type === 'missed') {
                 $summary['totalMissed']++;
+                if (callMissedBucket($call, $directory, $queueIds) === 'abandon') {
+                    $summary['totalAbandoned']++;
+                }
             }
         }
     }
@@ -575,6 +604,15 @@ function normalizePhoneNumber2(
             'inbound' => 0,
             'outbound' => 0,
             'missed' => 0,
+            /*
+             * Abandons are the missed calls a caller gave up on AFTER reaching a
+             * queue or the auto attendant - the same callMissedBucket()
+             * definition the dashboard's abandon metric uses, so a DID flagged
+             * "high abandon" here is flagged the same way there. A DID that only
+             * misses (rings out, voicemail) is not a staffing problem on this
+             * number.
+             */
+            'abandoned' => 0,
             'onnet' => 0,
             'talkSeconds' => 0,
             'lastCall' => null
@@ -661,7 +699,14 @@ function resolveDidKey(array $call, array $inventoryKeys): string
 }
 
 
-function buildNumberStats(array $cdrs, array $inventoryKeys = []): array
+/*
+ * $directory and $queueIds are what callMissedBucket() needs to tell an abandon
+ * (a caller who reached a queue or the auto attendant and hung up) from a call
+ * that merely rang out. They are passed in rather than re-derived here so the
+ * DID grid uses the same classification as the dashboard instead of a second
+ * definition that can drift.
+ */
+function buildNumberStats(array $cdrs, array $inventoryKeys = [], array $directory = [], array $queueIds = []): array
 {
     $stats = [];
 
@@ -684,6 +729,7 @@ function buildNumberStats(array $cdrs, array $inventoryKeys = []): array
                 'inbound' => 0,
                 'outbound' => 0,
                 'missed' => 0,
+                'abandoned' => 0,
                 'onnet' => 0,
                 'talkSeconds' => 0,
                 'firstCall' => null,
@@ -699,6 +745,10 @@ function buildNumberStats(array $cdrs, array $inventoryKeys = []): array
 
         if ($type === 'missed') {
             $stats[$key]['missed']++;
+            /* The abandon subset, by the one shared definition. */
+            if (callMissedBucket($call, $directory, $queueIds) === 'abandon') {
+                $stats[$key]['abandoned']++;
+            }
         } elseif ($type === 'inbound') {
             $stats[$key]['inbound']++;
         } elseif ($type === 'outbound') {

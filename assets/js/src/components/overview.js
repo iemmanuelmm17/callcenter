@@ -7,7 +7,7 @@
 import { splineArea } from './charts.js';
 import { SlaControl, Tooltip, skelPanel } from './ui.js';
 import { fmt, fmtNum } from '../lib/format.js';
-import { h, useEffect, useRef, useState } from '../lib/react.js';
+import { h, keyActivate, useEffect, useRef, useState } from '../lib/react.js';
 
 function OverviewDashboard({loading, report, filters, inventory, inventoryReady, slaSeconds, onSlaChange, onMetric, onHourClick, onDayClick, onAgentClick, onNavigate, allowedRoutes, topAgentQual}) {
   const canvas = useRef(null);
@@ -109,6 +109,22 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
   const abandonWaitBuckets = report?.summary?.abandonWaitBuckets || {};
   const hold = report?.summary?.hold || {};
   const links = report?.links || null;
+  /*
+   * AHT by hour (Sprint A). Only the hours that saw traffic are shown: a quiet
+   * desk has twelve empty rows and listing them pushes the busy ones off the
+   * card. The totals line is the period's own weighted AHT (total talk ÷
+   * answered inbound), so it agrees with the KPI above rather than averaging
+   * 24 hourly averages.
+   */
+  const hourly = Array.isArray(report?.summary?.hourly) ? report.summary.hourly : [];
+  const hourlyBusy = hourly.filter(row => Number(row.calls || 0) > 0);
+  const hourlyTotals = hourlyBusy.reduce((acc, row) => {
+    acc.calls += Number(row.calls || 0);
+    acc.answered += Number(row.answered || 0);
+    acc.missed += Number(row.missed || 0);
+    acc.talkSeconds += Number(row.talkSeconds || 0);
+    return acc;
+  }, { calls: 0, answered: 0, missed: 0, talkSeconds: 0 });
   const waitTotal = Object.values(waitBuckets).reduce((a, b) => a + Number(b || 0), 0);
   const prevCounts = report?.comparison?.previous?.counts || {};
   /* True between phase 1 painting and phase 2 landing. */
@@ -566,7 +582,56 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
                 ? 'This period vs previous period. Click a bar to open those calls.'
                 : 'Click a bar to open those calls. Previous-period hourly data is not in this report — totals still compare above.'
             ),
-            h('div', {className:'ops-hour-chart cursor-pointer'}, h('canvas', {ref: canvas}))
+            h('div', {className:'ops-hour-chart cursor-pointer'}, h('canvas', {ref: canvas})),
+            /*
+             * The chart says when it is busy; this says what the busy hours cost
+             * — how long calls took and how many were missed. It is also the
+             * table the month-end staffing estimate is built from, which is why
+             * the column order is hour, volume, missed, then AHT.
+             */
+            hourlyBusy.length > 0
+              ? h('div', {className:'ops-hour-detail'},
+                  h('table', {className:'ops-hour-table'},
+                    h('thead', null,
+                      h('tr', null,
+                        h('th', null, 'Hour'),
+                        h('th', {className:'ops-hour-num'}, 'Calls'),
+                        h('th', {className:'ops-hour-num'}, 'Answered'),
+                        h('th', {className:'ops-hour-num'}, 'Missed'),
+                        h('th', {className:'ops-hour-num'}, 'AHT')
+                      )
+                    ),
+                    h('tbody', null,
+                      ...hourlyBusy.map(row => h('tr', {
+                        key: row.hour,
+                        className: 'ops-hour-row cursor-pointer',
+                        /* A clickable row is a control: keyboard users get the
+                         * same drill through Enter/Space. */
+                        role: 'button',
+                        tabIndex: 0,
+                        title: 'Open the calls that started at ' + String(row.hour).padStart(2, '0') + ':00',
+                        onClick: () => onHourClick && onHourClick(row.hour),
+                        onKeyDown: keyActivate(() => onHourClick && onHourClick(row.hour))
+                      },
+                        h('td', {className:'ops-hour-cell'}, String(row.hour).padStart(2, '0') + ':00'),
+                        h('td', {className:'ops-hour-num'}, fmtNum(row.calls)),
+                        h('td', {className:'ops-hour-num'}, fmtNum(row.answered)),
+                        h('td', {className:'ops-hour-num'}, fmtNum(row.missed)),
+                        h('td', {className:'ops-hour-num'}, row.answered > 0 ? fmt(row.aht) : '—')
+                      )),
+                      h('tr', {className:'grid-totals'},
+                        h('td', {className:'ops-hour-cell'}, 'All ' + hourlyBusy.length + ' hours'),
+                        h('td', {className:'ops-hour-num'}, fmtNum(hourlyTotals.calls)),
+                        h('td', {className:'ops-hour-num'}, fmtNum(hourlyTotals.answered)),
+                        h('td', {className:'ops-hour-num'}, fmtNum(hourlyTotals.missed)),
+                        h('td', {className:'ops-hour-num'}, hourlyTotals.answered > 0
+                          ? fmt(hourlyTotals.talkSeconds / hourlyTotals.answered)
+                          : '—')
+                      )
+                    )
+                  )
+                )
+              : null
           )
         : h('section', {className:'ops-card'}, pulse),
       h('section', {className:'ops-card'},

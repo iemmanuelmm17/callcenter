@@ -8,6 +8,7 @@
 
 import { fmt, fmtNum } from '../lib/format.js';
 import { h, useEffect, useEscape, useMemo, useState } from '../lib/react.js';
+import { countBy, maxBy, sumBy, weightedMean, weightedPct } from '../lib/totals.js';
 import { KpiCard } from './charts.js';
 import { Tooltip, skel, skelKpis } from './ui.js';
 
@@ -177,6 +178,65 @@ function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSecon
         : 0;
     const ahtShow = Number.isFinite(avgHandle) && avgHandle > 0 ? avgHandle : ahtFallback;
 
+    /*
+     * The totals row (manager review, §5.1): computed from the rows ON SCREEN —
+     * `sorted` is the table after search and the per-page site filter, and before
+     * pagination, so the row summarises the whole filtered set rather than the
+     * ten rows one page happens to show.
+     *
+     * Aggregates per column kind, stated once here:
+     *   counts (total/ib/ob/onnet/mc/ab)          sum
+     *   rates  (mcRate/abRate)                    Σnumerator ÷ Σoffered, offered
+     *                                             computed by the row's own rule
+     *   averages (AHT/AAT/ART/ASAs)               weighted by inbound (or
+     *                                             outbound) call volume
+     *   total durations (TCT)                     sum
+     *   longest durations (LTT)                   max — a sum of "longest"
+     *                                             would be meaningless
+     */
+    const totalsRows = sorted.map(a => Object.assign({}, a, { offered: offeredOf(a) }));
+    const totalsAgents = countBy(totalsRows, 'extension');
+    const totalsSiteCount = countBy(totalsRows, 'site');
+    const totalsValue = field => {
+        switch (field) {
+            case 'agent': return 'All agents';
+            case 'extension': return fmtNum(totalsAgents) + (totalsAgents === 1 ? ' agent' : ' agents');
+            case 'site': return totalsSiteCount > 0 ? fmtNum(totalsSiteCount) + (totalsSiteCount === 1 ? ' site' : ' sites') : '—';
+            case 'total': return fmtNum(sumBy(totalsRows, 'total'));
+            case 'ib': return fmtNum(sumBy(totalsRows, 'ib'));
+            case 'ob': return fmtNum(sumBy(totalsRows, 'ob'));
+            case 'onnet': return fmtNum(sumBy(totalsRows, 'onnet'));
+            case 'mc': return fmtNum(sumBy(totalsRows, 'mc'));
+            case 'ab': return fmtNum(sumBy(totalsRows, 'ab'));
+            case 'mcRate': return totalsRows.length ? weightedPct(totalsRows, ['mc', 'ab'], 'offered').toFixed(1) + '%' : '—';
+            case 'ibAht': return totalsRows.length ? fmt(weightedMean(totalsRows, 'ibAht', 'ib')) : '—';
+            case 'ibAat': return totalsRows.length ? fmt(weightedMean(totalsRows, 'ibAat', 'ib')) : '—';
+            case 'ibLtt': return totalsRows.length ? fmt(maxBy(totalsRows, 'ibLtt')) : '—';
+            case 'ibTct': return totalsRows.length ? fmt(sumBy(totalsRows, 'ibTct')) : '—';
+            case 'obArt': return totalsRows.length ? fmt(weightedMean(totalsRows, 'obArt', 'ob')) : '—';
+            case 'obAat': return totalsRows.length ? fmt(weightedMean(totalsRows, 'obAat', 'ob')) : '—';
+            case 'obLtt': return totalsRows.length ? fmt(maxBy(totalsRows, 'obLtt')) : '—';
+            case 'obTct': return totalsRows.length ? fmt(sumBy(totalsRows, 'obTct')) : '—';
+            default: return '—';
+        }
+    };
+    const totalsKinds = {
+        extension: 'text', agent: 'text', site: 'text',
+        total: 'num', ib: 'num', ob: 'num', onnet: 'num', mc: 'num', ab: 'num',
+        mcRate: 'num',
+        ibAht: 'dur', ibAat: 'dur', ibLtt: 'dur', ibTct: 'dur',
+        obArt: 'dur', obAat: 'dur', obLtt: 'dur', obTct: 'dur'
+    };
+    const totalsRow = totalsRows.length
+        ? h('tr', {className: 'grid-totals'},
+            ...visibleCols.map(([field]) => h('td', {
+                key: field,
+                className: 'px-2 py-2 ' + (totalsKinds[field] === 'text' ? 'text-left' : 'qs-num'),
+                title: 'Total for the ' + totalsAgents + ' agent(s) matching the current filters'
+            }, totalsValue(field)))
+        )
+        : null;
+
     const toggleSort = field => {
         if (sortKey === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
         else {
@@ -192,7 +252,19 @@ function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSecon
             a.ab, rateOf(a, 'abRate').toFixed(1),
             a.ibAht, a.ibAat, a.ibLtt, a.ibTct, a.obArt, a.obAat, a.obLtt, a.obTct
         ]);
-        const csv = [header, ...body].map(r => r.map(v => '"' + String(v ?? '').replace(/"/g, '""') + '"').join(',')).join('\n');
+        /*
+         * The same totals line, computed with the rules of the row on screen and
+         * written after the agents it summarises.
+         */
+        const totalsRow = ['TOTAL', totalsAgents + ' agents', '', '',
+            sumBy(totalsRows, 'total'), sumBy(totalsRows, 'ib'), sumBy(totalsRows, 'ob'), sumBy(totalsRows, 'onnet'),
+            sumBy(totalsRows, 'mc'), weightedPct(totalsRows, ['mc', 'ab'], 'offered').toFixed(1),
+            sumBy(totalsRows, 'ab'), weightedPct(totalsRows, 'ab', 'offered').toFixed(1),
+            Math.round(weightedMean(totalsRows, 'ibAht', 'ib')), Math.round(weightedMean(totalsRows, 'ibAat', 'ib')),
+            maxBy(totalsRows, 'ibLtt'), sumBy(totalsRows, 'ibTct'),
+            Math.round(weightedMean(totalsRows, 'obArt', 'ob')), Math.round(weightedMean(totalsRows, 'obAat', 'ob')),
+            maxBy(totalsRows, 'obLtt'), sumBy(totalsRows, 'obTct')];
+        const csv = [header, ...body, totalsRow].map(r => r.map(v => '"' + String(v ?? '').replace(/"/g, '""') + '"').join(',')).join('\n');
         const blob = new Blob([csv], {type: 'text/csv;charset=utf-8'});
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
@@ -323,6 +395,7 @@ function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSecon
                         )
                     ),
                     h('tbody', null,
+                        totalsRow,
                         paginatedData.length === 0
                             ? h('tr', null, h('td', {colSpan: visibleCols.length, className: 'px-4 py-10 text-center text-xs text-slate-500'}, 'No agent stats.'))
                             : paginatedData.map((agent, index) => h('tr', {

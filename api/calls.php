@@ -255,9 +255,17 @@ try {
     }
     $dir = strtolower(trim((string)($requested['dir'] ?? '')));
     if (!in_array($dir, ['asc', 'desc'], true)) {
-        /* Waiting and talking are questions about large numbers ("longest
-         * first"); the date columns default to newest first, as before. */
-        $dir = in_array($sort, ['wait', 'talk', 'hold'], true) ? 'desc' : 'desc';
+        /*
+         * Waiting, talking and holding are questions about large numbers
+         * ("longest first"), so those default to descending. The date column
+         * defaults to newest first - and `oldest` therefore means ascending,
+         * which is what the name says. (Before Sprint A the whole list was
+         * newest-first only, and this branch returned 'desc' either way, so
+         * `sort=oldest` alone was silently a no-op alias of `newest`.)
+         */
+        $dir = in_array($sort, ['wait', 'talk', 'hold'], true)
+            ? 'desc'
+            : ($sort === 'oldest' ? 'asc' : 'desc');
     }
     $waitBucket = strtolower(trim((string)($requested['waitBucket'] ?? '')));
     if (!in_array($waitBucket, ['0-30', '31-60', '61-120', '120+'], true)) {

@@ -67,6 +67,15 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
 
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(25);
+    /*
+     * The sort control (review F5). It is seeded from the drill-down that opened
+     * the modal — a card that says "longest waits" opens the list already sorted
+     * that way — and from then on the reader drives it. Changing it re-requests
+     * from the server rather than re-sorting the 25 rows in the browser: the
+     * whole scoped result set has to be ordered, not the page.
+     */
+    const [sortKey, setSortKey] = useState(sort || 'newest');
+    const [sortDir, setSortDir] = useState(dir || 'desc');
     const [totalRecords, setTotalRecords] = useState(0);
     const [totalPages, setTotalPages] = useState(1);
     const [exporting, setExporting] = useState(false);
@@ -87,7 +96,10 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
         /* A new scope is a new result set: keep nothing from the old one. */
         setPlaying(null);
         setFlow(null);
-    }, [metric, hour, timeFrom, timeTo, agent, callId, phoneNumber, callerNumber, queue, queuesOnly, filters, callTypes, pageSize]);
+        /* The scope carries its own ordering when it was set by a card. */
+        setSortKey(sort || 'newest');
+        setSortDir(dir || 'desc');
+    }, [metric, hour, timeFrom, timeTo, agent, callId, phoneNumber, callerNumber, queue, queuesOnly, filters, callTypes, pageSize, sort, dir]);
 
     useEffect(() => {
 
@@ -124,8 +136,8 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
             waitBucket: waitBucket || '',
             waitedOver: waitedOver === undefined ? null : waitedOver,
             callbackState: callbackState || '',
-            sort: sort || 'newest',
-            dir: dir || 'desc',
+            sort: sortKey,
+            dir: sortDir,
             page,
             size: pageSize
         })
@@ -157,7 +169,7 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
             }
         };
 
-    }, [metric, hour, timeFrom, timeTo, agent, callId, phoneNumber, callerNumber, queue, queuesOnly, slaSeconds, waitBucket, waitedOver, callbackState, sort, dir, filters, callTypes, page, pageSize]);
+    }, [metric, hour, timeFrom, timeTo, agent, callId, phoneNumber, callerNumber, queue, queuesOnly, slaSeconds, waitBucket, waitedOver, callbackState, sortKey, sortDir, filters, callTypes, page, pageSize]);
 
     const startIndex = totalRecords === 0 ? 0 : (page - 1) * pageSize;
     const endIndex = Math.min(startIndex + records.length, totalRecords);
@@ -627,8 +639,6 @@ return h(
 
         /*
          * =================================================
-         * TABLE AREA        /*
-         * =================================================
          * TABLE AREA
          * =================================================
          */
@@ -827,6 +837,78 @@ return h(
                         },
 
                         recordRange
+                    ),
+
+                    /*
+                     * Sort. Four questions this list gets asked, in the order
+                     * they get asked: what just happened (newest), the longest
+                     * waits (the coaching list), the longest calls, and the
+                     * longest holds. The direction toggle is separate because
+                     * "shortest first" is a real question too — who picks up
+                     * instantly — and it is one click rather than a second
+                     * menu entry per column.
+                     */
+                    h(
+                        'span',
+                        {
+                            className: 'ml-3 text-slate-500'
+                        },
+
+                        'Sort:'
+                    ),
+                    h(
+                        'select',
+                        {
+                            value: sortKey,
+                            onChange: e => {
+                                const next = e.target.value;
+                                setSortKey(next);
+                                /* Longest-first is the natural reading of the
+                                 * three duration columns; the date column keeps
+                                 * whatever direction is already chosen. */
+                                if (next === 'newest' || next === 'oldest') {
+                                    setSortDir(next === 'oldest' ? 'asc' : 'desc');
+                                } else {
+                                    setSortDir('desc');
+                                }
+                                setPage(1);
+                            },
+                            className:
+                                'rounded border border-slate-700 ' +
+                                'bg-slate-950 px-2 py-1 text-xs ' +
+                                'text-slate-200 outline-none ' +
+                                'focus:border-cyan-500',
+                            title: 'Order the whole filtered list, not just this page'
+                        },
+                        ...[['newest', 'Newest'], ['oldest', 'Oldest'], ['wait', 'Longest wait'], ['talk', 'Longest talk'], ['hold', 'Longest hold']].map(([value, label]) =>
+                            h('option', { key: value, value: value }, label)
+                        )
+                    ),
+                    h(
+                        'button',
+                        {
+                            type: 'button',
+                            className: 'call-modal-dir',
+                            title: sortDir === 'asc' ? 'Ascending — click for descending' : 'Descending — click for ascending',
+                            'aria-label': 'Reverse the sort direction',
+                            onClick: () => {
+                                const nextDir = sortDir === 'asc' ? 'desc' : 'asc';
+                                setSortDir(nextDir);
+                                /*
+                                 * The date column is named after its direction
+                                 * (Newest / Oldest), so flipping the arrow has
+                                 * to relabel it — otherwise the control says
+                                 * "Newest ↑ ascending", which is nonsense.
+                                 * The duration columns keep their own name:
+                                 * "Longest wait ↑" is a fine thing to ask for.
+                                 */
+                                if (sortKey === 'newest' || sortKey === 'oldest') {
+                                    setSortKey(nextDir === 'asc' ? 'oldest' : 'newest');
+                                }
+                                setPage(1);
+                            }
+                        },
+                        sortDir === 'asc' ? '↑ asc' : '↓ desc'
                     )
                 ),
 

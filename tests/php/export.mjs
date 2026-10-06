@@ -184,11 +184,23 @@ console.log('== CSV exports (real PHP 8.4)\n');
   });
   const lines = csvLines(csv.phpOutput);
   check('telephone numbers export header',
-    lines[0] === 'number,type,enabled,routes_to,extension,department,site,calls,missed,talk', lines[0]);
+    lines[0] === 'number,type,enabled,routes_to,extension,department,site,calls,missed,abandoned,talk', lines[0]);
+  /*
+   * The abandoned column (Sprint A) is the subset of the missed ones — the
+   * callers who reached a queue and hung up — so it can never exceed the missed
+   * count on the same row. That is the invariant worth pinning, not the number.
+   */
+  const cell = (line, index) => Number(line.split(',')[index]);
+  check('every DID row keeps abandons at or below its missed count',
+    lines.slice(1, 3).every(line => cell(line, 9) <= cell(line, 8)),
+    lines.slice(1, 3).map(line => [cell(line, 8), cell(line, 9)]));
   check('telephone numbers export includes every number, used or not',
     lines.length === 4 && lines[1].startsWith('8457620002') && lines[2].startsWith('8005551212'),
     lines.slice(1));
   check('telephone numbers export ends with a totals row', lines[3].startsWith('TOTAL'), lines[3]);
+  check('the totals row carries the same number of columns as the header',
+    lines[3].split(',').length === lines[0].split(',').length,
+    [lines[0].split(',').length, lines[3].split(',').length]);
 }
 
 /* ------------------------------------------------------------- permissions */

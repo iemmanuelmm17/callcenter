@@ -115,6 +115,17 @@ export const FIXTURES = {
       inbound: panel('Inbound', HOURS, DAYS),
       outbound: panel('Outbound', HOURS, DAYS),
       hours: HOURS,
+      /*
+       * AHT by hour (Sprint A). Two busy hours and twenty-two empty ones — the
+       * shape a real quiet week has. Hour 9 carries the outbound/on-net talk
+       * that must NOT enter AHT: 60 s of inbound talk over 1 answered call,
+       * which is why the hour reads 60 s rather than 487 s.
+       */
+      hourly: Array.from({ length: 24 }, (_, h) => (
+        h === 8 ? { hour: 8, calls: 3, answered: 2, missed: 1, talkSeconds: 300, aht: 150 }
+          : h === 9 ? { hour: 9, calls: 4, answered: 1, missed: 1, talkSeconds: 60, aht: 60 }
+            : { hour: h, calls: 0, answered: 0, missed: 0, talkSeconds: 0, aht: 0 }
+      )),
       days: DAYS,
       outcomes: { answered: 1400, missed: 130, busy: 12, failed: 6 },
       duration: [{ label: '0–30s', count: 120 }, { label: '30–60s', count: 90 }],
@@ -155,15 +166,15 @@ export const FIXTURES = {
   telephone_numbers: {
     numbers: [
       { id: '1', number: '8457620002', type: 'Local DID', enabled: true,
-        calls: { inbound: 812, missed: 143, outbound: 12, talkSeconds: 41230, firstCall: '2026-08-02T10:00:00Z', lastCall: '2026-08-02T18:00:00Z' },
+        calls: { inbound: 812, missed: 143, abandoned: 58, outbound: 12, talkSeconds: 41230, firstCall: '2026-08-02T10:00:00Z', lastCall: '2026-08-02T18:00:00Z' },
         destination: { name: 'Main line', extension: '2000', department: 'Support', site: 'HQ' },
         routing: { application: 'to-callqueue' } },
       { id: '2', number: '8005551212', type: 'Toll-Free', enabled: false,
-        calls: { inbound: 130, missed: 12, outbound: 0, talkSeconds: 8040 },
+        calls: { inbound: 130, missed: 12, abandoned: 2, outbound: 0, talkSeconds: 8040 },
         destination: { name: 'Sales', extension: '2200', department: 'Sales', site: 'Branch' },
         routing: { application: 'to-user' } }
     ],
-    summary: { totalNumbers: 2, enabledNumbers: 1, totalCalls: 942, totalInbound: 942, totalMissed: 155, totalTalkSeconds: 49270 },
+    summary: { totalNumbers: 2, enabledNumbers: 1, totalCalls: 942, totalInbound: 942, totalMissed: 155, totalAbandoned: 60, totalTalkSeconds: 49270 },
     charts: { hours: HOURS, days: DAYS, outcomes: { answered: 942, missed: 155, busy: 0, failed: 0 }, duration: [{ label: '0–30s', count: 40 }], heatmap: Array.from({ length: 7 }, () => HOURS) },
     repeatCallers: [{ caller: '8454259810', calls: 3, answered: 2, missed: 1, dids: [{ number: '8457620002', calls: 3, answered: 2, missed: 1 }] }],
     departments: ['Support', 'Sales'], sites: ['HQ', 'Branch']
@@ -190,6 +201,35 @@ export const FIXTURES = {
   },
   queue: {
     queues: [{ callqueue: '700', description: 'Sales queue', site: 'HQ', agentsOnline: 4, agentsTotal: 6, waiting: 2, calls: 240, slaPct: 88 }],
+    /*
+     * Two queues for the Queue stats grid, with numbers chosen so the totals
+     * row can be checked by hand and so a WRONG aggregate is visibly wrong:
+     * the weighted average ring time is (20x70 + 10x45) / 115 = 16 s, while the
+     * mean of the two averages would be 15 s, and the SLA rate is
+     * (80x100 + 90x60) / 160 = 83.8 % (weighted by the larger of offered and
+     * legs, the page's own rule) rather than the 85 % mean of 80 and 90.
+     */
+    queueStats: [
+      { callqueue: '700', description: 'Sales queue', site: 'HQ', totalCalls: 100, offered: 80, handled: 70,
+        slaMiss: 14, sla: 80, abandoned: 10, abandonRate: 12.5,
+        avgRing: 20, maxRing: 90, avgTalk: 180, maxTalk: 600, totalTalk: 20000 },
+      { callqueue: '701', description: 'Support queue', site: 'HQ', totalCalls: 60, offered: 50, handled: 45,
+        slaMiss: 5, sla: 90, abandoned: 5, abandonRate: 10,
+        avgRing: 10, maxRing: 60, avgTalk: 120, maxTalk: 400, totalTalk: 8000 }
+    ],
+    /*
+     * Service level by interval (Sprint A): two busy intervals, so the card's
+     * totals line can be checked by hand.
+     *   09:00  6 offered, 5 answered, 1 abandoned, asa 20 s, sla 80 %, 1 missed
+     *   10:00  2 offered, 2 answered, 0 abandoned, asa 40 s, sla 50 %, 1 missed
+     * Totals: 8 offered / 7 answered / 1 abandoned; weighted ASA
+     * (5x20 + 2x40) / 7 = 25.7 s; SLA (7 - 2) / 7 = 71.4 % (NOT the 65 % mean).
+     */
+    intervalMinutes: 60,
+    intervalSla: [
+      { from: '09:00', to: '10:00', offered: 6, answered: 5, abandoned: 1, asa: 20, sla: 80, slaMiss: 1 },
+      { from: '10:00', to: '11:00', offered: 2, answered: 2, abandoned: 0, asa: 40, sla: 50, slaMiss: 1 }
+    ],
     selected: '700',
     queue: { callqueue: '700', description: 'Sales queue', site: 'HQ', dispatchType: 'simultaneous' },
     kpis: { waiting: 2, agentsAvailable: 4, agentsTotal: 6, totalCalls: 240, avgWait: 18, sla: 88.4, abandonRate: 3.2, aht: 205, longestWait: 74 },

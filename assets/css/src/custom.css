@@ -3339,3 +3339,50 @@ html[data-theme="light"] .ops-rank-tab.is-on {
   font-size: 11px; color: var(--color-slate-400);
   font-variant-numeric: tabular-nums;
 }
+
+/* Totals rows on the agent / queue / DID grids (manager review §5.1).
+ *
+ * The row is the first row of <tbody>, so it must not inherit the striped
+ * nth-child background that makes row 1 look like a data row: it gets its own
+ * surface, a heavier top rule and tabular figures so the sums line up with the
+ * columns above them. Sticky off, because the grids scroll horizontally only.
+ */
+.grid-totals td {
+  background: color-mix(in srgb, var(--color-slate-800, #1e293b) 55%, transparent);
+  border-top: 2px solid var(--color-slate-600, #475569);
+  border-bottom: 1px solid var(--color-slate-700, #334155);
+  font-weight: 650;
+  color: var(--color-slate-100, #f1f5f9);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+html[data-theme="light"] .grid-totals td {
+  background: color-mix(in srgb, #cbd5e1 60%, transparent);
+  border-top-color: #94a3b8;
+}
+
+/* The sub-line under a KPI value, for the base of a rate (review §5.2). */
+.tn-kpi-mini-base { margin-top: 2px; font-size: 10px; color: var(--color-slate-400, #94a3b8); }
+
+/* AHT / missed by hour, under the volume chart (Sprint A). */
+.ops-hour-detail { margin-top: 8px; border-top: 1px solid rgba(148,163,184,.12); padding-top: 6px; }
+.ops-hour-table { width: 100%; font-size: 11px; border-collapse: collapse; }
+.ops-hour-table th {
+  text-align: left; font-weight: 600; color: var(--color-slate-500);
+  font-size: 10px; text-transform: uppercase; letter-spacing: .02em; padding: 2px 4px;
+}
+.ops-hour-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--color-slate-300); }
+.ops-hour-cell { padding: 2px 4px; color: var(--color-slate-400); font-variant-numeric: tabular-nums; }
+.ops-hour-row { cursor: pointer; }
+.ops-hour-row:hover .ops-hour-cell { color: var(--color-cyan-400, #22d3ee); }
+.ops-hour-row td { padding: 2px 4px; border-top: 1px solid rgba(148,163,184,.07); }
+.ops-hour-row:hover td { background: rgba(148,163,184,.08); }
+
+/* The call list's sort-direction toggle (review F5). */
+.call-modal-dir {
+  margin-left: 4px; padding: 2px 6px; font-size: 11px; line-height: 1.4;
+  border: 1px solid var(--color-slate-700, #334155); border-radius: 3px;
+  background: var(--color-slate-950, #020617); color: var(--color-slate-300, #cbd5e1);
+  cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.call-modal-dir:hover { border-color: var(--color-cyan-500, #06b6d4); color: var(--color-cyan-300, #67e8f9); }

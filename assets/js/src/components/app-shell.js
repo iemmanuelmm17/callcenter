@@ -694,6 +694,14 @@ if (route === 'agents') {
             queue: payload.queue || null,
             queuesOnly: !!payload.queuesOnly,
             slaSeconds: payload.slaSeconds,
+            /*
+             * Sprint A: a service-level-by-interval row carries its own
+             * [timeFrom, timeTo) window, the same way the Simultaneous rows do.
+             * Without this the row would open the whole period, and the number
+             * that made the reader click would not be the number they see.
+             */
+            timeFrom: payload.timeFrom || null,
+            timeTo: payload.timeTo || null,
             callTypes: {inbound: true, outbound: true, missed: true, onnet: true}
         })
     });

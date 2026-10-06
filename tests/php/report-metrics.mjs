@@ -857,6 +857,79 @@ if (quality.status === 200) {
     explicitAfter.status === 200 ? explicitAfter.body.summary.counts.total : explicitAfter.log);
 }
 
+/* ================================================= A6. hourly detail / AHT by hour */
+
+console.log('\n== hourly detail: AHT by hour, and the numbers the grid adds up ==');
+
+/*
+ * A fresh day (2026-08-18, a Tuesday) with a deliberately shaped fixture: the
+ * 08:00 hour holds two answered inbound calls and one miss; the 09:00 hour holds
+ * ONE answered inbound call, one miss, one OUTBOUND call with 500 s of talk and
+ * one ON-NET call with 900 s of talk.
+ *
+ * The outbound and on-net legs are there to fail loudly if AHT is ever computed
+ * over "calls with talk time" instead of answered inbound calls: the hour would
+ * read (60 + 500 + 900) ÷ 3 = 487 s instead of 60 s. AHT is the desk's answering
+ * speed, so an outbound campaign's talk time must not enter it.
+ *
+ * Hand count, hour 8: calls 3, answered 2, missed 1, talk 300, aht 150.
+ * Hand count, hour 9: calls 4, answered 1, missed 1, talk 60, aht 60.
+ * Period: 7 calls, 3 inbound, 2 missed, 1 outbound, 1 on-net.
+ */
+await harness.seedPbx('fetchCdrs', [
+  { id: 'h1', 'call-direction': 1, 'call-start-datetime': '2026-08-18T08:15:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-18T08:15:10Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-talking-duration-seconds': 100, 'call-orig-caller-id': '5553000001' },
+  { id: 'h2', 'call-direction': 1, 'call-start-datetime': '2026-08-18T08:30:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-18T08:30:15Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-talking-duration-seconds': 200, 'call-orig-caller-id': '5553000002' },
+  { id: 'h3', 'call-direction': 1, 'call-start-datetime': '2026-08-18T08:45:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-18T08:45:20Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-orig-caller-id': '5553000003' },
+  { id: 'h4', 'call-direction': 1, 'call-start-datetime': '2026-08-18T09:10:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-18T09:10:05Z[US/Eastern]', 'call-term-user': '6081',
+    'call-through-user': '701', 'call-talking-duration-seconds': 60, 'call-orig-caller-id': '5553000004' },
+  { id: 'h5', 'call-direction': 0, 'call-start-datetime': '2026-08-18T09:20:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-18T09:20:05Z[US/Eastern]', 'call-orig-user': '6080',
+    'call-orig-to-user': '5553000005', 'call-talking-duration-seconds': 500 },
+  { id: 'h6', 'call-direction': 2, 'call-start-datetime': '2026-08-18T09:30:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-18T09:30:10Z[US/Eastern]', 'call-term-user': '6081',
+    'call-through-user': '701', 'call-orig-caller-id': '5553000006' },
+  { id: 'h7', 'call-direction': 3, 'call-start-datetime': '2026-08-18T09:40:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-18T09:40:05Z[US/Eastern]', 'call-term-user': '6081',
+    'call-talking-duration-seconds': 900 }
+]);
+
+const hourly = await harness.request('report.php', {
+  body: { start: '2026-08-18', end: '2026-08-18', skipPrevious: true, hours: 'all' },
+  user: USERS.office_manager
+});
+const H = hourly.body?.summary || {};
+const hourAt = n => (H.hourly || [])[n] || {};
+check('the report publishes 24 hourly entries',
+  Array.isArray(H.hourly) && H.hourly.length === 24, Array.isArray(H.hourly) ? H.hourly.length : H.hourly);
+check('hour 08 counts the three calls that started in it',
+  hourAt(8).calls === 3 && hourAt(8).answered === 2 && hourAt(8).missed === 1,
+  hourAt(8));
+check('hour 08 AHT is 300 s of inbound talk over 2 answered calls = 150 s',
+  hourAt(8).talkSeconds === 300 && hourAt(8).aht === 150, hourAt(8));
+check('hour 09 counts four calls but only the one answered inbound call in AHT',
+  hourAt(9).calls === 4 && hourAt(9).answered === 1 && hourAt(9).missed === 1, hourAt(9));
+check('OUTBOUND and ON-NET talk time stays out of AHT (60 s, not 487 s)',
+  hourAt(9).talkSeconds === 60 && hourAt(9).aht === 60, hourAt(9));
+check('the hour index agrees with the plain hours series the chart draws',
+  (H.hours || [])[8] === 3 && (H.hours || [])[9] === 4, (H.hours || []).slice(6, 12));
+check('the hourly entries add up to the period counts',
+  (H.hourly || []).reduce((a, h) => a + h.calls, 0) === H.counts?.total
+    && (H.hourly || []).reduce((a, h) => a + h.answered, 0) === H.counts?.inbound
+    && (H.hourly || []).reduce((a, h) => a + h.missed, 0) === H.counts?.missed,
+  [H.counts, (H.hourly || []).reduce((a, h) => a + h.calls, 0)]);
+check('an hour nobody called is a zero row, not a missing one',
+  hourAt(3).calls === 0 && hourAt(3).aht === 0 && hourAt(3).talkSeconds === 0, hourAt(3));
+check('every answered hour has talk time behind its AHT',
+  (H.hourly || []).every(h => h.answered === 0 || h.talkSeconds > 0 || h.aht === 0),
+  (H.hourly || []).filter(h => h.answered > 0 && h.talkSeconds === 0));
+
 /*
  * A day whose fetch stopped at the page cap is SHORT, and the whole point of
  * the appendix is to say so. This writes the partial day the way the fetcher

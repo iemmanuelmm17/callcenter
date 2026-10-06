@@ -10,6 +10,7 @@ import { api } from '../lib/api.js';
 import { fmt, fmtNum } from '../lib/format.js';
 import { h, keyActivate, useEffect, useRef, useState } from '../lib/react.js';
 import { slaRingClass } from '../lib/sla.js';
+import { maxBy, sumBy, weightedMean, weightedPct } from '../lib/totals.js';
 import { formatCallDate, formatCallTime } from '../lib/time.js';
 
 function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, onCallClick, initialQueue}) {
@@ -141,14 +142,21 @@ function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, o
       setStatsSortDir(field === 'callqueue' || field === 'description' ? 'asc' : 'desc');
     }
   };
-  const openQueueCalls = (metric, queueId) => {
+  /*
+   * `interval` is [from, to] clock strings ("09:00", "09:15"). The call list
+   * filters on that window, so an interval row opens exactly the calls counted
+   * in that row — the same drill the Simultaneous tab and the DID bars use.
+   */
+  const openQueueCalls = (metric, queueId, interval) => {
     if (typeof onCallClick !== 'function') return;
     const q = queueId !== undefined ? queueId : selected;
     onCallClick({
       metric: metric || 'total',
       queue: q || null,
       queuesOnly: !q,
-      slaSeconds
+      slaSeconds,
+      timeFrom: interval ? interval[0] : null,
+      timeTo: interval ? interval[1] : null
     });
   };
   const meta = data?.queue || null;
@@ -298,6 +306,22 @@ function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, o
     skelPanel('h-48')
   );
 
+  /*
+   * Only the intervals that took traffic, and only the four numbers that answer
+   * "when did the desk fail": offered, answered, abandoned, and the wait those
+   * answers took. A 24-row table of twelve empty intervals hides the busy ones.
+   */
+  const intervalRows = (Array.isArray(data?.intervalSla) ? data.intervalSla : [])
+    .filter(row => Number(row.offered || 0) > 0 || Number(row.answered || 0) > 0 || Number(row.abandoned || 0) > 0);
+  const intervalTotals = intervalRows.reduce((acc, row) => {
+    acc.offered += Number(row.offered || 0);
+    acc.answered += Number(row.answered || 0);
+    acc.abandoned += Number(row.abandoned || 0);
+    acc.slaMiss += Number(row.slaMiss || 0);
+    acc.waitSum += Number(row.asa || 0) * Number(row.answered || 0);
+    return acc;
+  }, {offered: 0, answered: 0, abandoned: 0, slaMiss: 0, waitSum: 0});
+
   const overview = h('div', {className: 'space-y-3'},
     h('section', {className: 'dash-kpi'},
       h(KpiCard, {label: 'Waiting now', value: kpis.waiting ?? 0, icon: 'fa-solid fa-hourglass-half', tone: (kpis.waiting || 0) > 0 ? 'bad' : null, tooltip: 'Live callers currently queued (active-queued-calls-total-current).'}),
@@ -404,6 +428,64 @@ function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, o
         )
       )
     ),
+    /*
+     * Service level by interval (review §3, the 09:00 spike). A period average
+     * hides the one quarter-hour that ruined the morning: this lists only the
+     * intervals that took traffic, with the same SLA rule as the KPI above
+     * (answered within the target), and a totals line that has to agree with it.
+     */
+    intervalRows.length === 0
+      ? null
+      : h('section', {className: 'dash-card'},
+          h('div', {className: 'dash-label'}, 'Service level by interval',
+            qHelp('Each row is one ' + (data?.intervalMinutes || 60) + '-minute interval of the day, summed across the range. Only intervals that took calls are listed. ASA is the average wait of the calls answered in that interval; SLA is their share answered within the target. Click a row to open that interval\'s calls.')),
+          h('div', {className: 'q-table-wrap'},
+            h('table', {className: 'q-table'},
+              h('thead', null, h('tr', null,
+                h('th', null, 'Interval'),
+                h('th', {className: 'text-right'}, 'Offered'),
+                h('th', {className: 'text-right'}, 'Answered'),
+                h('th', {className: 'text-right'}, 'Abandoned'),
+                h('th', {className: 'text-right'}, 'ASA'),
+                h('th', {className: 'text-right'}, 'SLA'),
+                h('th', {className: 'text-right'}, 'SLA missed')
+              )),
+              h('tbody', null,
+                ...intervalRows.map(row => h('tr', {
+                  key: row.from,
+                  className: 'cursor-pointer',
+                  role: 'button',
+                  tabIndex: 0,
+                  title: 'Open the calls that arrived between ' + row.from + ' and ' + row.to,
+                  onClick: () => openQueueCalls('queue_offered', undefined, [row.from, row.to]),
+                  onKeyDown: keyActivate(() => openQueueCalls('queue_offered', undefined, [row.from, row.to]))
+                },
+                  h('td', {className: 'text-slate-300 font-mono'}, row.from + '–' + row.to),
+                  h('td', {className: 'text-right'}, fmtNum(row.offered)),
+                  h('td', {className: 'text-right text-slate-200'}, fmtNum(row.answered)),
+                  h('td', {className: 'text-right ' + (row.abandoned > 0 ? 'text-rose-400' : 'text-slate-500')}, fmtNum(row.abandoned)),
+                  h('td', {className: 'text-right font-mono text-cyan-300'}, row.answered > 0 ? fmt(row.asa) : '—'),
+                  h('td', {className: 'text-right ' + (row.answered > 0 && row.sla < Number(slaPct || 80) ? 'text-rose-400' : 'text-slate-200')},
+                    row.answered > 0 ? row.sla + '%' : '—'),
+                  h('td', {className: 'text-right text-slate-400'}, fmtNum(row.slaMiss))
+                )),
+                h('tr', {className: 'grid-totals'},
+                  h('td', null, 'All ' + intervalRows.length + ' intervals'),
+                  h('td', {className: 'text-right'}, fmtNum(intervalTotals.offered)),
+                  h('td', {className: 'text-right'}, fmtNum(intervalTotals.answered)),
+                  h('td', {className: 'text-right'}, fmtNum(intervalTotals.abandoned)),
+                  h('td', {className: 'text-right font-mono'},
+                    intervalTotals.answered > 0 ? fmt(intervalTotals.waitSum / intervalTotals.answered) : '—'),
+                  h('td', {className: 'text-right'},
+                    intervalTotals.answered > 0
+                      ? (Math.round(((intervalTotals.answered - intervalTotals.slaMiss) / intervalTotals.answered) * 1000) / 10) + '%'
+                      : '—'),
+                  h('td', {className: 'text-right'}, fmtNum(intervalTotals.slaMiss))
+                )
+              )
+            )
+          )
+        ),
     h('section', {className: 'dash-card'},
       h('div', {className: 'mb-2 flex items-center justify-between gap-2'},
         h('div', {className: 'dash-label mb-0'}, 'Recent calls', qHelp('Click a row to load the Sky cradle path (queues then answering agent). Ring is wait-to-answer. Use Open to open that one call — recording and SIP flow.')),
@@ -525,6 +607,13 @@ function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, o
   );
 
   const statsSites = Array.from(new Set(queueStats.map(q => String(q.site || '').trim()).filter(Boolean))).sort();
+  /*
+   * The totals row (manager review, §5.1) over the queues the filters left, not
+   * the ten rows one page shows. Counts sum; the SLA rate is recomputed from the
+   * summed weight (offered, falling back to legs) exactly as a row's rate is;
+   * averages are weighted by the calls they average; a "longest" column takes the
+   * longest, because summing two longest-ring times means nothing.
+   */
   const statsTotals = statsFiltered.reduce((acc, q) => {
     const n = Number(q.totalCalls || 0);
     const offered = Number(q.offered || 0);
@@ -538,6 +627,26 @@ function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, o
     acc.abandoned += Number(q.abandoned || 0);
     return acc;
   }, {queues: 0, calls: 0, offered: 0, slaW: 0, slaWBase: 0, handled: 0, slaMiss: 0, abandoned: 0});
+  const statsTotalsRow = statsFiltered.length
+      ? h('tr', {className: 'grid-totals'},
+          h('td', {className: 'qs-num'}, 'All'),
+          h('td', {className: 'qs-qname'}, statsTotals.queues + (statsTotals.queues === 1 ? ' queue' : ' queues')),
+          h('td', {className: 'qs-num'}, fmtNum(statsTotals.calls)),
+          h('td', {className: 'qs-num'}, fmtNum(statsTotals.offered)),
+          h('td', {className: 'qs-num'}, fmtNum(statsTotals.handled)),
+          h('td', {className: 'qs-num'}, fmtNum(statsTotals.slaMiss)),
+          /* Written out rather than reusing overallSla below, so the row cannot
+           * be read before that const exists. */
+          h('td', {className: 'qs-num'}, (statsTotals.slaWBase ? (statsTotals.slaW / statsTotals.slaWBase) : 0).toFixed(1) + '%'),
+          h('td', {className: 'qs-num'}, fmtNum(statsTotals.abandoned)),
+          h('td', {className: 'qs-num'}, weightedPct(statsFiltered, 'abandoned', 'offered').toFixed(1) + '%'),
+          h('td', {className: 'qs-num'}, fmt(weightedMean(statsFiltered, 'avgRing', 'handled'))),
+          h('td', {className: 'qs-num'}, fmt(maxBy(statsFiltered, 'maxRing'))),
+          h('td', {className: 'qs-num'}, fmt(weightedMean(statsFiltered, 'avgTalk', 'handled'))),
+          h('td', {className: 'qs-num'}, fmt(maxBy(statsFiltered, 'maxTalk'))),
+          h('td', {className: 'qs-num'}, fmt(sumBy(statsFiltered, 'totalTalk')))
+        )
+      : null;
   const overallSla = statsTotals.slaWBase ? (statsTotals.slaW / statsTotals.slaWBase) : 0;
   const openStat = (ev, metric, queueId) => {
     if (ev) ev.stopPropagation();
@@ -638,6 +747,7 @@ function QueueDashboard({filters, slaSeconds, slaPct, abandonPct, onSlaChange, o
           })
         )),
         h('tbody', null,
+          statsTotalsRow,
           statsSlice.length === 0
             ? h('tr', null, h('td', {colSpan: statsColumns.length, className: 'px-2 py-8 text-center text-xs text-slate-500'}, 'No queue stats.'))
             : statsSlice.map(q => {

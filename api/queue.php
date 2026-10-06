@@ -754,6 +754,9 @@ try {
                 'perQueueTargets' => $queueSlaMap !== [],
             ],
             'hours' => $hours,
+            /* The interval size the rows below were bucketed at, so a reader
+             * never has to infer it from the row labels. */
+            'intervalMinutes' => $intervalMinutes,
             'intervalSla' => array_values(array_map(
                 static function (array $b, int $index) use ($intervalMinutes): array {
                     $start = $index * $intervalMinutes;

@@ -158,6 +158,165 @@ console.log('\n== service settings: opening hours, targets, roster ==');
  * that has to carry the band it was opened from (a band nobody can drill into
  * is a number nobody can act on).
  */
+/*
+ * Totals rows (review §5.1/§5.2): the row must be on screen, it must add up
+ * from the ROWS THE PAGE IS SHOWING, and a rate must be recomputed rather than
+ * averaged. The numbers below are hand-computed from the fixture:
+ *
+ *   Agent stats:  missed (mc + ab) 24+16+20+15 = 75 of offered 240+185 = 425
+ *                 -> 17.6 %, where the mean of 16.7 % and 18.9 % would be 17.8 %
+ *                 AHT 210 s on 200 calls and 190 s on 150 -> weighted 201 s
+ *                 (the plain mean would be 200 s; the third agent below makes
+ *                 the difference visible: 60 s on 1 call vs 120 s on 99, 119 s)
+ *   Queues:       totals row above the queue stats, SLA recomputed from weight
+ *   DIDs:         missed 143 + 12 = 155, abandoned 58 + 2 = 60, talk 41230 + 8040
+ */
+console.log('\n== totals rows on every grid (review 5.1) ==');
+{
+  await goTo('Agents');
+  await flush(8);
+  const statsTab = byText('.aa-tab', 'Agent stats');
+  if (statsTab) await click(statsTab);
+  await flush(8);
+  const agentSection = [...document.querySelectorAll('section')].find(s => /Agent stats/.test(s.textContent));
+  const agentTotals = agentSection ? agentSection.querySelector('tbody tr.grid-totals') : null;
+  check('the agent grid has a totals row as the first body row',
+    !!agentTotals && agentSection.querySelector('tbody tr') === agentTotals,
+    agentTotals && agentTotals.textContent.slice(0, 200));
+  const agentText = agentTotals ? agentTotals.textContent : '';
+  check('the totals row sums the calls of the agents on screen (245 + 185 = 430)',
+    /430/.test(agentText), agentText.slice(0, 200));
+  check('the totals row shows the agent count, not just a label',
+    /2 agents/.test(agentText), agentText.slice(0, 200));
+  check('the missed rate is recomputed (75 of 425 = 17.6 %), not the mean of 16.7 and 18.9',
+    /17\.6%/.test(agentText) && !/17\.8%/.test(agentText), agentText.slice(0, 260));
+  check('the AHT is weighted by inbound volume (201 s, not the 200 s plain mean)',
+    /20:?0?1|201|3:21/.test(agentText) || /03:21/.test(agentText), agentText.slice(0, 260));
+  check('the totals row is a real row, not a footer that scrolls away',
+    !!agentTotals && agentTotals.parentElement.tagName === 'TBODY');
+
+  await goTo('Queues');
+  await flush(10);
+  const qTab = byText('.aa-tab', 'Queue stats');
+  if (qTab) await click(qTab);
+  await flush(10);
+  const queueTotals = document.querySelector('tbody tr.grid-totals');
+  check('the queue grid has a totals row', !!queueTotals,
+    queueTotals && queueTotals.textContent.slice(0, 200));
+  const queueText = queueTotals ? queueTotals.textContent : '';
+  check('the queue totals row counts the queues it summarises',
+    /2 queues/.test(queueText), queueText.slice(0, 160));
+  check('the queue totals row sums the calls behind the filters (100 + 60 = 160)',
+    /160/.test(queueText), queueText.slice(0, 200));
+  check('the queue totals row sums the abandons (10 + 5 = 15)',
+    /15/.test(queueText), queueText.slice(0, 220));
+  check('the queue SLA rate is recomputed from the weighted rows (83.8 %, not 85 %)',
+    /83\.8%/.test(queueText) && !/85\.0%/.test(queueText), queueText.slice(0, 240));
+  check('the queue averages are weighted by handled calls (16 s, not the 15 s mean)',
+    /00:00:16/.test(queueText) && !/00:00:15/.test(queueText), queueText.slice(0, 260));
+  check('the queue totals row sums total talk time (20,000 + 8,000 = 28,000 s)',
+    /07:46:40/.test(queueText), queueText.slice(0, 300));
+
+  await goTo('Telephone Numbers');
+  await flush(10);
+  const didTotals = document.querySelector('tbody tr.grid-totals');
+  check('the DID grid has a totals row', !!didTotals,
+    didTotals && didTotals.textContent.slice(0, 200));
+  const didText = didTotals ? didTotals.textContent : '';
+  check('the DID totals row adds the missed and abandoned columns',
+    /155/.test(didText) && /60/.test(didText), didText.slice(0, 200));
+  check('the DID grid states the abandon share of missed as a base (60 of the 155)',
+    /60 of the 155/.test(document.body.textContent),
+    document.body.textContent.match(/60 of the 155[^<]{0,20}/)?.[0]);
+}
+
+/*
+ * Service level by interval (review §3, the 09:00 spike). The card exists so a
+ * period average cannot hide the quarter-hour that failed, so the test checks
+ * the row it would hide behind: the 09:00 interval's own SLA, the weighted
+ * totals, and the drill carrying the window into the call list.
+ */
+/*
+ * The call list's own sort control (review F5). It must be on screen, offer the
+ * five orders the endpoint supports, and the direction toggle must actually
+ * re-request from the server — sorting the 25 rows in the browser would sort
+ * the page, not the result set.
+ */
+console.log('\n== call list: the sort control ==');
+{
+  await goTo('Dashboard');
+  await flush(10);
+  const inbox = [...document.querySelectorAll('.ops-card, section')]
+    .find(c => /Missed/.test(c.textContent) && c.querySelector('button'));
+  if (inbox) await click(inbox.querySelector('button'));
+  await flush(10);
+  const modal = document.querySelector('.call-modal');
+  check('a call list is open to sort', !!modal);
+  const sortSelect = modal ? [...modal.querySelectorAll('select')].find(sel => [...sel.options].some(o => o.value === 'talk')) : null;
+  check('the call list has a sort control', !!sortSelect);
+  check('the sort control offers the five orders the endpoint supports (newest/oldest/wait/talk/hold)',
+    !!sortSelect && [...sortSelect.options].map(o => o.value).join(',') === 'newest,oldest,wait,talk,hold',
+    sortSelect && [...sortSelect.options].map(o => o.value));
+  const dirBtn = modal ? modal.querySelector('.call-modal-dir') : null;
+  check('the sort direction is a control of its own', !!dirBtn, dirBtn && dirBtn.textContent);
+  if (dirBtn) {
+    await click(dirBtn);
+    await flush(10);
+  }
+  const sorted = [...requested].reverse().find(r => r.endpoint === 'calls');
+  let sortedBody = {};
+  try { sortedBody = sorted ? JSON.parse(sorted.body) : {}; } catch { sortedBody = {}; }
+  check('flipping the direction re-requests the whole list from the server',
+    sortedBody.dir === 'asc' && sortedBody.sort === 'oldest',
+    [sortedBody.sort, sortedBody.dir]);
+  check('the direction button relabels itself (never "Newest ascending")',
+    !!dirBtn && /asc/i.test(dirBtn.textContent), dirBtn && dirBtn.textContent);
+  await press(document, 'Escape');
+  await flush(4);
+}
+
+console.log('\n== queues: service level by interval ==');
+{
+  await goTo('Queues');
+  await flush(12);
+  /* The interval card lives on the per-queue Overview tab, not the stats grid. */
+  const overviewTab = byText('.aa-tab', 'Overview');
+  if (overviewTab) await click(overviewTab);
+  await flush(12);
+  const cards = [...document.querySelectorAll('section.dash-card')];
+  const intervalCard = cards.find(c => /Service level by interval/.test(c.textContent));
+  check('the queue overview has a service-level-by-interval card', !!intervalCard);
+  if (intervalCard) {
+    const rows = [...intervalCard.querySelectorAll('tbody tr')].filter(r => !r.className.includes('grid-totals'));
+    check('the card lists the busy intervals only', rows.length === 2, rows.length);
+    check('the 09:00 interval states its own SLA (80 %) rather than the period average',
+      /80%/.test(intervalCard.textContent) && /50%/.test(intervalCard.textContent),
+      intervalCard.textContent.slice(0, 240));
+    const totals = intervalCard.querySelector('tbody tr.grid-totals');
+    check('the interval card has a totals line', !!totals, totals && totals.textContent);
+    check('the interval totals sum offered / answered / abandoned (8 / 7 / 1)',
+      !!totals && /8/.test(totals.textContent) && /7/.test(totals.textContent) && /1/.test(totals.textContent),
+      totals && totals.textContent);
+    check('the interval totals recompute SLA ((7 - 2) / 7 = 71.4 %, not the 65 % mean)',
+      !!totals && /71\.4%/.test(totals.textContent) && !/65\.0%/.test(totals.textContent),
+      totals && totals.textContent);
+    const before2 = errors.length;
+    if (rows.length) {
+      await click(rows[1]);
+      await flush(10);
+    }
+    const intervalPost = [...requested].reverse().find(r => r.endpoint === 'calls');
+    let intervalBody = {};
+    try { intervalBody = intervalPost ? JSON.parse(intervalPost.body) : {}; } catch { intervalBody = {}; }
+    check('clicking an interval opens the calls inside that window',
+      intervalBody.timeFrom === '10:00' && intervalBody.timeTo === '11:00',
+      [intervalBody.timeFrom, intervalBody.timeTo, intervalBody.queue]);
+    await press(document, 'Escape');
+    await flush(4);
+    check('the interval card threw nothing', errors.length === before2, errors.slice(before2).join(' | '));
+  }
+}
+
 console.log('\n== dashboard: wait bands and follow-ups ==');
 {
   const before = errors.length;
@@ -191,6 +350,36 @@ console.log('\n== dashboard: wait bands and follow-ups ==');
     /Waited/.test(document.body.textContent), document.body.textContent.slice(0, 120));
   const closeOne = byText('button', 'Close');
   if (closeOne) await click(closeOne);
+  await press(document, 'Escape');
+  await flush(4);
+
+  /*
+   * AHT by hour: the table under the volume chart, its hand-computed totals
+   * line, and the fact that a row drills into that hour.
+   */
+  const hourRows = [...document.querySelectorAll('.ops-hour-row')];
+  check('the hour table lists only the busy hours (2 of 24)', hourRows.length === 2, hourRows.length);
+  const hourTable = document.querySelector('.ops-hour-table');
+  check('the hour table shows AHT per hour', !!hourTable && /AHT/.test(hourTable.textContent));
+  check('hour 09 AHT is 60 s of inbound talk (outbound talk stays out)',
+    !!hourTable && /00:01:00/.test(hourTable.textContent), hourTable && hourTable.textContent.slice(0, 300));
+  const hourTotals = hourTable ? hourTable.querySelector('tr.grid-totals') : null;
+  check('the hour table has a totals line', !!hourTotals, hourTotals && hourTotals.textContent);
+  check('the hour totals line sums calls and answers (7 calls, 3 answered, 2 missed)',
+    !!hourTotals && /7/.test(hourTotals.textContent) && /3/.test(hourTotals.textContent),
+    hourTotals && hourTotals.textContent);
+  check('the hour totals line is the weighted AHT, not the mean of 150 s and 60 s (105 s)',
+    !!hourTotals && /00:02:00/.test(hourTotals.textContent) && !/00:01:45/.test(hourTotals.textContent),
+    hourTotals && hourTotals.textContent);
+  if (hourRows.length) {
+    await click(hourRows[1]);
+    await flush(8);
+  }
+  const hourPost = [...requested].reverse().find(r => r.endpoint === 'calls');
+  let hourBody = {};
+  try { hourBody = hourPost ? JSON.parse(hourPost.body) : {}; } catch { hourBody = {}; }
+  check('clicking an hour row opens the calls that started in it',
+    hourBody.hour === 9, hourBody.hour);
   await press(document, 'Escape');
   await flush(4);
 

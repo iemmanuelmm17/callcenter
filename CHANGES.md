@@ -1,3 +1,110 @@
+# CHANGES — Sprint A, phase 7: totals rows, AHT by hour, the interval view, and the sort control
+
+**What this phase is about.** Phase 6 gave the reader the new numbers. This
+phase makes them add up in front of them — the review's §5, "about trust rather
+than features" — and finishes the three Sprint A items that were still open:
+AHT by hour, `intervalSla` on screen, and a sort control on the call list.
+
+## Totals rows on every grid (review §5.1)
+
+The agent, queue-stats and DID grids now carry a totals row, computed from the
+rows **on screen for the current filters** (after search and the per-grid site
+filter, before pagination — so it is the filtered set, not the ten rows of one
+page). The arithmetic lives in one new module, `assets/js/src/lib/totals.js`,
+because it is arithmetic and not markup:
+
+* counts and total durations **sum**;
+* a "longest" column takes the **max** — a sum of "longest ring time" is
+  meaningless;
+* averages (AHT, AAT, ART, ASAs) are **weighted by volume** — a 60-second AHT on
+  one call and a 120-second AHT on ninety-nine is a 119-second desk, not the
+  90-second midpoint;
+* rates are **recomputed from the summed numerator and denominator**, never the
+  mean of percentages. On the fixture: 1 missed of 100 plus 99 of 1,000 is
+  9.1 %, where averaging 1.0 % and 9.9 % would say 5.45 % and understate the
+  desk by nearly half.
+
+The agent CSV gained the same line (`TOTAL`, …) after the agents, computed by the
+same rules, so a spreadsheet reconciles against the screen.
+
+`tests/js/totals.mjs` is a new suite: the two rules above are pinned by name,
+along with the zero-denominator and broken-row cases (a missing field counts as
+zero; a grid with one bad row must not blank its own total).
+
+## A rate carries its base (review §5.2)
+
+`denomText()` / `pctWithBase()` render "12.4% (34 of 280 offered)". The DID page
+uses it first: the Missed-calls card now states its abandon share — "60 of the
+155 abandoned" — because that is the half of the number a reader acts on. The
+grid also gained an **Abandoned** column beside Missed (same `callMissedBucket`
+definition as the dashboard, so a DID flagged as abandoned here is flagged the
+same way there), a sortable header for it, and a column in the CSV.
+
+## AHT by hour (review §3)
+
+`summary.hourly` is new: 24 entries, each with `calls`, `answered`, `missed`,
+`talkSeconds` and `aht`. The dashboard's volume card now carries a small table
+under the chart — only the hours that took traffic, because a quiet desk has
+twelve empty rows and they would push the busy ones off the card — with a
+totals line whose AHT is the period's own weighted figure (Σtalk ÷ Σanswered),
+not the mean of 24 hourly averages. A row opens that hour's calls.
+
+Only **answered inbound** calls put talk time into the hourly AHT. The test
+fixture makes an hour with an outbound call (500 s talk) and an on-net call
+(900 s) and asserts the hour reads 60 s, not 487 s: an outbound campaign's talk
+time is not the desk's answering speed.
+
+## `intervalSla` on screen, and the sort control (F5)
+
+* **Service level by interval** — the queue Overview now renders the
+  `intervalSla` buckets phase 5 started publishing: offered, answered,
+  abandoned, ASA, SLA and SLA-missed per interval, only the busy ones, with a
+  totals line that recomputes the rate from the summed hits. This is the card
+  the review asked for by name: a period average hides the 09:00 spike. Rows
+  drill into that interval's calls. `intervalMinutes` is now published with the
+  buckets so the card never has to infer the interval size, and the app shell
+  forwards the row's window into the call list (it did for the Simultaneous
+  rows; the queue path dropped it).
+* **Sort control on the call list** — the modal's footer gained a Sort select
+  (Newest / Oldest / Longest wait / Longest talk / Longest hold) and a direction
+  toggle. It re-requests from the server, so the whole scoped result set is
+  ordered rather than the 25 rows on screen. Flipping the direction on a date
+  sort relabels it (Never "Newest ↑ ascending").
+
+`api/calls.php` also lost a dead branch: the direction default was
+`in_array(...) ? 'desc' : 'desc'`. `sort=oldest` with no direction was therefore
+a no-op alias of `newest`; it now means oldest-first, which is what the name
+says. Nothing in the app changes (it always sends both parameters), but a
+hand-built URL behaves as documented.
+
+## Evidence
+
+`npm test` = **25 suites green** (the new `totals` suite included). `tests/js/smoke.mjs`
+grew three blocks that check the rendered grids rather than the helpers: the
+totals rows (agent 430 calls, missed rate 17.6 % not 17.8 %, weighted AHT 201 s;
+queue 160 calls, 15 abandons, SLA 83.8 % not 85 %, weighted ring 16 s not 15 s;
+DID 155 missed and 60 abandoned with the "60 of the 155" base on screen), the
+hour table (2 busy rows, hour 09 = 60 s, totals 7 calls / 3 answered, weighted
+00:02:00 not the 00:01:45 mean, and the row's drill sending `hour=9`), the sort
+control (five orders, direction flip re-requesting with `sort=oldest&dir=asc`),
+and the interval card (per-interval SLA 80 % / 50 % beside a totals line of
+71.4 %, not the 65 % mean, with the click carrying `10:00–11:00`).
+`tests/php/report-metrics.mjs` pins `summary.hourly` against a hand-counted
+fixture (§A6), including the outbound/on-net exclusion and the rule that every
+hour with the same index as the chart series agrees with it. `tests/php/call-links.mjs`
+pins `sort=oldest`, `sort=newest` and `sort=hold`; `tests/php/export.mjs` pins
+the new CSV column and the invariant that a DID's abandons never exceed its
+missed calls. `tools/ui-audit.mjs` and `tools/css-coverage.mjs` are clean
+(the new clickable rows carry `role`/`tabIndex`/`onKeyDown`, so they are usable
+without a mouse).
+
+The fixtures grew with the tests: the JS harness now carries `queueStats`,
+`intervalSla`/`intervalMinutes`, `summary.hourly`, `summary.waitBuckets`,
+`summary.hold`, `report.links` and a per-DID `abandoned` count, so the smoke
+suite exercises the cards with the shapes the API actually sends.
+
+---
+
 # CHANGES — Sprint A, phase 6: opening hours, per-queue targets and the roster, editable
 
 **What this phase is about.** Phases 1–5 built the machinery — a business

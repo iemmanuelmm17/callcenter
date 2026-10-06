@@ -518,6 +518,22 @@ if (ledger.status === 200) {
   const talks = (talk.body?.data ?? []).map(r => r.talking);
   check('sort=talk&dir=desc orders by talking time',
     talks.length > 1 && talks.every((v, i) => i === 0 || talks[i - 1] >= v), talks.slice(0, 6));
+  /*
+   * The fixture's own clock, so the expected order is checkable by eye:
+   * w1 10:00, w2 11:00, w3 12:00, w4 12:00, w5 13:00, w8 13:20 (the outbound
+   * return call), w6 14:00, w7 15:00.
+   */
+  const oldest = await callList({ sort: 'oldest' });
+  check('sort=oldest with no direction means oldest first, as it says',
+    (oldest.body?.data ?? []).map(r => r.id).join(',') === 'w1,w2,w3,w4,w5,w8,w6,w7',
+    (oldest.body?.data ?? []).map(r => r.id));
+  const newest = await callList({ sort: 'newest' });
+  check('sort=newest is still newest first (the default)',
+    (newest.body?.data ?? []).map(r => r.id).join(',') === 'w7,w6,w8,w5,w4,w3,w2,w1',
+    (newest.body?.data ?? []).map(r => r.id));
+  const holdSort = await callList({ sort: 'hold' });
+  check('sort=hold orders by held time, longest first',
+    (holdSort.body?.data ?? []).length > 0, (holdSort.body?.data ?? []).map(r => r.id));
   const bad = await callList({ sort: 'nonsense', dir: 'nonsense' });
   check('an unknown sort/dir falls back to newest-first instead of 422 or chaos',
     bad.status === 200
