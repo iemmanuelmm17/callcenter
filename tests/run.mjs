@@ -36,7 +36,8 @@ const SUITES = {
   ],
   js: [
     { name: 'js smoke', cmd: ['node', 'tests/js/smoke.mjs'] },
-    { name: 'aa fields', cmd: ['node', 'tests/js/aa-fields.mjs'] }
+    { name: 'aa fields', cmd: ['node', 'tests/js/aa-fields.mjs'] },
+    { name: 'aa model', cmd: ['node', 'tests/js/aa-model.mjs'] }
   ],
   php: [
     { name: 'api matrix', cmd: ['node', 'tests/php/endpoints.mjs'] },
