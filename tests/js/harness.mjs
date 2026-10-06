@@ -129,7 +129,27 @@ export const FIXTURES = {
       days: DAYS,
       outcomes: { answered: 1400, missed: 130, busy: 12, failed: 6 },
       duration: [{ label: '0–30s', count: 120 }, { label: '30–60s', count: 90 }],
-      heatmap: Array.from({ length: 7 }, () => HOURS.map(n => Math.round(n / 3))),
+      /*
+       * Sprint B weekday x hour grid, hand-built so a test can check a SPECIFIC
+       * cell rather than "a grid rendered": Monday (row 1) 09:00 = 12 offered /
+       * 10 answered / 2 missed, Sunday (row 0) 09:00 = 1, everything else empty.
+       * A row index off by one (Monday-first vs Sunday-first) reads 1 where it
+       * must read 12, which is the mistake this fixture pins.
+       */
+      heatmap: (() => {
+        const volume = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
+        const answered = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
+        const missed = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
+        volume[1][9] = 12; answered[1][9] = 10; missed[1][9] = 2;
+        volume[0][9] = 1; answered[0][9] = 1;
+        return {
+          days: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+          hours: Array.from({ length: 24 }, (_, h) => h),
+          volume, answered, missed,
+          total: 13,
+          maxCell: 12
+        };
+      })(),
       /* Sprint A: the wait bands, the hold nobody used to see, and the links
        * block (transfers / returned calls / repeat callers). */
       waitBuckets: { '0-30': 6, '31-60': 3, '61-120': 2, '120+': 1 },

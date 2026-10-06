@@ -210,6 +210,22 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
     $hourInbound = array_fill(0, 24, 0);
     $hourMissed = array_fill(0, 24, 0);
     $hourTalk = array_fill(0, 24, 0);
+    /*
+     * Sprint B: weekday x hour. The same three facts as the hourly detail, split
+     * one more way, because "we are short on Mondays at 09:00" is the sentence
+     * the hourly chart cannot support - it averages every Monday into every
+     * other day. Rows are indexed by PHP's `w` (0 = Sunday) so the day index is
+     * the calendar's, not an accident of the label list; a call that starts at
+     * 23:50 Saturday is counted in Saturday, not split.
+     *
+     * `volume` is the same offered definition the rest of the dashboard uses
+     * (inbound + missed), `answered` is inbound answered, and `missed` carries
+     * the missed set (abandons included) so a cell can state its own share with
+     * its own base.
+     */
+    $heatVolume = array_fill(0, 7, array_fill(0, 24, 0));
+    $heatAnswered = array_fill(0, 7, array_fill(0, 24, 0));
+    $heatMissed = array_fill(0, 7, array_fill(0, 24, 0));
     $days = [];
     $missedBreakdown = ['noanswer'=>0,'voicemail'=>0,'abandon'=>0];
     $inboundRings = [];
@@ -234,6 +250,19 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
         $type = callType($call);
         if (!isset($counts[$type])) {
             continue;
+        }
+        if ($type === 'inbound' || $type === 'missed') {
+            $heatAt = parseEasternDateTime((string)($call['call-start-datetime'] ?? ''));
+            if ($heatAt instanceof DateTimeImmutable) {
+                $heatDow = (int)$heatAt->format('w');
+                $heatHour = (int)$heatAt->format('G');
+                $heatVolume[$heatDow][$heatHour]++;
+                if ($type === 'inbound') {
+                    $heatAnswered[$heatDow][$heatHour]++;
+                } else {
+                    $heatMissed[$heatDow][$heatHour]++;
+                }
+            }
         }
         $counts[$type]++;
         $counts['total']++;
@@ -370,6 +399,18 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
          * them per screen. `calls` counts every call in scope (the $hours series
          * unchanged); `answered` is inbound answered, which is AHT's denominator.
          */
+        'heatmap' => [
+            /* Sunday-first rows, matching PHP's date('w') - the index IS the
+             * calendar day, so the client can label a row without trusting an
+             * order it did not compute. */
+            'days' => ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+            'hours' => range(0, 23),
+            'volume' => $heatVolume,
+            'answered' => $heatAnswered,
+            'missed' => $heatMissed,
+            'total' => array_sum(array_map('array_sum', $heatVolume)),
+            'maxCell' => $heatVolume ? max(array_map('max', $heatVolume)) : 0,
+        ],
         'hourly' => array_map(
             static fn(int $h): array => [
                 'hour' => $h,

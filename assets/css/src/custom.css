@@ -3397,3 +3397,36 @@ html[data-theme="light"] .grid-totals td {
 }
 .ops-compare-select:focus { border-color: var(--color-cyan-500, #06b6d4); }
 .ops-compare-hint { font-size: 10px; color: var(--color-slate-500); font-variant-numeric: tabular-nums; }
+
+/*
+ * Weekday x hour heatmap (Sprint B). Six levels because five shades plus empty
+ * is what a reader can still tell apart on a projector; the legend prints the
+ * same classes the cells use, so the scale on screen is the scale in the grid.
+ */
+.ops-heat { margin-bottom: 12px; }
+.ops-heat-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 6px 0; }
+.ops-heat-loading { padding: 24px 0; text-align: center; color: var(--color-slate-500); font-size: 12px; }
+.ops-heat-scroll { overflow-x: auto; }
+.ops-heat-table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+.ops-heat-table th { font-weight: 600; color: var(--color-slate-500); font-size: 9px; text-transform: uppercase; letter-spacing: .02em; padding: 1px; }
+.ops-heat-hour { text-align: center; }
+.ops-heat-day {
+  width: 34px; text-align: left; padding-right: 6px; color: var(--color-slate-400);
+  font-size: 10px; text-transform: none; letter-spacing: 0;
+}
+.ops-heat-cell {
+  height: 22px; text-align: center; font-size: 9.5px; font-variant-numeric: tabular-nums;
+  border: 1px solid var(--color-slate-900); color: var(--color-slate-200);
+}
+.ops-heat-l0 { background: var(--color-slate-800); }
+.ops-heat-l1 { background: rgba(6, 182, 212, .18); }
+.ops-heat-l2 { background: rgba(6, 182, 212, .34); }
+.ops-heat-l3 { background: rgba(6, 182, 212, .52); }
+.ops-heat-l4 { background: rgba(6, 182, 212, .72); }
+.ops-heat-l5 { background: rgba(6, 182, 212, .95); color: #020617; font-weight: 600; }
+.ops-heat-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  margin-top: 6px; font-size: 11px; color: var(--color-slate-400);
+}
+.ops-heat-legend { display: inline-flex; align-items: center; gap: 3px; color: var(--color-slate-500); }
+.ops-heat-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; }

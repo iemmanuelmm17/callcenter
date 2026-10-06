@@ -5,6 +5,7 @@
  * original source — the move is verified by declaration hash. */
 
 import { splineArea } from './charts.js';
+import { WeekHourHeatmap } from './heatmap.js';
 import { SlaControl, Tooltip, skelPanel } from './ui.js';
 import { fmt, fmtNum } from '../lib/format.js';
 import { h, keyActivate, useEffect, useRef, useState } from '../lib/react.js';
@@ -674,6 +675,11 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
                 )
               : null
           )
+        : h('section', {className:'ops-card'}, pulse),
+      /* Sprint B: the weekday x hour grid, beside the hourly table it extends -
+       * the hour table says what the busy hours cost, this says WHICH DAY. */
+      reportReady
+        ? h(WeekHourHeatmap, {heatmap: report?.summary?.heatmap, loading: false})
         : h('section', {className:'ops-card'}, pulse),
       h('section', {className:'ops-card'},
         h('div', {className:'ops-label'}, 'Top agents', qHelp(

@@ -1177,6 +1177,55 @@ console.log('\n== filter date-range picker (calendar popup) ==');
   check('the date-range picker threw nothing', errors.length === 0, errors.slice(0, 2));
 }
 
+console.log('\n== Sprint B: the weekday x hour heatmap ==');
+{
+  /*
+   * The grid must be the calendar's, not a shifted list. The fixture puts 12
+   * offered calls (10 answered, 2 missed) in Monday 09:00 and 1 in Sunday
+   * 09:00; a Monday-first index reads 1 in the wrong cell.
+   */
+  await goTo('Dashboard');
+  await flush(10);
+  const heat = document.querySelector('.ops-heat');
+  check('the dashboard has a weekday x hour card', !!heat, root().textContent.slice(0, 120));
+  if (heat) {
+    const rows = heat.querySelectorAll('tbody tr');
+    check('the grid has one row per weekday', rows.length === 7, rows.length);
+    const cellsOf = row => [...row.querySelectorAll('.ops-heat-cell')];
+    check('every row has 24 hour cells', [...rows].every(r => cellsOf(r).length === 24),
+      [...rows].map(r => cellsOf(r).length).join(','));
+    const monday = cellsOf(rows[1]);
+    const sunday = cellsOf(rows[0]);
+    check('Monday 09:00 shows the 12 calls, in the Monday row',
+      (monday[9].textContent || '').trim() === '12', monday[9].textContent);
+    check('Sunday 09:00 shows its own single call, in the Sunday row',
+      (sunday[9].textContent || '').trim() === '1', sunday[9].textContent);
+    check('a cell with calls states its own base in the tooltip',
+      /offered/.test(monday[9].getAttribute('title') || '')
+      && /missed/.test(monday[9].getAttribute('title') || ''),
+      monday[9].getAttribute('title'));
+    check('the foot line totals the grid (13 offered, 11 answered, 2 missed)',
+      /13 offered/.test(heat.textContent) && /11 answered/.test(heat.textContent)
+      && /2 missed/.test(heat.textContent), heat.textContent.slice(0, 200));
+
+    /* The missed view: the same grid, the missed numbers, and the share with
+     * its base in the foot line. */
+    const missedTab = [...heat.querySelectorAll('button')].find(b => (b.textContent || '').trim() === 'Missed');
+    check('the heatmap offers a missed view', !!missedTab);
+    if (missedTab) {
+      await click(missedTab);
+      await flush(4);
+      const mondayMissed = cellsOf(heat.querySelectorAll('tbody tr')[1])[9];
+      check('the missed view shows the missed count in the same cell',
+        (mondayMissed.textContent || '').trim() === '2', mondayMissed.textContent);
+      check('the missed foot line states the share with its base',
+        /2 missed of 13 offered/.test(heat.textContent) && /15\.4%/.test(heat.textContent),
+        heat.textContent.slice(0, 220));
+    }
+  }
+  check('the heatmap threw nothing', errors.length === 0, errors.slice(0, 2));
+}
+
 console.log('\n== F2: long-range presets and the warming banner ==');
 {
   /*

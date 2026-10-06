@@ -1072,7 +1072,66 @@ const partial = parseJson(partialRaw, '{', '}');
 check('a partial fetch is recorded as incomplete with its resume point',
   partial && partial.complete === false && partial.records === 1 && partial.nextOffset === 250, partial);
 
-/* ============ 8. per-agent hold time and outbound contact rate (Sprint B) */
+/* ================= 8. weekday x hour heatmap (Sprint B) */
+
+console.log('\n== the weekday x hour grid ==');
+
+/*
+ * 2026-08-20 is a Thursday and 2026-08-23 a Sunday, so one fixture proves both
+ * the hour AND the day index. Hand count:
+ *
+ *   Thu 20 Aug  09:00  two answered  -> volume 2, answered 2, missed 0
+ *   Thu 20 Aug  14:00  one missed    -> volume 1, answered 0, missed 1
+ *   Sun 23 Aug  09:00  one missed    -> volume 1, answered 0, missed 1
+ *   (an outbound leg is in the seed and must change nothing)
+ *
+ * Totals: volume 4, answered 2, missed 2. Row 4 (Thursday) must hold 3 and row
+ * 0 (Sunday) 1 - a Monday-first grid would put them in rows 3 and 6.
+ */
+await harness.seedPbx('fetchCdrs', [
+  { id: 'g1', 'call-direction': 1, 'call-start-datetime': '2026-08-20T09:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-20T09:00:05Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'g2', 'call-direction': 1, 'call-start-datetime': '2026-08-20T09:30:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-20T09:30:05Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'g3', 'call-direction': 1, 'call-start-datetime': '2026-08-20T14:00:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-20T14:00:20Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'g4', 'call-direction': 1, 'call-start-datetime': '2026-08-23T09:00:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-23T09:00:30Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'g5', 'call-direction': 0, 'call-start-datetime': '2026-08-20T11:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-20T11:00:10Z[US/Eastern]', 'call-orig-user': '6080', 'dialed': '8454259810' }
+]);
+
+const heatRes = await harness.request('report.php', {
+  body: { start: '2026-08-20', end: '2026-08-23', hours: 'all', skipPrevious: true },
+  user: USERS.office_manager
+});
+check('report.php answers for the heatmap range', heatRes.status === 200, heatRes.log ?? heatRes.status);
+if (heatRes.status === 200) {
+  const H = heatRes.body.summary.heatmap;
+  check('the grid is seven rows of 24 hours', Array.isArray(H.volume) && H.volume.length === 7
+    && H.volume.every(row => row.length === 24), H.volume && H.volume.map(r => r.length));
+  check('Thursday 09:00 holds the two answered calls',
+    H.volume[4][9] === 2 && H.answered[4][9] === 2 && H.missed[4][9] === 0,
+    [H.volume[4][9], H.answered[4][9], H.missed[4][9]]);
+  check('Thursday 14:00 holds the missed call', H.volume[4][14] === 1 && H.missed[4][14] === 1, H.volume[4][14]);
+  check('Sunday 09:00 is in row 0, the calendar day, not a shifted list',
+    H.volume[0][9] === 1 && H.missed[0][9] === 1, H.volume[0][9]);
+  check('every cell of the grid is inbound or missed: 4 offered, 2 answered, 2 missed',
+    H.total === 4 && H.answered.flat().reduce((a, b) => a + b, 0) === 2
+      && H.missed.flat().reduce((a, b) => a + b, 0) === 2,
+    [H.total, H.answered.flat().reduce((a, b) => a + b, 0), H.missed.flat().reduce((a, b) => a + b, 0)]);
+  check('the outbound leg is not in the grid (volume is offered calls)',
+    H.volume.flat().reduce((a, b) => a + b, 0) === 4, H.volume.flat().reduce((a, b) => a + b, 0));
+  check('the grid total equals the dashboard offered count for the same range',
+    H.total === heatRes.body.summary.counts.inbound + heatRes.body.summary.counts.missed,
+    [H.total, heatRes.body.summary.counts.inbound, heatRes.body.summary.counts.missed]);
+  check('the grid carries the day labels it is indexed by',
+    Array.isArray(H.days) && H.days.length === 7 && H.days[0] === 'Sunday' && H.days[4] === 'Thursday', H.days);
+  check('the grid says its own peak, so a cell colour has a scale',
+    H.maxCell === 2, H.maxCell);
+}
+
+/* ============ 9. per-agent hold time and outbound contact rate (Sprint B) */
 
 console.log('\n== hold time and contact rate, per agent ==');
 

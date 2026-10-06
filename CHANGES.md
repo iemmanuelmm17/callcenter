@@ -1,3 +1,72 @@
+# CHANGES — Sprint B, phase 4: the weekday × hour grid
+
+**What this phase is about.** The weekly ops review asks a question the hourly
+chart cannot answer: *"are we short on Mondays at 09:00?"* The hourly chart sums
+every 09:00 in the range, so a Monday spike is averaged into six quieter days
+and disappears. The Telephone Numbers page already had a weekday × hour heatmap;
+the Dashboard and the queues did not.
+
+## The grid
+
+`summary.heatmap` (includes/reporting/rows.php) publishes three 7 × 24 grids
+beside `summary.hourly`:
+
+| grid | cell |
+| --- | --- |
+| `volume` | inbound + missed calls started in that weekday/hour — the same *offered* definition the rest of the dashboard uses |
+| `answered` | inbound answered |
+| `missed` | the missed set, abandons included |
+
+Rows are indexed by PHP's `date('w')` — **row 0 is Sunday, row 4 is Thursday** —
+and the payload carries its own `days` labels and `hours` list, so the client
+labels what the server indexed instead of assuming an order. A call that starts
+at 23:50 on Saturday is counted on Saturday; nothing is split across a boundary.
+`total` and `maxCell` travel with the grid so the card's foot line and its colour
+scale come from the same numbers as the cells. Outbound and on-net legs are
+excluded, exactly as they are from the hourly series.
+
+## The card
+
+`assets/js/src/components/heatmap.js` is a new module (the dashboard and the
+queue page will both use it; nothing was added to the already-large
+`overview.js` beyond a two-line mount). It renders a Sunday-first grid with:
+
+- a **Calls / Missed** toggle — one grid, two measures, each with its own colour
+  scale, because a shared scale would make the missed view look empty;
+- a tooltip per cell that states its own base: *"Monday 09:00 — 12 offered, 10
+  answered, 2 missed (16.7 % of 12)"*;
+- a foot line that totals the visible measure with its base (13 offered, 11
+  answered, 2 missed; and in the missed view "2 missed of 13 offered (15.4 %)").
+
+**Cells are deliberately not clickable.** The call list can filter by hour but not
+by weekday, so no drill could open exactly the cell it was started from — and a
+drill that opens a different set of calls than the number clicked is worse than
+no drill (the same rule the interval and hourly rows satisfy because they *can*
+carry their window). The tooltip says this rather than leaving the reader to
+discover it. A pre-Sprint-B cached payload that still ships a bare 7 × 24 array
+is read as the volume grid rather than blanking the card.
+
+## Evidence
+
+`tests/php/report-metrics.mjs` seeds a Thursday (2026-08-20) and a Sunday
+(2026-08-23) and checks the hand count: Thursday 09:00 = 2 offered / 2 answered,
+Thursday 14:00 = 1 missed, Sunday 09:00 = 1 missed in **row 0**; totals 4 offered
+/ 2 answered / 2 missed; the outbound leg contributes nothing; and the grid total
+equals `counts.inbound + counts.missed` for the same range. 10 checks.
+
+`tests/js/smoke.mjs` asserts seven rows of 24 cells, the 12 in the **Monday**
+row and the 1 in the **Sunday** row (the off-by-one this pins), the per-cell
+tooltip base, the foot totals, and the missed view's own numbers and share. 12
+checks. `npm test` = 25 suites green.
+
+**Behaviour change to disclose:** `summary.heatmap` changes shape from a bare
+7 × 24 array to `{days, hours, volume, answered, missed, total, maxCell}`. Nothing
+consumed the old key (the Telephone Numbers heatmap builds its own grid from its
+own endpoint), and the new component still reads the old shape if a stale
+response arrives.
+
+---
+
 # CHANGES — Sprint B, phase 3: hold time and the outbound contact rate
 
 **What this phase is about.** Two numbers the manager asks for weekly that the
