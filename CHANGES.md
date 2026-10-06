@@ -1,3 +1,84 @@
+# CHANGES — Simultaneous calls (concurrency) report (2026-10-06)
+
+**New view:** Telephone Numbers → **Simultaneous** tab (graph + interval summary table).
+**Files:** `api/simultaneous_calls.php` (new), `assets/js/app.js`, `assets/css/app.css`.
+No config, schema, PBX or cache changes; nothing else is touched.
+
+## What it shows
+
+* **Definition of "simultaneous"** — an inbound call occupies capacity from the
+  moment it starts ringing until it disconnects, so a call that is never answered
+  still counts while it rings. Counted types: **inbound + missed**; outbound and
+  on-net legs are excluded (matches the `incoming` metric used by the call modal).
+* **Graphs** — simultaneous calls over the range (line), peak by hour of day (24
+  bars), peak by day (one bar per day in range).
+* **Summary table** — one row per interval with **Date and Time as separate
+  columns** (`Date | Time | Simultaneous | Average | Calls started`), sortable,
+  searchable, paginated, CSV export, peak interval highlighted. Day labels use the
+  Call History formatting (`histDayLabel`, `hist-time`); 24-hour API times are
+  rendered as 12-hour `9:45 AM – 10:00 AM` like the rest of the UI.
+* **KPIs** — peak simultaneous (with day + time), average simultaneous, busiest
+  day, inbound calls counted. Chart points, day/hour bars, table rows and KPIs
+  drill into `api/calls.php` (`metric: incoming`, that bucket's day + hour).
+* **Filters apply** — the view is fetched with the page's shared `filters`
+  (date range, department, site) and the endpoint runs them through
+  `authorizedFilters()` + `reportingCdrRows()`, i.e. exactly the pipeline
+  `telephone_numbers.php` uses. Bucket size is selectable (5/10/15/30/60 min).
+
+## Endpoint — `api/simultaneous_calls.php`
+
+* Role gate `requirePageRoles($user, ['office_manager'])` — the same SEC-6 pattern
+  as `telephone_numbers.php`, since the page is OM-only and the series is
+  domain-wide.
+* `POST` (JSON body, FUNC-17 422 on malformed JSON) or `GET` for bookmarked links;
+  other methods → 405. `end < start` → 422.
+* **Exact sweep-line concurrency**, not a per-bucket call count: `+1` at ring
+  start, `-1` at disconnect, segments accumulated into buckets — so one 4-minute
+  call spanning two 15-minute buckets is one concurrent call in each, and a call
+  ending the same second another starts is a handoff (decrements sort first).
+  Each bucket carries peak, average (call-seconds ÷ bucket length) and calls
+  started; the response also has `byHour` (24), `byDay` (per day) and a summary
+  with `peak/peakDate/peakTime`, `average`, `busiestDay`, `busiestHour`, counts.
+  Missing `call-disconnect-datetime` falls back to the longest reported duration
+  (total, batch, or talk + ring); calls are clipped to the loaded range.
+* Payload guard: buckets are widened step by step if a range would exceed 5 000
+  buckets (31 days at 5 min → 10 min); the effective size is echoed back in
+  `summary.intervalMinutes` and the UI follows it.
+* `auditView($user, $filters, 'simultaneous_calls')` — same audit trail as the
+  other CDR-serving view endpoints (calls, call_history, report, agents, aa).
+
+## Verification
+
+1. **Math vs an independent oracle** — the real `buildSimultaneousSeries()` code
+   (extracted mechanically from the endpoint, run under PHP 8.4 via php-wasm)
+   was diffed against a **per-second brute-force** recomputation over real cached
+   CDRs: single day (862 rows), 5 days (4 185 rows), 5 days at 5/15/60 min, a
+   31-day 5-min range (20 379 rows) and a synthetic edge-case set (midnight-span,
+   bucket-boundary span, handoff tie, missing disconnect, missing start, zero
+   length, out-of-range clipping, excluded on-net/outbound). Every bucket's
+   date/time/endTime/hour/peak/average/started, all 24 byHour rows, every byDay
+   row and the whole summary matched — `PASS` on all six fixtures.
+2. **Endpoint behaviour** (real `api/simultaneous_calls.php` + real
+   `auth.php`/`reporting.php` scoping helpers, PHP 8.4): 200 + expected shape;
+   department and site filters change the scoped peak; an empty scope returns
+   zeros; supervisor → **403**, agent → **403**; malformed JSON → **422**;
+   `DELETE` → **405**; `interval=7` → 5-min; 31-day `interval=5` → 10-min,
+   4 464 buckets.
+3. **UI** (jsdom + React 18, real components extracted verbatim from `app.js`):
+   fetch on mount with the shared filters, 3 charts, KPI ribbon, separate
+   Date/Time columns, 12-hour time ranges, search / min-simultaneous / Peak-only
+   filters, sorting, pagination, interval switching, CSV export button, row and
+   chart drill-down, filter-change refetch, error state and recovery — 32/32
+   checks; plus a page-level run that opens the Telephone Numbers page, clicks
+   the new tab, and confirms only one endpoint call per tab (13/13 checks).
+4. `php -l`-equivalent parse check (php-parser 8.3 grammar) clean; `node --check`
+   clean on `app.js`.
+5. Deployment note: nothing to migrate. `assets/css/app.css` gains a self-contained
+   `.sim-*` block (the compiled Tailwind bundle in this tree is stale, so the new
+   styles are written as plain CSS rather than new utility classes).
+
+---
+
 # CHANGES — SEC-4 / SEC-5 / SEC-6 security fixes (2026-09-10)
 
 **Deploy tree:** `/home/user/deploy/` — 29 PHP files (24 `api/`, 5 `includes/`).
