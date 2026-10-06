@@ -1,3 +1,55 @@
+# CHANGES — Sprint A, phase 3: the list behind the card
+
+**What this phase is about.** Sprint A's filters are only useful if the list you
+get when you click a number is the same population the number was computed from.
+This phase makes `api/calls.php` carry the new per-row facts and the new
+controls, and adds the tests that prove the card and its drill-down agree.
+
+## New controls on the call list
+
+| control | values | note |
+| --- | --- | --- |
+| `sort` / `dir` | `newest` (default), `oldest`, `wait`, `talk`, `hold` × `asc`/`desc` | the list was newest-first only — the review's own "longest wait" coaching list meant exporting the CSV and sorting it in Excel. Ties always fall back to newest-first so paging is stable |
+| `waitBucket` | `0-30`, `31-60`, `61-120`, `120+` | **the same bands `summary()` counts**, restricted to answered inbound calls like the card is, so the four buckets drill into exactly the four numbers |
+| `waitedOver` | seconds | direction-agnostic: a caller who gave up after 70 s waited too |
+| `outcome` | `answered`, `abandoned`, `voicemail`, `noanswer` | the canonical vocabulary, the same classifier the dashboard's missed breakdown uses |
+| `callbackState` / `callbackOnly` | `returned`, `unreturned` | the returned-call worklist, matched by the links layer (one definition), computed over the whole scoped period so it still works combined with a queue or agent filter |
+
+## New per-row fields (JSON **and** the CSV, from one shaper)
+
+`wait` (same number as `ringing`, named for the caller), `hold` (previously read
+inside `ringSeconds()` and discarded), `outcome`, `missedBucket`, `transfers`
+(hand-offs inside this call's conversation), `callback`.
+
+The calls CSV gained the matching columns: `outcome`, `wait`, `hold`,
+`transfers` — the header and the value rows are both written from `callsRow()`,
+which is what the export suite asserts.
+
+## Fixed
+
+1. **The export blocked itself.** The per-row context was built after the CSV
+   branch, so the export path used an undefined variable, the shaper threw, and
+   the endpoint answered 502 — an empty spreadsheet with no error the user could
+   see. The context is now built above both paths.
+2. **A single-call drill-down reported "not returned" for a returned call.** The
+   callback flag was computed from the *narrowed* row set, so opening one call
+   from the worklist showed `callback: false` while the dashboard counted it as
+   returned. The context is now built once, on the loaded and scoped rows, before
+   any drill-down narrowing — the same set the dashboard's `links` block uses.
+
+## Evidence
+
+`tests/php/call-links.mjs` grew a drill-parity ledger: one day, four answered
+waits of exactly 10/45/100/150 s, two abandons of 3 s and 70 s, a voicemail, and
+the outbound that returns the 3-second abandon. It asserts, against the
+hand-computed numbers: the four `waitBucket` filters return exactly those rows;
+the four buckets together equal `counts.inbound`; `outcome=abandoned` equals
+`missedBreakdown.abandon`; the callback filters and the per-row flag agree with
+each other; sorting is monotonic; and an unknown sort falls back to newest-first
+rather than 422 or chaos. `tests/php/export.mjs` pins the new CSV columns.
+
+---
+
 # CHANGES — Sprint A, phase 2: one call, many legs (transfers, callbacks, repeats)
 
 **What this phase is about.** A NetSapiens call is not a row: a transferred call

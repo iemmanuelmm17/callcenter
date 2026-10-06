@@ -410,6 +410,153 @@ if (res.status === 200 && res.body?.links) {
       && typeof L.repeat.rate24Pct === 'number', [L.transfers.ratePct, L.callbacks.ratePct, L.repeat.rate24Pct]);
 }
 
+/* ================================================= 6. drill-down parity (A3) */
+
+console.log('\n== the list behind the card: filters, sorting, per-row fields ==');
+
+/*
+ * One day, hand-computed. Four answered inbound calls wait 10, 45, 100 and 150
+ * seconds, one carries 12 s of hold; two calls abandon (after 3 s and 70 s) and
+ * one goes to voicemail with no queue. One outbound returns the 3-second
+ * abandon 20 minutes later.
+ *
+ *   summary.waitBuckets must be 1 / 1 / 1 / 1 (<=30, <=60, <=120, >120)
+ *   summary.missedBreakdown must be 2 abandons + 1 voicemail
+ *   each waitBucket drill must return exactly that bucket's rows
+ *   the four buckets together must equal summary.counts.inbound
+ */
+await harness.seedPbx('fetchCdrs', [
+  { id: 'w1', 'call-direction': 1, 'call-start-datetime': '2026-08-10T09:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-10T09:00:10Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-orig-caller-id': '5551000001',
+    'call-orig-from-user': '5551000001', 'call-talking-duration-seconds': 30 },
+  { id: 'w2', 'call-direction': 1, 'call-start-datetime': '2026-08-10T10:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-10T10:00:45Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-orig-caller-id': '5551000002',
+    'call-orig-from-user': '5551000002', 'call-talking-duration-seconds': 30,
+    'call-batch-on-hold-duration-seconds': 12 },
+  { id: 'w3', 'call-direction': 1, 'call-start-datetime': '2026-08-10T11:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-10T11:01:40Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-orig-caller-id': '5551000003',
+    'call-orig-from-user': '5551000003', 'call-talking-duration-seconds': 30 },
+  { id: 'w4', 'call-direction': 1, 'call-start-datetime': '2026-08-10T12:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-10T12:02:30Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-orig-caller-id': '5551000004',
+    'call-orig-from-user': '5551000004', 'call-talking-duration-seconds': 30 },
+  { id: 'w5', 'call-direction': 1, 'call-start-datetime': '2026-08-10T13:00:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-10T13:00:03Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-orig-caller-id': '5551000005', 'call-orig-from-user': '5551000005' },
+  { id: 'w6', 'call-direction': 1, 'call-start-datetime': '2026-08-10T14:00:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-10T14:01:10Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-orig-caller-id': '5551000006', 'call-orig-from-user': '5551000006' },
+  { id: 'w7', 'call-direction': 1, 'call-start-datetime': '2026-08-10T15:00:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-10T15:00:08Z[US/Eastern]', 'call-term-user': '6080',
+    'call-orig-caller-id': '5551000007', 'call-orig-from-user': '5551000007',
+    'call-term-to-uri': 'sip:vm6080@pbx.example' },
+  { id: 'w8', 'call-direction': 0, 'call-start-datetime': '2026-08-10T13:20:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-10T13:20:05Z[US/Eastern]', 'call-orig-user': '6080',
+    'call-orig-to-user': '5551000005', 'call-talking-duration-seconds': 60 }
+]);
+
+const ledgerBody = { start: '2026-08-10', end: '2026-08-10', skipPrevious: true, hours: 'all' };
+const ledger = await harness.request('report.php', { body: ledgerBody, user: USERS.office_manager });
+check('the ledger day loads', ledger.status === 200, ledger.log ?? ledger.status);
+
+const callList = async (extra) => {
+  const res = await harness.request('calls.php', {
+    body: Object.assign({ start: '2026-08-10', end: '2026-08-10', metric: 'total', perPage: 100 }, extra),
+    user: USERS.office_manager,
+  });
+  return res;
+};
+
+if (ledger.status === 200) {
+  const S = ledger.body.summary;
+  check('the ledger summary has the four hand-computed wait buckets',
+    S.waitBuckets['0-30'] === 1 && S.waitBuckets['31-60'] === 1
+      && S.waitBuckets['61-120'] === 1 && S.waitBuckets['120+'] === 1, S.waitBuckets);
+  check('the ledger missed breakdown is 2 abandons and 1 voicemail',
+    S.missedBreakdown.abandon === 2 && S.missedBreakdown.voicemail === 1
+      && S.missedBreakdown.noanswer === 0, S.missedBreakdown);
+
+  let bucketTotal = 0;
+  for (const [band, count] of Object.entries({ '0-30': 1, '31-60': 1, '61-120': 1, '120+': 1 })) {
+    const res = await callList({ waitBucket: band });
+    const rows = res.body?.data ?? [];
+    bucketTotal += rows.length;
+    check(`waitBucket=${band} returns exactly ${count} row(s) and they are all in the band`,
+      res.status === 200 && rows.length === count
+        && rows.every(r => {
+          const w = r.wait;
+          if (band === '0-30') return w <= 30;
+          if (band === '31-60') return w > 30 && w <= 60;
+          if (band === '61-120') return w > 60 && w <= 120;
+          return w > 120;
+        }),
+      { status: res.status, rows: rows.map(r => r.wait) });
+  }
+  check('the four wait buckets together are the answered inbound count (drill parity)',
+    bucketTotal === S.counts.inbound, { bucketTotal, inbound: S.counts.inbound });
+
+  /* Waited-over is direction-agnostic on purpose: a caller who gave up after
+   * 70 s waited too, so the four rows are 45, 70, 100 and 150 seconds. */
+  const over = await callList({ waitedOver: 31 });
+  check('waitedOver=31 returns every call that waited over 30 s, answered or not',
+    (over.body?.data ?? []).length === 4 && (over.body.data).every(r => r.wait >= 31)
+      && (over.body.data).map(r => r.wait).sort((a, b) => a - b).join(',') === '45,70,100,150',
+    (over.body?.data ?? []).map(r => r.wait));
+
+  const desc = await callList({ sort: 'wait', dir: 'desc' });
+  const wa = (desc.body?.data ?? []).map(r => r.wait);
+  check('sort=wait&dir=desc puts the longest wait first',
+    wa.length > 1 && wa[0] === Math.max(...wa) && wa.every((v, i) => i === 0 || wa[i - 1] >= v), wa.slice(0, 6));
+  const asc = await callList({ sort: 'wait', dir: 'asc' });
+  const wb = (asc.body?.data ?? []).map(r => r.wait);
+  check('sort=wait&dir=asc puts the shortest wait first',
+    wb.length > 1 && wb[0] === Math.min(...wb) && wb.every((v, i) => i === 0 || wb[i - 1] <= v), wb.slice(0, 6));
+  const talk = await callList({ sort: 'talk', dir: 'desc' });
+  const talks = (talk.body?.data ?? []).map(r => r.talking);
+  check('sort=talk&dir=desc orders by talking time',
+    talks.length > 1 && talks.every((v, i) => i === 0 || talks[i - 1] >= v), talks.slice(0, 6));
+  const bad = await callList({ sort: 'nonsense', dir: 'nonsense' });
+  check('an unknown sort/dir falls back to newest-first instead of 422 or chaos',
+    bad.status === 200
+      && (bad.body?.data ?? []).every((r, i, all) => i === 0 || String(all[i - 1].startedAt) >= String(r.startedAt)),
+    bad.status === 200 ? (bad.body.data ?? []).map(r => r.startedAt).slice(0, 3) : bad.log);
+
+  const abandoned = await callList({ outcome: 'abandoned' });
+  check('outcome=abandoned returns exactly the summary breakdown (2)',
+    (abandoned.body?.data ?? []).length === S.missedBreakdown.abandon,
+    (abandoned.body?.data ?? []).length);
+  const voicemail = await callList({ outcome: 'voicemail' });
+  check('outcome=voicemail returns exactly the summary breakdown (1)',
+    (voicemail.body?.data ?? []).length === S.missedBreakdown.voicemail,
+    (voicemail.body?.data ?? []).length);
+
+  const returned = await callList({ callbackState: 'returned' });
+  const unreturned = await callList({ callbackState: 'unreturned' });
+  check('callbackState=returned returns the miss that was called back',
+    (returned.body?.data ?? []).length === 1
+      && returned.body.data[0].id === 'w5', (returned.body?.data ?? []).map(r => r.id));
+  check('callbackState=unreturned returns the misses nobody returned',
+    (unreturned.body?.data ?? []).map(r => r.id).sort().join(',') === 'w6,w7',
+    (unreturned.body?.data ?? []).map(r => r.id));
+  check('callbackOnly and callbackState together are still one filter, not two',
+    (await callList({ callbackOnly: true })).body?.total === 3,
+    (await callList({ callbackOnly: true })).body?.total);
+
+  const row = (await callList({ callId: 'w2' })).body?.data?.[0];
+  check('a row carries wait, hold, outcome and transfers',
+    row && row.wait === 45 && row.hold === 12 && row.outcome === 'answered' && row.transfers === 0, row);
+  const missRow = (await callList({ callId: 'w5' })).body?.data?.[0];
+  check('a returned miss is flagged as a callback on the row itself',
+    missRow && missRow.callback === true && missRow.outcome === 'abandoned'
+      && missRow.missedBucket === 'abandon', missRow);
+  const plainRow = (await callList({ callId: 'w6' })).body?.data?.[0];
+  check('an unreturned miss is not flagged',
+    plainRow && plainRow.callback === false, plainRow && plainRow.callback);
+}
+
 console.log('');
 if (failures.length) {
   console.log(`FAILED: ${failures.length} check(s)`);

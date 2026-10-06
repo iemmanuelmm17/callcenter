@@ -128,15 +128,23 @@ console.log('== CSV exports (real PHP 8.4)\n');
     user: USERS.office_manager
   });
   const lines = csvLines(csv.phpOutput);
+  /*
+   * Sprint A added outcome (the canonical vocabulary), wait (the same number as
+   * ring, named for the caller), hold (read and discarded before) and transfers.
+   * The header and the value rows are written from the same shaper, so this
+   * assertion is what keeps them from ever disagreeing.
+   */
   check('calls export header matches the modal columns',
-    lines[0] === 'date,time,type,from_name,from,dialed,to,agent,talk,ring,reason,total,recording,sip_flow', lines[0]);
+    lines[0] === 'date,time,type,outcome,from_name,from,dialed,to,agent,talk,wait,hold,reason,total,transfers,recording,sip_flow', lines[0]);
   check('calls export writes every matching call',
     lines.length - 1 === 17, { dataRows: lines.length - 1 });
   check('calls export formats durations as HH:MM:SS',
     /,\d\d:\d\d:\d\d,/.test(lines[1]), lines[1]);
   const first = parse(lines[1]);
   check('calls export stamps date and time as the UI shows them',
-    first[0] === '2026-08-04' && first[1] === '9:00 AM' && first[4] === '(845) 425-9810', first);
+    first[0] === '2026-08-04' && first[1] === '9:00 AM' && first[5] === '(845) 425-9810', first);
+  check('calls export carries the canonical outcome in column 4',
+    ['answered', 'abandoned', 'voicemail', 'noanswer'].includes(first[3]), first[3]);
 
   /*
    * The export must honour the SAME filters as the list on screen — including
