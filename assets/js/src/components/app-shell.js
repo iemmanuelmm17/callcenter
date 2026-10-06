@@ -44,7 +44,10 @@ const [filters,setFilters] = useState(() => {
          * the dates: a link to "this week vs the same week last year" has to
          * show what it says. Empty means the server default (previous period).
          */
-        compare: q.get('compare') || ''
+        compare: q.get('compare') || '',
+        /* Sprint B: the sentiment scope travels in the URL like every other
+         * narrowing filter, so "the negative calls this week" is a link. */
+        sentiment: q.get('sentiment') || ''
     };
 });
 
@@ -71,6 +74,28 @@ const retryAa = () => {
 };
 const [aaLoading, setAaLoading] = useState(false);
 const [cacheJob, setCacheJob] = useState(null);
+/*
+ * Every filter the bar can set, as one stable string. The fetch effects below
+ * used to list fields by hand (start, end, department, site...), which is a
+ * whitelist that silently keeps serving the OLD numbers the moment somebody adds
+ * a control - exactly what happened when the Sprint A narrowing filters and the
+ * Sprint B sentiment scope arrived. Anything the server is sent is now part of
+ * the key, so a control cannot change without the data following it.
+ */
+const filtersKey = JSON.stringify({
+    start: filters.start,
+    end: filters.end,
+    department: filters.department,
+    site: filters.site,
+    hours: filters.hours || '',
+    outcome: filters.outcome || '',
+    waitBucket: filters.waitBucket || '',
+    waitedOver: filters.waitedOver ?? '',
+    callbackState: filters.callbackState || '',
+    sentiment: filters.sentiment || '',
+    compare: filters.compare || '',
+    agents: Array.isArray(filters.agents) ? filters.agents : []
+});
 const rangeDayCount = (() => {
     if (!filters.start || !filters.end) return 0;
     const a = new Date(filters.start + 'T00:00:00');
@@ -336,7 +361,7 @@ useEffect(() => {
     if (route !== 'agents') return;
     const agents = agentSub === 'overview' ? selectedAgents : [];
     loadAgentReport(agents);
-}, [route, agentSub, filters.start, filters.end, filters.department, filters.site, selectedAgents, callTypes, slaSeconds]);
+}, [route, agentSub, filtersKey, selectedAgents, callTypes, slaSeconds]);
 
 /*
  * =====================================================================
@@ -371,7 +396,7 @@ useEffect(() => {
             if (active) setAaRosterLoading(false);
         });
     return () => { active = false; };
-}, [route, filters.start, filters.end, filters.department, filters.site, aaReload]);
+}, [route, filtersKey, aaReload]);
 
 /*
  * Filters changed: whatever was computed for the previous range is stale.
@@ -380,7 +405,7 @@ useEffect(() => {
 useEffect(() => {
     setAaReport(null);
     setAaStructures(null);
-}, [filters.start, filters.end, filters.department, filters.site]);
+}, [filtersKey]);
 
 /*
  * =====================================================================
@@ -426,7 +451,7 @@ useEffect(() => {
             if (active) setAaLoading(false);
         });
     return () => { active = false; };
-}, [route, selectedAutoAttendants, aaReport, filters.start, filters.end, filters.department, filters.site]);
+}, [route, selectedAutoAttendants, aaReport, filtersKey]);
 
 /*
  * =====================================================================
@@ -468,10 +493,11 @@ useEffect(() => {
         });
 
     return () => { active = false; };
-}, [route, aaView, aaStructures, selectedAutoAttendants, filters.start, filters.end, filters.department, filters.site]);
+}, [route, aaView, aaStructures, selectedAutoAttendants, filtersKey]);
 
 useEffect(() => {
     const q = new URLSearchParams({ start: filters.start, end: filters.end });
+    if (filters.sentiment) q.set('sentiment', filters.sentiment);
     if (filters.department) q.set('department', filters.department);
     if (filters.site) q.set('site', filters.site);
     if (filters.compare && filters.compare !== 'previous') q.set('compare', filters.compare);
@@ -550,7 +576,7 @@ useEffect(() => {
     });
 
     return () => { active = false; };
-}, [route, filters.start, filters.end, filters.department, filters.site, callTypes, slaSeconds]);
+}, [route, filtersKey, callTypes, slaSeconds]);
 
 const allowedRoutes = routesForRole(user.role);
 const item = navItems.filter(n => allowedRoutes.includes(n.id)).map(n =>
@@ -830,6 +856,10 @@ if (route === 'agents') {
          * that re-requests both periods with it. */
         compare: filters.compare || 'previous',
         onCompareChange: mode => setFilters(f => ({ ...f, compare: mode })),
+        /* Sprint B: one click from "we had 12 negative calls" to every figure
+         * scoped to exactly those calls - the filter bar reads the same state,
+         * so the two controls cannot disagree. */
+        onSentimentOnly: () => setFilters(f => ({ ...f, sentiment: 'negative' })),
         allowedRoutes
     });
 }

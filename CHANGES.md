@@ -1,3 +1,79 @@
+# CHANGES — Sprint B, phase 5: sentiment for the period, and the negative scope
+
+**What this phase is about.** The call-intelligence fields
+(`call-intelligence-percent-positive|neutral|negative`, `…-topics-top`) were
+collected, rendered as a live donut on Queues → Overview, and used nowhere else:
+no period, no base, no way to ask "which week was bad, and about what". Two
+things were missing — sentiment for the *selected range*, and a filter that
+scopes every figure to the calls that came out badly. This phase adds both, and
+fixes a stale-data bug the new filter exposed.
+
+## The rule for "this call went badly", stated once
+
+`callIsNegative()` (includes/reporting/rows.php): the call was scored **at all**
+(`pos + neu + neg > 0`) **and** its negative share leads its positive share.
+Both halves matter — a call nobody scored is not a neutral call, and 40 %
+negative against 45 % positive is not a complaint no matter how much negative
+share it has. `sentiment=positive` is the same rule with the sign flipped, so the
+two scopes **partition** the scored calls (a 50/50 tie belongs to neither), and
+an unknown value scopes nothing rather than emptying the report. The filter runs
+through `filterCallsBySentiment()` before any aggregate, on the same row set as
+the outcome/wait/callback filters, so the numbers and the list behind them are
+the same calls. `appliedFilters.sentiment` in the response says which scope
+produced it.
+
+## On screen
+
+- `summary.sentiment`: positive/neutral/negative averages, the score, **`scored`**
+  (the base), `negativeCalls`, and the period's top topics with counts. The
+  averages are over the scored calls only — that is the honest denominator — and
+  the block never shows a share without the count.
+- A **Sentiment** card on the dashboard (new module
+  `assets/js/src/components/sentiment.js`): three share bars with their
+  percentages, a foot line reading "3 scored calls · 1 negative", the topics, and
+  an **Open the negative calls →** action. The action sets the filter rather than
+  opening a drill, because a drill would show a list the figures above it were
+  not computed from. When no call in the range was scored the card says so
+  instead of drawing zeros.
+- A **sentiment select** in the filter bar (Any / Negative only / Positive
+  only), carried in the URL like every other narrowing filter.
+
+## The bug this found: stale numbers behind a new control
+
+The dashboard's fetch effect listed its dependencies by hand —
+`[route, filters.start, filters.end, filters.department, filters.site, …]`. Every
+filter **not** in that list changed the control without re-fetching, leaving the
+old numbers on screen: `hours` (Sprint A's opening-hours select), `outcome`,
+`waitBucket`, `waitedOver`, `callbackState`, `compare`, and now `sentiment`. A
+filter that moves the control but not the data is worse than no filter, so all
+five filter-driven effects now key on `filtersKey` — a stable serialisation of
+every filter the server is sent. A control cannot be added again without the data
+following it.
+
+## Evidence
+
+`tests/php/report-metrics.mjs` seeds 2026-08-24 with five calls: 70/10 negative,
+45/40 positive-led (the case a naive "any negative share" rule would miscall),
+60/20 positive, one scored 0/0/0 and one with no fields at all. It checks the
+averages over the three scored calls (38.3 / 25.0 / 43.3), the negative count,
+the topics with counts, that `sentiment=negative` keeps exactly one call, that
+`sentiment=positive` keeps the other two and the two scopes partition the scored
+set, that an unknown value scopes nothing, and that the scope is applied to the
+same rows the counts come from. 12 checks.
+
+`tests/js/smoke.mjs` asserts the select exists with its three options, the card's
+shares and base line, the topics, and — by clicking the negative worklist — that
+the next report request actually carries `"sentiment":"negative"` and the select
+agrees. 11 checks. `npm test` = 25 suites green.
+
+**Behaviour change to disclose:** the report payload gains `summary.sentiment`
+and `appliedFilters`; the filter bar gains a select; the dashboard gains a card.
+The dependency fix changes *when* screens re-fetch and is a bug fix, not a
+behaviour change to any published figure. No number moves unless a reader picks a
+sentiment scope.
+
+---
+
 # CHANGES — Sprint B, phase 4: the weekday × hour grid
 
 **What this phase is about.** The weekly ops review asks a question the hourly

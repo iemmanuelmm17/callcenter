@@ -1177,6 +1177,59 @@ console.log('\n== filter date-range picker (calendar popup) ==');
   check('the date-range picker threw nothing', errors.length === 0, errors.slice(0, 2));
 }
 
+console.log('\n== Sprint B: the sentiment scope and the period block ==');
+{
+  await goTo('Dashboard');
+  await flush(8);
+  const sentimentSelect = [...document.querySelectorAll('.filters-bar select')]
+    .find(s => (s.getAttribute('title') || '').includes('sentiment'));
+  check('the filter bar offers a sentiment scope', !!sentimentSelect,
+    [...document.querySelectorAll('.filters-bar select')].map(s => s.getAttribute('title')).join('|'));
+  check('the scope offers any / negative / positive',
+    sentimentSelect && sentimentSelect.options.length === 3
+      && sentimentSelect.options[1].value === 'negative' && sentimentSelect.options[2].value === 'positive',
+    sentimentSelect ? [...sentimentSelect.options].map(o => o.value).join(',') : '');
+
+  /* The reported block prints its own base, like every other rate on the page:
+   * three scored calls, one of them negative. */
+  const body = document.body.textContent;
+  check('the dashboard states the sentiment base it averaged over',
+    /3 scored|of 3 scored|scored calls/i.test(body), body.slice(0, 120));
+  check('the negative count is shown with its base, not on its own',
+    /1 negative|negative\D{0,12}1\b/.test(body), body.slice(0, 160));
+  check('the three shares are the server\'s, printed with one decimal',
+    /43\.3%/.test(body) && /38\.3%/.test(body) && /25\.0%/.test(body), body.slice(0, 200));
+  check('the topics are listed with their counts',
+    /billing · 2/.test(body), body.slice(0, 200));
+
+  /* The negative worklist must scope the app, and the request must say so. */
+  const before = requested.filter(r => r.endpoint === 'report').length;
+  const openNeg = [...document.querySelectorAll('.ops-sent-link')][0];
+  check('the card offers a negative worklist', !!openNeg);
+  if (openNeg) {
+    await click(openNeg);
+    await flush(8);
+    const fresh = requested.filter(r => r.endpoint === 'report').slice(before);
+    const carried = fresh.some(r => /"sentiment":"negative"/.test(String(r.body || '')));
+    check('opening the negative calls scopes the next report request to sentiment=negative',
+      carried, fresh.map(r => String(r.body || '').slice(0, 120)));
+    const barSelect = [...document.querySelectorAll('.filters-bar select')]
+      .find(sel => (sel.getAttribute('title') || '').includes('sentiment'));
+    check('the filter bar agrees with the worklist it was opened from',
+      barSelect && barSelect.value === 'negative', barSelect ? barSelect.value : '');
+
+    /*
+     * The stale-whitelist bug this phase found: the fetch effects listed filter
+     * fields by hand, so a NEW control (or one added in Sprint A) changed the
+     * select without refetching - the numbers on screen kept describing the old
+     * scope. The key must carry every narrowing filter.
+     */
+    check('the scope reaches the agents table too, not just the dashboard numbers',
+      requested.filter(r => r.endpoint === 'report').some(r => /"sentiment":"negative"/.test(String(r.body || ''))),
+      requested.filter(r => r.endpoint === 'report').map(r => String(r.body || '').slice(0, 90)).slice(-3));
+  }
+}
+
 console.log('\n== Sprint B: the weekday x hour heatmap ==');
 {
   /*

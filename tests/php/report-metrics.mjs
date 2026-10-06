@@ -1072,7 +1072,102 @@ const partial = parseJson(partialRaw, '{', '}');
 check('a partial fetch is recorded as incomplete with its resume point',
   partial && partial.complete === false && partial.records === 1 && partial.nextOffset === 250, partial);
 
-/* ================= 8. weekday x hour heatmap (Sprint B) */
+/* ============ 8. sentiment: the period block and the negative filter */
+
+console.log('\n== sentiment for the period, and the negative-only scope ==');
+
+/*
+ * A fresh day (2026-08-24) with four scored calls and one unscored one:
+ *
+ *   s1  neg 70 / pos 10   -> negative (70 > 10)
+ *   s2  neg 40 / pos 45   -> positive, NOT negative: the positive share leads,
+ *                            where a "more than zero" rule would wrongly call
+ *                            this a complaint
+ *   s3  neg 20 / pos 60   -> positive
+ *   s4  0/0/0             -> unscored: excluded from both scopes and from the
+ *                            averages' base, which must stay 3
+ *   s5  no fields at all  -> unscored
+ *
+ * Averages over the 3 scored calls: positive (10+45+60)/3 = 38.3,
+ * neutral (20+35+20)/3 = 25.0, negative (70+40+20)/3 = 43.3.
+ */
+await harness.seedPbx('fetchCdrs', [
+  { id: 's1', 'call-direction': 1, 'call-start-datetime': '2026-08-24T09:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-24T09:00:05Z[US/Eastern]', 'call-term-user': '6080',
+    'call-intelligence-percent-positive': 10, 'call-intelligence-percent-neutral': 20,
+    'call-intelligence-percent-negative': 70, 'call-intelligence-topics-top': 'billing' },
+  { id: 's2', 'call-direction': 1, 'call-start-datetime': '2026-08-24T10:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-24T10:00:05Z[US/Eastern]', 'call-term-user': '6080',
+    'call-intelligence-percent-positive': 45, 'call-intelligence-percent-neutral': 35,
+    'call-intelligence-percent-negative': 40 },
+  { id: 's3', 'call-direction': 1, 'call-start-datetime': '2026-08-24T11:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-24T11:00:05Z[US/Eastern]', 'call-term-user': '6081',
+    'call-intelligence-percent-positive': 60, 'call-intelligence-percent-neutral': 20,
+    'call-intelligence-percent-negative': 20, 'call-intelligence-topics-top': 'billing' },
+  { id: 's4', 'call-direction': 1, 'call-start-datetime': '2026-08-24T12:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-24T12:00:05Z[US/Eastern]', 'call-term-user': '6081',
+    'call-intelligence-percent-positive': 0, 'call-intelligence-percent-neutral': 0,
+    'call-intelligence-percent-negative': 0 },
+  { id: 's5', 'call-direction': 1, 'call-start-datetime': '2026-08-24T13:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-24T13:00:05Z[US/Eastern]', 'call-term-user': '6081' }
+]);
+
+const sentDay = { start: '2026-08-24', end: '2026-08-24', hours: 'all', skipPrevious: true };
+const sentAll = await harness.request('report.php', { body: sentDay, user: USERS.office_manager });
+check('report.php answers for the sentiment day', sentAll.status === 200, sentAll.log ?? sentAll.status);
+if (sentAll.status === 200) {
+  const S = sentAll.body.summary.sentiment;
+  check('the period carries its sentiment block with a base', S.scored === 3, S);
+  check('the averages are over the calls that were scored, not all five',
+    S.positive === 38.3 && S.neutral === 25 && S.negative === 43.3, S);
+  check('the block counts the calls whose negative share leads', S.negativeCalls === 1, S.negativeCalls);
+  check('topics are published with their counts', Array.isArray(S.topics)
+    && S.topics[0]?.topic === 'billing' && S.topics[0]?.count === 2, S.topics);
+
+  const sentNeg = await harness.request('report.php', {
+    body: Object.assign({}, sentDay, { sentiment: 'negative' }),
+    user: USERS.office_manager
+  });
+  check('sentiment=negative keeps exactly the one negative call',
+    sentNeg.status === 200 && sentNeg.body.summary.counts.total === 1,
+    sentNeg.status === 200 ? sentNeg.body.summary.counts : sentNeg.log);
+  check('the response says which sentiment scope produced it',
+    sentNeg.body?.appliedFilters?.sentiment === 'negative', sentNeg.body?.appliedFilters);
+  check('the scope is applied to the same row set as everything else (counts and drill agree)',
+    sentNeg.body.summary.counts.total === sentNeg.body.summary.sentiment.scored,
+    [sentNeg.body.summary.counts.total, sentNeg.body.summary.sentiment.scored]);
+  check('the unscored calls are in neither scope',
+    sentAll.body.summary.counts.total === 5 && sentNeg.body.summary.counts.total === 1,
+    [sentAll.body.summary.counts.total, sentNeg.body.summary.counts.total]);
+
+  const sentPos = await harness.request('report.php', {
+    body: Object.assign({}, sentDay, { sentiment: 'positive' }),
+    user: USERS.office_manager
+  });
+  /*
+   * Both scopes use the same rule with the sign flipped, so the two sets
+   * PARTITION the scored calls: s2 (40 negative vs 45 positive) belongs to
+   * positive only, s1 to negative only, s3 to positive. A tie would be in
+   * neither, which is the honest answer for a 50/50 call.
+   */
+  check('sentiment=positive keeps the calls whose positive share leads (s2 and s3)',
+    sentPos.status === 200 && sentPos.body.summary.counts.total === 2,
+    sentPos.status === 200 ? sentPos.body.summary.counts : sentPos.log);
+  check('the two scopes partition the scored calls (1 negative + 2 positive = 3 scored)',
+    sentNeg.body.summary.counts.total + sentPos.body.summary.counts.total === sentAll.body.summary.sentiment.scored,
+    [sentNeg.body.summary.counts.total, sentPos.body.summary.counts.total, sentAll.body.summary.sentiment.scored]);
+
+  const sentBad = await harness.request('report.php', {
+    body: Object.assign({}, sentDay, { sentiment: 'furious' }),
+    user: USERS.office_manager
+  });
+  check('an unknown sentiment value scopes nothing rather than emptying the report',
+    sentBad.status === 200 && sentBad.body.summary.counts.total === 5
+      && sentBad.body.appliedFilters.sentiment === '',
+    sentBad.status === 200 ? [sentBad.body.summary.counts.total, sentBad.body.appliedFilters] : sentBad.log);
+}
+
+/* ================= 9. weekday x hour heatmap (Sprint B) */
 
 console.log('\n== the weekday x hour grid ==');
 
@@ -1131,7 +1226,7 @@ if (heatRes.status === 200) {
     H.maxCell === 2, H.maxCell);
 }
 
-/* ============ 9. per-agent hold time and outbound contact rate (Sprint B) */
+/* ============ 10. per-agent hold time and outbound contact rate (Sprint B) */
 
 console.log('\n== hold time and contact rate, per agent ==');
 

@@ -3430,3 +3430,19 @@ html[data-theme="light"] .grid-totals td {
 }
 .ops-heat-legend { display: inline-flex; align-items: center; gap: 3px; color: var(--color-slate-500); }
 .ops-heat-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; }
+
+/* Sentiment card (Sprint B): three share bars, the base, and the topics. */
+.ops-sent-row { display: grid; grid-template-columns: 64px 1fr 52px; align-items: center; gap: 8px; margin-bottom: 4px; }
+.ops-sent-k { font-size: 11px; color: var(--color-slate-400); }
+.ops-sent-v { font-size: 11px; color: var(--color-slate-300); text-align: right; font-variant-numeric: tabular-nums; }
+.ops-sent-track { height: 8px; border-radius: 4px; background: var(--color-slate-800); overflow: hidden; }
+.ops-sent-fill { height: 100%; border-radius: 4px; }
+.ops-sent-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 8px; font-size: 11px; color: var(--color-slate-400); }
+.ops-sent-link { background: none; border: 0; padding: 0; font-size: 11px; color: var(--color-cyan-400, #22d3ee); cursor: pointer; }
+.ops-sent-link:hover { text-decoration: underline; }
+.ops-sent-topics { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.ops-sent-topic {
+  font-size: 10px; padding: 1px 6px; border: 1px solid var(--color-slate-700);
+  border-radius: 10px; color: var(--color-slate-300); background: none;
+}
+.ops-sent-topic:hover { border-color: var(--color-cyan-500, #06b6d4); }

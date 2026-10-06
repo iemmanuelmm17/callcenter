@@ -429,8 +429,32 @@ const fits = start => daysSpan(start, today) <= spanCap;
       ),
 
     /*
+     * SENTIMENT (Sprint B): the call-intelligence fields were rendered only on
+     * the live Queues donut, so "who was unhappy this week" could not be asked
+     * of a period. Negative means the call's negative share beats its positive
+     * share and the call was scored at all - see callIsNegative().
+     */
+    h(
+      'select',
+      {
+        value: filters.sentiment || '',
+        onChange: e =>
+          setFilters({
+            ...filters,
+            sentiment: e.target.value
+          }),
+        className:
+          'border border-slate-700 bg-slate-950 px-2 py-1 text-xs outline-none focus:border-cyan-400',
+        title: 'Scope every figure to calls whose sentiment came out one way'
+      },
+      h('option', { value: '' }, 'Any sentiment'),
+      h('option', { value: 'negative' }, 'Negative only'),
+      h('option', { value: 'positive' }, 'Positive only')
+    ),
+
+    /*
      * OUTCOME (Sprint A): the canonical vocabulary, so "show me only the
-     * abandons" does not require reading a type column and guessing.
+     * abandons" does not require reading a column and guessing.
      */
     h(
       'select',

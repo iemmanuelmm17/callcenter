@@ -177,6 +177,14 @@ if (
         : max(0, min(86400, (int)$requestedWaitedOver));
     $calls = filterCallsByWait($calls, $requestedWaitBucket, $requestedWaitedOver);
 
+    /*
+     * Sprint B: the sentiment filter, applied to the same row set as every
+     * other narrowing filter, so "negative only" numbers and the list behind
+     * them are the same calls.
+     */
+    $requestedSentiment = strtolower(trim((string)($requested['sentiment'] ?? '')));
+    $calls = filterCallsBySentiment($calls, $requestedSentiment);
+
     $requestedCallbackState = strtolower(trim((string)($requested['callbackState'] ?? '')));
     if (!in_array($requestedCallbackState, callCallbackStates(), true)) {
         $requestedCallbackState = '';
@@ -505,6 +513,17 @@ $current['topAgents'] = $topAgents;
 		 * says so. The appendix in Sprint C prints this; it ships here so the
 		 * fact is available wherever the numbers are.
 		 */
+		/*
+		 * The narrowing filters this response was actually computed with, so a
+		 * reader (or a saved link) can see why the numbers are what they are.
+		 */
+		'appliedFilters' => [
+			'outcome' => $requestedOutcome,
+			'waitBucket' => $requestedWaitBucket,
+			'waitedOver' => $requestedWaitedOver,
+			'callbackState' => $requestedCallbackState,
+			'sentiment' => in_array($requestedSentiment, callSentimentFilterKinds(), true) ? $requestedSentiment : '',
+		],
 		'cacheStatus' => $cacheStatus,
 		'dataQuality' => $dataQuality,
 		'settings' => $settings,

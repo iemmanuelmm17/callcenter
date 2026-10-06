@@ -245,6 +245,15 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
     $abandonWaitBuckets = ['lt5'=>0,'5-30'=>0,'gt30'=>0];
     $holdTotal = 0;
     $holdCalls = 0;
+    /* Sprint B: the period's sentiment, with the same three figures the live
+     * Queues donut shows - averaged over the calls that carry sentiment at all,
+     * because a call nobody scored is not a neutral call. */
+    $sentPos = 0.0;
+    $sentNeu = 0.0;
+    $sentNeg = 0.0;
+    $sentN = 0;
+    $sentNegativeCalls = 0;
+    $sentTopics = [];
 
     foreach ($calls as $call) {
         $type = callType($call);
@@ -274,6 +283,26 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
         if ($hold > 0) {
             $holdTotal += $hold;
             $holdCalls++;
+        }
+
+        $sent = callSentimentShare($call);
+        if ($sent['present']) {
+            $sentPos += $sent['positive'];
+            $sentNeu += $sent['neutral'];
+            $sentNeg += $sent['negative'];
+            $sentN++;
+            if (callIsNegative($call)) {
+                $sentNegativeCalls++;
+            }
+        }
+        $sentTopic = trim((string)($call['call-intelligence-topics-top'] ?? ''));
+        if ($sentTopic !== '') {
+            foreach (preg_split('/[,;|]+/', $sentTopic) ?: [] as $piece) {
+                $piece = trim($piece);
+                if ($piece !== '') {
+                    $sentTopics[$piece] = ($sentTopics[$piece] ?? 0) + 1;
+                }
+            }
         }
 
         if ($type === 'missed') {
@@ -433,6 +462,21 @@ function summary(array $calls, int $slaSeconds = 20, array $directory = [], arra
             'calls' => $holdCalls,
             'avgSeconds' => $holdCalls > 0 ? (int)round($holdTotal / $holdCalls) : 0,
         ],
+        'sentiment' => [
+            /* Averages over the calls that carry sentiment; `scored` is the base
+             * a reader needs before quoting any of the three. */
+            'positive' => $sentN ? round($sentPos / $sentN, 1) : 0.0,
+            'neutral' => $sentN ? round($sentNeu / $sentN, 1) : 0.0,
+            'negative' => $sentN ? round($sentNeg / $sentN, 1) : 0.0,
+            'score' => $sentN ? round(($sentPos - $sentNeg) / $sentN, 1) : 0.0,
+            'scored' => $sentN,
+            'negativeCalls' => $sentNegativeCalls,
+            'topics' => array_map(
+                static fn(string $topic, int $count): array => ['topic' => $topic, 'count' => $count],
+                array_keys(array_slice($sentTopics, 0, 8, true)),
+                array_values(array_slice($sentTopics, 0, 8, true))
+            ),
+        ],
     ];
 }
 
@@ -457,6 +501,53 @@ function filterCallsByOutcome(array $calls, string $outcome, array $directory = 
     return array_values(array_filter(
         $calls,
         static fn(array $call): bool => callOutcome($call, $directory, $queueIds) === $outcome
+    ));
+}
+
+/**
+ * Sentiment (Sprint B): the rule for "this call went badly", stated once.
+ *
+ * A call is negative when its negative share is both non-trivial and larger
+ * than its positive share. Requiring both halves matters: a call with no
+ * intelligence data at all reports 0/0/0, and a call with 40 % negative and 45 %
+ * positive is not a complaint. The fields are collected today and rendered only
+ * on the live Queues donut, so this is the first time the period can be scoped
+ * to them.
+ */
+function callSentimentShare(array $row): array
+{
+    $pos = (float)($row['call-intelligence-percent-positive'] ?? 0);
+    $neu = (float)($row['call-intelligence-percent-neutral'] ?? 0);
+    $neg = (float)($row['call-intelligence-percent-negative'] ?? 0);
+    return ['positive' => $pos, 'neutral' => $neu, 'negative' => $neg, 'present' => ($pos + $neu + $neg) > 0];
+}
+
+function callIsNegative(array $row): bool
+{
+    $s = callSentimentShare($row);
+    return $s['present'] && $s['negative'] > 0 && $s['negative'] > $s['positive'];
+}
+
+function callSentimentFilterKinds(): array
+{
+    return ['negative', 'positive'];
+}
+
+function filterCallsBySentiment(array $calls, string $sentiment): array
+{
+    $sentiment = strtolower(trim($sentiment));
+    if (!in_array($sentiment, callSentimentFilterKinds(), true)) {
+        return array_values($calls);
+    }
+    return array_values(array_filter(
+        $calls,
+        static function (array $call) use ($sentiment): bool {
+            $share = callSentimentShare($call);
+            if (!$share['present']) {
+                return false;
+            }
+            return $sentiment === 'negative' ? callIsNegative($call) : $share['positive'] > $share['negative'];
+        }
     ));
 }
 

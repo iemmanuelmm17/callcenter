@@ -155,7 +155,13 @@ export const FIXTURES = {
       waitBuckets: { '0-30': 6, '31-60': 3, '61-120': 2, '120+': 1 },
       missedWaitBuckets: { lt5: 1, '5-30': 2, gt30: 2 },
       abandonWaitBuckets: { lt5: 1, '5-30': 1, gt30: 2 },
-      hold: { totalSeconds: 480, calls: 3, avgSeconds: 160 }
+      hold: { totalSeconds: 480, calls: 3, avgSeconds: 160 },
+      /* Sprint B: the period's sentiment, with its base. */
+      sentiment: {
+        positive: 38.3, neutral: 25.0, negative: 43.3, score: -5.0,
+        scored: 3, negativeCalls: 1,
+        topics: [{ topic: 'billing', count: 2 }, { topic: 'outage', count: 1 }]
+      }
     },
     comparison: {
       /* F3: the baseline's own name and length, as the server publishes them. */

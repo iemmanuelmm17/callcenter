@@ -6,11 +6,12 @@
 
 import { splineArea } from './charts.js';
 import { WeekHourHeatmap } from './heatmap.js';
+import { SentimentCard } from './sentiment.js';
 import { SlaControl, Tooltip, skelPanel } from './ui.js';
 import { fmt, fmtNum } from '../lib/format.js';
 import { h, keyActivate, useEffect, useRef, useState } from '../lib/react.js';
 
-function OverviewDashboard({loading, report, filters, inventory, inventoryReady, slaSeconds, onSlaChange, onMetric, onHourClick, onDayClick, onAgentClick, onNavigate, allowedRoutes, topAgentQual, compare, onCompareChange}) {
+function OverviewDashboard({loading, report, filters, inventory, inventoryReady, slaSeconds, onSlaChange, onMetric, onHourClick, onDayClick, onAgentClick, onNavigate, allowedRoutes, topAgentQual, compare, onCompareChange, onSentimentOnly}) {
   const canvas = useRef(null);
   const chart = useRef(null);
   const ready = inventoryReady || {};
@@ -614,6 +615,21 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
           )
         : pulse
     ),
+
+    /*
+     * Sprint B: the period's sentiment, beside the wait card - the two figures
+     * a weekly huddle reads together ("we were slow AND they were unhappy").
+     */
+    reportReady
+      ? h(SentimentCard, {
+          sentiment: report?.summary?.sentiment,
+          loading: false,
+          /* Scopes the whole dashboard to the negative calls, which is the
+           * filter the bar offers - not a drill that would open a list the
+           * numbers above it were not computed from. */
+          onNegativeClick: () => onSentimentOnly && onSentimentOnly()
+        })
+      : null,
 
     h('div', {className:'ops-split'},
       reportReady
