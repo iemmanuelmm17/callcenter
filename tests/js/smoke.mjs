@@ -242,6 +242,53 @@ console.log('\n== totals rows on every grid (review 5.1) ==');
  * re-request from the server — sorting the 25 rows in the browser would sort
  * the page, not the result set.
  */
+/*
+ * F3: the comparison baseline is a control, and the screen always says which
+ * period the deltas are against. The mode travels in the request, so the second
+ * (comparison) request has to carry it back to the server.
+ */
+console.log('\n== dashboard: the comparison baseline ==');
+{
+  await goTo('Dashboard');
+  await flush(10);
+  const picker = document.getElementById('ops-compare-select');
+  check('the dashboard has a comparison-baseline control', !!picker);
+  check('it offers the five modes the endpoint supports',
+    !!picker && [...picker.options].map(o => o.value).join(',') === 'previous,weekday,mtd,month,year',
+    picker && [...picker.options].map(o => o.value));
+  check('the screen states the baseline it is using (vs previous 5 days, with the dates)',
+    /vs previous 5 days/.test(document.body.textContent)
+      && /2026-07-27 – 2026-07-31/.test(document.body.textContent),
+    document.body.textContent.match(/vs previous 5 days[^.]{0,40}/)?.[0]);
+  check('the hour chart caption names the baseline instead of "previous period"',
+    /This period vs previous 5 days/.test(document.body.textContent),
+    document.body.textContent.match(/This period vs[^.]{0,40}/)?.[0]);
+  const before3 = errors.length;
+  /*
+   * The select's own change handler cannot be driven from this harness (the
+   * same React-controlled-input limitation the Settings steppers exist to work
+   * around), so the wiring it feeds is asserted by booting a second app with the
+   * mode in the URL — which is also how a shared link arrives.
+   */
+  const linked = await createHarness({search: 'compare=year'});
+  await linked.flush(14);
+  const linkedReqs = linked.requested.filter(r => r.endpoint === 'report');
+  const linkedModes = linkedReqs.map(r => (String(r.body).match(/"compare":"([a-z]+)"/) || [])[1]);
+  check('a URL that names a baseline sends it on every report request',
+    linkedModes.length > 0 && linkedModes.every(m => m === 'year'), linkedModes);
+  /*
+   * The control shows the baseline the SERVER reported, not the one the URL
+   * asked for — if the two ever differ (a server-side default, a mode that was
+   * dropped), the screen must label the numbers that are actually on it. The
+   * stub always answers 'previous', so that is what the control must show while
+   * the request itself carried 'year' (asserted above).
+   */
+  check('the control shows the baseline the numbers came from, not the one asked for',
+    linked.document.getElementById('ops-compare-select')?.value === 'previous',
+    linked.document.getElementById('ops-compare-select')?.value);
+  check('the baseline control threw nothing', errors.length === before3, errors.slice(before3).join(' | '));
+}
+
 console.log('\n== call list: the sort control ==');
 {
   await goTo('Dashboard');

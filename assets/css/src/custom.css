@@ -3386,3 +3386,14 @@ html[data-theme="light"] .grid-totals td {
   cursor: pointer; font-variant-numeric: tabular-nums;
 }
 .call-modal-dir:hover { border-color: var(--color-cyan-500, #06b6d4); color: var(--color-cyan-300, #67e8f9); }
+
+/* The dashboard's comparison-baseline switch (review F3). */
+.ops-compare { display: flex; align-items: center; gap: 8px; }
+.ops-compare-label { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--color-slate-500); }
+.ops-compare-select {
+  border: 1px solid var(--color-slate-700, #334155); border-radius: 3px;
+  background: var(--color-slate-950, #020617); color: var(--color-slate-200, #e2e8f0);
+  padding: 2px 6px; font-size: 11px; outline: none; cursor: pointer;
+}
+.ops-compare-select:focus { border-color: var(--color-cyan-500, #06b6d4); }
+.ops-compare-hint { font-size: 10px; color: var(--color-slate-500); font-variant-numeric: tabular-nums; }

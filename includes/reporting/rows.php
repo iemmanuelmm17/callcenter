@@ -482,10 +482,129 @@ function callCallbackStates(): array
     return ['returned', 'unreturned'];
 }
 
+/*
+ * ==========================================================================
+ * COMPARISON MODES (manager review, F3)
+ * ==========================================================================
+ *
+ * The dashboard had one baseline: the previous period of equal length. That is
+ * the wrong baseline for the two questions the review actually asks -
+ * "yesterday is the wrong baseline for a Wednesday huddle, and last month is
+ * the wrong baseline for a monthly review that has a different number of
+ * business days in it".
+ *
+ * Every mode below shifts the requested range to another range and the caller
+ * runs the SAME pipeline over it, so a comparison can never be computed with
+ * different semantics than the period it is compared against.
+ */
+
+/** The valid comparison modes, for endpoints that validate a request value. */
+function compareModes(): array
+{
+    return ['previous', 'weekday', 'month', 'mtd', 'year'];
+}
+
+function normalizeCompareMode($requested): string
+{
+    $mode = strtolower(trim((string)$requested));
+    return in_array($mode, compareModes(), true) ? $mode : 'previous';
+}
+
+/**
+ * Shift a Y-m-d by whole months (or years) without PHP's month-end surprise.
+ *
+ * `(new DateTimeImmutable('2026-03-31'))->modify('-1 month')` is 2026-03-03 -
+ * PHP overflows the 31st into the next month. A comparison baseline that
+ * silently points at the wrong month is worse than no baseline, so the day is
+ * clamped to the last day of the target month instead.
+ */
+function shiftMonthsClamped(string $date, int $months): string
+{
+    try {
+        $at = new DateTimeImmutable($date);
+    } catch (Throwable $e) {
+        return $date;
+    }
+    $day = (int)$at->format('j');
+    $firstOfTarget = $at->modify('first day of this month')->modify(($months >= 0 ? '+' : '') . $months . ' months');
+    $lastDay = (int)$firstOfTarget->format('t');
+    return $firstOfTarget->setDate(
+        (int)$firstOfTarget->format('Y'),
+        (int)$firstOfTarget->format('n'),
+        min($day, $lastDay)
+    )->format('Y-m-d');
+}
+
+/**
+ * The comparison range for a mode, with a label that states the baseline AND
+ * the period length (review §5.3: "vs previous 7 days", not "vs previous").
+ *
+ *   previous  the equal-length period immediately before (the old behaviour)
+ *   weekday   the same dates one week earlier - for a daily huddle, yesterday
+ *             last week is the honest baseline: same weekday, same hours
+ *   mtd       the same dates one month earlier, clamped to that month's length
+ *             (month-to-date against the same point last month)
+ *   month     identical to mtd when the range is one calendar month; kept as
+ *             its own mode because that is the name a reader looks for
+ *   year      the same dates one year earlier (month-end and 29 February are
+ *             clamped), which is what "how does this compare to last year"
+ *             means for a report that is a calendar month
+ */
+function comparePeriodFilters(array $filters, string $mode = 'previous'): array
+{
+    $mode = normalizeCompareMode($mode);
+    $start = new DateTimeImmutable((string)$filters['start']);
+    $end = new DateTimeImmutable((string)$filters['end']);
+    $days = (int)$start->diff($end)->days + 1;
+
+    if ($mode === 'weekday') {
+        $compareStart = $start->modify('-7 days')->format('Y-m-d');
+        $compareEnd = $end->modify('-7 days')->format('Y-m-d');
+    } elseif ($mode === 'month' || $mode === 'mtd') {
+        $compareStart = shiftMonthsClamped((string)$filters['start'], -1);
+        $compareEnd = shiftMonthsClamped((string)$filters['end'], -1);
+    } elseif ($mode === 'year') {
+        $compareStart = shiftMonthsClamped((string)$filters['start'], -12);
+        $compareEnd = shiftMonthsClamped((string)$filters['end'], -12);
+    } else {
+        /* previous: default, and the fallback and the old behaviour. */
+        $compareEnd = $start->modify('-1 day')->format('Y-m-d');
+        $compareStart = (new DateTimeImmutable($compareEnd))->modify('-' . ($days - 1) . ' days')->format('Y-m-d');
+    }
+
+    $startAt = new DateTimeImmutable($compareStart);
+    $endAt = new DateTimeImmutable($compareEnd);
+    $compareDays = (int)$startAt->diff($endAt)->days + 1;
+    $dayWord = $compareDays === 1 ? 'day' : 'days';
+
+    $labels = [
+        'previous' => 'previous ' . $compareDays . ' ' . $dayWord,
+        'weekday' => 'same weekday last week',
+        'month' => 'same ' . $compareDays . ' ' . $dayWord . ' last month',
+        'mtd' => 'same point last month',
+        'year' => 'same ' . $compareDays . ' ' . $dayWord . ' last year',
+    ];
+
+    return [
+        'mode' => $mode,
+        'label' => $labels[$mode],
+        'days' => $compareDays,
+        'start' => $compareStart,
+        'end' => $compareEnd,
+    ];
+}
+
+/**
+ * The previous equal-length period, as a filters array.
+ *
+ * Kept because callers outside report.php use it; it is now a thin wrapper so
+ * there is only one implementation of the date arithmetic.
+ */
 function previousFilters(array $filters): array {
-    $start = new DateTimeImmutable($filters['start']); $end = new DateTimeImmutable($filters['end']); $days = $start->diff($end)->days + 1;
-    $previousEnd = $start->modify('-1 day'); $previousStart = $previousEnd->modify('-' . ($days - 1) . ' days');
-    $filters['start'] = $previousStart->format('Y-m-d'); $filters['end'] = $previousEnd->format('Y-m-d'); return $filters;
+    $compare = comparePeriodFilters($filters, 'previous');
+    $filters['start'] = $compare['start'];
+    $filters['end'] = $compare['end'];
+    return $filters;
 }
 
 function filterCallTypes(

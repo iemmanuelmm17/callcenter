@@ -9,7 +9,7 @@ import { SlaControl, Tooltip, skelPanel } from './ui.js';
 import { fmt, fmtNum } from '../lib/format.js';
 import { h, keyActivate, useEffect, useRef, useState } from '../lib/react.js';
 
-function OverviewDashboard({loading, report, filters, inventory, inventoryReady, slaSeconds, onSlaChange, onMetric, onHourClick, onDayClick, onAgentClick, onNavigate, allowedRoutes, topAgentQual}) {
+function OverviewDashboard({loading, report, filters, inventory, inventoryReady, slaSeconds, onSlaChange, onMetric, onHourClick, onDayClick, onAgentClick, onNavigate, allowedRoutes, topAgentQual, compare, onCompareChange}) {
   const canvas = useRef(null);
   const chart = useRef(null);
   const ready = inventoryReady || {};
@@ -127,6 +127,24 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
   }, { calls: 0, answered: 0, missed: 0, talkSeconds: 0 });
   const waitTotal = Object.values(waitBuckets).reduce((a, b) => a + Number(b || 0), 0);
   const prevCounts = report?.comparison?.previous?.counts || {};
+  /*
+   * F3/§5.3: the baseline is named, not implied. "vs last period" is a claim
+   * the reader cannot check; "vs previous 7 days (Jul 25 - Jul 31)" is one they
+   * can. The label and the dates come from the server that fetched them.
+   */
+  const compareMode = report?.comparison?.mode || compare || 'previous';
+  const compareLabel = report?.comparison?.label
+    || (compareMode === 'weekday' ? 'same weekday last week'
+      : compareMode === 'month' ? 'same dates last month'
+        : compareMode === 'mtd' ? 'same point last month'
+          : compareMode === 'year' ? 'same dates last year'
+            : 'previous period');
+  const prevSpan = report?.comparison?.previous?.start && report?.comparison?.previous?.end
+    ? (report.comparison.previous.start === report.comparison.previous.end
+      ? report.comparison.previous.start
+      : report.comparison.previous.start + ' \u2013 ' + report.comparison.previous.end)
+    : '';
+  const baselineText = 'vs ' + compareLabel + (prevSpan ? ' (' + prevSpan + ')' : '');
   /* True between phase 1 painting and phase 2 landing. */
   const comparisonPending = report?.comparison?.pending === true;
   const total = Number(c.total || 0);
@@ -332,7 +350,7 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
     } else if (!comparisonPending && pctDelta(missed, prevCounts.missed) > 15 && missed > 0) {
       insight = {
         bad: false,
-        title: 'Missed calls are up ' + pctDelta(missed, prevCounts.missed).toFixed(1) + '% vs last period',
+        title: 'Missed calls are up ' + pctDelta(missed, prevCounts.missed).toFixed(1) + '% ' + baselineText,
         body: fmtNum(missed) + ' missed this range versus ' + fmtNum(prevCounts.missed || 0) + ' previously.',
         link: 'Open missed calls',
         metric: 'missed'
@@ -370,9 +388,32 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
     h('div', {className:'ops-head'},
       h('div', null,
         h('h1', {className:'ops-title'}, 'Operations overview'),
-        h('p', {className:'ops-sub'}, 'Scan for missed calls, SLA breaches, and agent load. Compare to the previous period of the same length.')
+        h('p', {className:'ops-sub'},
+          'Scan for missed calls, SLA breaches, and agent load. Deltas compare ' + baselineText + '.')
       ),
       h('div', {className:'flex shrink-0 items-center gap-2'},
+        /*
+         * The baseline switch (F3). A dashboard control rather than a filter-bar
+         * one: it changes what the numbers are compared AGAINST, not which calls
+         * are counted.
+         */
+        h('div', {className:'ops-compare'},
+          h('label', {className:'ops-compare-label', htmlFor:'ops-compare-select'}, 'Compare'),
+          h('select', {
+            id: 'ops-compare-select',
+            className: 'ops-compare-select',
+            value: compareMode,
+            title: 'Which period the trend arrows and deltas compare against',
+            onChange: e => onCompareChange && onCompareChange(e.target.value)
+          },
+            h('option', {value: 'previous'}, 'Previous period'),
+            h('option', {value: 'weekday'}, 'Same weekday last week'),
+            h('option', {value: 'mtd'}, 'Same point last month'),
+            h('option', {value: 'month'}, 'Same dates last month'),
+            h('option', {value: 'year'}, 'Same dates last year')
+          ),
+          h('span', {className:'ops-compare-hint'}, prevSpan ? 'baseline ' + prevSpan : 'baseline not fetched')
+        ),
         h(SlaControl, {value: slaSeconds, onChange: onSlaChange}),
         reportReady ? h('button', {
           type:'button',
@@ -394,7 +435,7 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
     h('div', {className:'ops-top'},
       reportReady
         ? h('section', {className:'ops-card'},
-            h('div', {className:'ops-total-k flex items-center gap-1'}, 'Total calls', qHelp('All calls in the selected range. Click the number to open the call list. Delta is versus the previous period of the same length (' + fmtNum(prevCounts.total || 0) + ').')),
+            h('div', {className:'ops-total-k flex items-center gap-1'}, 'Total calls', qHelp('All calls in the selected range. Click the number to open the call list. The delta compares against ' + baselineText + ': ' + fmtNum(prevCounts.total || 0) + ' calls.')),
             h('div', {className:'ops-total-h'}, 'All directions · selected range'),
             h('button', {type:'button', className:'ops-total-n', onClick: () => onMetric && onMetric('total')}, fmtNum(total)),
             /*
@@ -403,10 +444,10 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
              * would invent a -100% swing out of missing data.
              */
             comparisonPending
-              ? h('div', {className: 'ops-total-delta is-flat'}, 'Comparing to last period…')
+              ? h('div', {className: 'ops-total-delta is-flat'}, 'Comparing…')
               : h('div', {className: 'ops-total-delta ' + (Math.abs(totalDelta) < 0.05 ? 'is-flat' : (totalDelta > 0 ? 'is-up' : 'is-down'))},
                   (totalDelta > 0 ? '▲ ' : (totalDelta < 0 ? '▼ ' : '')) +
-                  Math.abs(totalDelta).toFixed(1) + '% vs last period (' + fmtNum(prevCounts.total || 0) + ')'
+                  Math.abs(totalDelta).toFixed(1) + '% ' + baselineText + ' (' + fmtNum(prevCounts.total || 0) + ')'
                 ),
             sparkline(dayList.map(d => Number(days[d] || 0)))
           )
@@ -579,7 +620,7 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
             h('div', {className:'ops-label'}, 'Call volume by hour', qHelp('Calls started in each hour, summed across the range. Ghost bars are the previous period when present. Click a bar to open those calls.')),
             h('div', {className:'ops-hint'},
               hoursPrev && hoursPrev.length === 24
-                ? 'This period vs previous period. Click a bar to open those calls.'
+                ? 'This period vs ' + compareLabel + '. Click a bar to open those calls.'
                 : 'Click a bar to open those calls. Previous-period hourly data is not in this report — totals still compare above.'
             ),
             h('div', {className:'ops-hour-chart cursor-pointer'}, h('canvas', {ref: canvas})),

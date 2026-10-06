@@ -37,7 +37,13 @@ const [filters,setFilters] = useState(() => {
         start: q.get('start') || today,
         end: q.get('end') || today,
         department: q.get('department') || '',
-        site: q.get('site') || ''
+        site: q.get('site') || '',
+        /*
+         * F3. The baseline is part of the view, so it travels in the URL with
+         * the dates: a link to "this week vs the same week last year" has to
+         * show what it says. Empty means the server default (previous period).
+         */
+        compare: q.get('compare') || ''
     };
 });
 
@@ -456,6 +462,7 @@ useEffect(() => {
     const q = new URLSearchParams({ start: filters.start, end: filters.end });
     if (filters.department) q.set('department', filters.department);
     if (filters.site) q.set('site', filters.site);
+    if (filters.compare && filters.compare !== 'previous') q.set('compare', filters.compare);
     history.replaceState(null, '', '?' + q.toString());
     if (route !== 'dashboard') return;
 
@@ -482,10 +489,16 @@ useEffect(() => {
         setLoading(false);
 
         /* Phase 2 — comparison, non-blocking. */
+        /*
+         * The comparison request carries the chosen baseline; the main request
+         * only needs the dates (its own `comparison` block names the mode, and
+         * this phase-2 call is what fills the trend arrows).
+         */
         api('report', { ...filters, callTypes, slaSeconds, previousOnly: 1 })
         .then(prev => {
             if (!active) return;
-            const previous = prev && prev.comparison && prev.comparison.previous;
+            const comparison = prev && prev.comparison;
+            const previous = comparison && comparison.previous;
             if (!previous) return;
             setReport(cur => {
                 if (!cur) return cur;
@@ -494,6 +507,11 @@ useEffect(() => {
                     comparison: {
                         ...(cur.comparison || {}),
                         previous,
+                        /* The baseline's own name and length, from the server
+                         * that actually fetched it. */
+                        mode: comparison.mode || 'previous',
+                        label: comparison.label || '',
+                        days: comparison.days || 0,
                         pending: false
                     }
                 };
@@ -796,6 +814,10 @@ if (route === 'agents') {
         onNavigate: setRoute,
         slaSeconds,
         onSlaChange: setSlaSeconds,
+        /* F3: which baseline the trend arrows compare against, and the setter
+         * that re-requests both periods with it. */
+        compare: filters.compare || 'previous',
+        onCompareChange: mode => setFilters(f => ({ ...f, compare: mode })),
         allowedRoutes
     });
 }

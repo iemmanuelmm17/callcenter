@@ -90,12 +90,22 @@ if (
      * queueIds as the main request (FUNC-23) so the two halves stay
      * comparable.
      */
+    /*
+     * F3: which baseline the comparison uses. `compare` is optional and an
+     * unknown value falls back to the previous equal-length period, so an old
+     * bookmarked URL behaves exactly as it did.
+     */
+    $compareMode = normalizeCompareMode($requested['compare'] ?? 'previous');
+
     if (!empty($requested['previousOnly'])) {
         $slaSeconds = resolveSlaSeconds($requested, $user);
         /* Per-queue targets apply to the comparison period too, otherwise the
          * two halves of the dashboard would be judged by different rules. */
         $settings = loadDomainSettings((string)($user['domain'] ?? ''));
-        $previousFilters = previousFilters($filters);
+        $compare = comparePeriodFilters($filters, $compareMode);
+        $previousFilters = $filters;
+        $previousFilters['start'] = $compare['start'];
+        $previousFilters['end'] = $compare['end'];
 
         $previousCalls = filterCallsByLocalDate(
             reportingCdrRows($user, $previousFilters, $directory, $callTypes),
@@ -107,6 +117,10 @@ if (
 
         jsonResponse([
             'comparison' => [
+                /* Which baseline this is, stated so the client can label it. */
+                'mode' => $compare['mode'],
+                'label' => $compare['label'],
+                'days' => $compare['days'],
                 'previous' => [
                     'start'  => $previousFilters['start'],
                     'end'    => $previousFilters['end'],
@@ -266,7 +280,10 @@ if (
      * is on screen. Both flags are optional, so any caller that does not
      * send them keeps the original single-request behaviour.
      */
-    $previousFilters = previousFilters($filters);
+    $compare = comparePeriodFilters($filters, $compareMode);
+    $previousFilters = $filters;
+    $previousFilters['start'] = $compare['start'];
+    $previousFilters['end'] = $compare['end'];
     $skipPrevious = !empty($requested['skipPrevious']);
 
     if ($skipPrevious) {
@@ -363,6 +380,14 @@ $comparison = [
 
         'counts' => $current['counts'],
     ],
+
+    /*
+     * The baseline, stated: which period it is and how long it is (review §5.3
+     * - "vs previous 7 days", with the length visible on monthly views).
+     */
+    'mode' => $compare['mode'],
+    'label' => $compare['label'],
+    'days' => $compare['days'],
 
     'previous' => [
         'start' => $previousFilters['start'],

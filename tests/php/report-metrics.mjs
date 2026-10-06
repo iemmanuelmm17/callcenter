@@ -930,6 +930,131 @@ check('every answered hour has talk time behind its AHT',
   (H.hourly || []).every(h => h.answered === 0 || h.talkSeconds > 0 || h.aht === 0),
   (H.hourly || []).filter(h => h.answered > 0 && h.talkSeconds === 0));
 
+/* ============================================ A7. comparison modes (review F3) */
+
+console.log('\n== comparison modes: the date arithmetic, by hand ==');
+
+/*
+ * Every mode is a pure function of the range, so the ranges themselves are
+ * checkable without any CDR at all. August 2026 has 31 days; September has 30.
+ */
+const modesRaw = await harness.script(`
+require_once TEST_TMP . '/includes/reporting.php';
+$out = [];
+$range = static fn(string $m): array => comparePeriodFilters(['start' => '2026-09-15', 'end' => '2026-09-15'], $m);
+foreach (compareModes() as $m) {
+    $c = $range($m);
+    $out[$m] = ['start' => $c['start'], 'end' => $c['end'], 'days' => $c['days'], 'label' => $c['label']];
+}
+/* A month-long range, where "the same dates last month" is a real shift. */
+$month = comparePeriodFilters(['start' => '2026-08-01', 'end' => '2026-08-31'], 'month');
+$out['august_as_month'] = ['start' => $month['start'], 'end' => $month['end'], 'days' => $month['days']];
+/* Month-end clamping, where PHP's own -1 month overflows. */
+$out['mar31'] = shiftMonthsClamped('2026-03-31', -1);
+$out['jan31'] = shiftMonthsClamped('2026-01-31', -1);
+$out['feb29'] = shiftMonthsClamped('2028-02-29', -12);
+$out['dec31'] = shiftMonthsClamped('2026-12-31', -1);
+/* An unknown mode is the previous period, never an error. */
+$out['unknown'] = comparePeriodFilters(['start' => '2026-09-15', 'end' => '2026-09-15'], 'nonsense')['mode'];
+$out['blank'] = normalizeCompareMode('');
+echo json_encode($out);
+`);
+const modes = parseJson(modesRaw, '{', '}');
+check('the comparison modes block parses', modes !== null, modesRaw.slice(0, 300));
+if (modes) {
+  check('previous is the equal-length period immediately before',
+    modes.previous.start === '2026-09-14' && modes.previous.end === '2026-09-14' && modes.previous.days === 1,
+    modes.previous);
+  check('and it says so: "previous 1 day" (singular, not "1 days")',
+    modes.previous.label === 'previous 1 day', modes.previous.label);
+  check('weekday is the same date a week earlier, so the weekday matches',
+    modes.weekday.start === '2026-09-08' && modes.weekday.end === '2026-09-08'
+      && modes.weekday.label === 'same weekday last week',
+    modes.weekday);
+  check('month is the same date a month earlier',
+    modes.month.start === '2026-08-15' && modes.month.end === '2026-08-15', modes.month);
+  check('mtd is the same point last month',
+    modes.mtd.start === '2026-08-15' && modes.mtd.label === 'same point last month', modes.mtd);
+  check('year is the same date a year earlier',
+    modes.year.start === '2025-09-15' && modes.year.end === '2025-09-15', modes.year);
+  check('a month-long range compares against the whole previous month (31 days)',
+    modes.august_as_month.start === '2026-07-01' && modes.august_as_month.end === '2026-07-31'
+      && modes.august_as_month.days === 31,
+    modes.august_as_month);
+  check('31 March minus one month is 28 February, not 3 March (PHP overflow)',
+    modes.mar31 === '2026-02-28', modes.mar31);
+  check('31 January minus one month is 31 December', modes.jan31 === '2025-12-31', modes.jan31);
+  check('29 February minus a year lands on 28 February',
+    modes.feb29 === '2027-02-28', modes.feb29);
+  check('31 December minus one month is 30 November', modes.dec31 === '2026-11-30', modes.dec31);
+  check('an unknown mode falls back to previous instead of erroring',
+    modes.unknown === 'previous' && modes.blank === 'previous', [modes.unknown, modes.blank]);
+}
+
+console.log('\n== comparison modes: the endpoint fetches the range it named ==');
+
+/*
+ * 2026-09-15 carries 3 calls (2 answered, 1 missed); 2026-08-15 carries 2 (both
+ * answered); 2026-09-14 and 2026-09-08 carry nothing. So each mode's comparison
+ * count is a fingerprint of WHICH range was fetched - a mode that quietly fell
+ * back to the previous day would read 0 instead of 2.
+ */
+await harness.seedPbx('fetchCdrs', [
+  { id: 'm1', 'call-direction': 1, 'call-start-datetime': '2026-09-15T10:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-09-15T10:00:05Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'm2', 'call-direction': 1, 'call-start-datetime': '2026-09-15T11:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-09-15T11:00:05Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'm3', 'call-direction': 1, 'call-start-datetime': '2026-09-15T12:00:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-09-15T12:00:20Z[US/Eastern]', 'call-term-user': '6080' },
+  { id: 'm4', 'call-direction': 1, 'call-start-datetime': '2026-08-15T10:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-15T10:00:05Z[US/Eastern]', 'call-term-user': '6081' },
+  { id: 'm5', 'call-direction': 1, 'call-start-datetime': '2026-08-15T11:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-15T11:00:05Z[US/Eastern]', 'call-term-user': '6081' }
+]);
+
+const compareBody = { start: '2026-09-15', end: '2026-09-15', hours: 'all' };
+const compareRequest = async (mode) => {
+  const res = await harness.request('report.php', {
+    body: Object.assign({}, compareBody, mode ? { compare: mode } : {}),
+    user: USERS.office_manager
+  });
+  return res.body?.comparison || {};
+};
+const sameDay = await compareRequest('previous');
+const sameWeekday = await compareRequest('weekday');
+const sameMonth = await compareRequest('month');
+const sameYear = await compareRequest('year');
+const defaultMode = await compareRequest(null);
+
+check('the current period is the three calls on the 15th',
+  (await harness.request('report.php', { body: Object.assign({}, compareBody, { skipPrevious: true }), user: USERS.office_manager }))
+    .body?.summary?.counts?.total === 3);
+check('compare=previous looks at 2026-09-14, which is empty',
+  sameDay.previous?.start === '2026-09-14' && sameDay.previous?.counts?.total === 0,
+  [sameDay.previous?.start, sameDay.previous?.counts]);
+check('compare=month looks at 2026-08-15 and finds its two calls',
+  sameMonth.previous?.start === '2026-08-15' && sameMonth.previous?.counts?.total === 2
+    && sameMonth.previous.counts.inbound === 2,
+  [sameMonth.previous?.start, sameMonth.previous?.counts]);
+check('compare=weekday looks at 2026-09-08, not at the previous day',
+  sameWeekday.previous?.start === '2026-09-08' && sameWeekday.previous?.counts?.total === 0,
+  [sameWeekday.previous?.start, sameWeekday.previous?.counts]);
+check('compare=year looks at 2025-09-15 and finds nothing',
+  sameYear.previous?.start === '2025-09-15' && sameYear.previous?.counts?.total === 0,
+  [sameYear.previous?.start, sameYear.previous?.counts]);
+check('every response states the baseline it used',
+  sameMonth.mode === 'month' && sameMonth.label === 'same 1 day last month' && sameMonth.days === 1,
+  [sameMonth.mode, sameMonth.label, sameMonth.days]);
+check('omitting compare keeps the old behaviour (the day before)',
+  defaultMode.mode === 'previous' && defaultMode.previous?.start === '2026-09-14',
+  [defaultMode.mode, defaultMode.previous?.start]);
+check('an unknown compare value also keeps the old behaviour',
+  (await compareRequest('nonsense')).previous?.start === '2026-09-14');
+check('the comparison carries the same breakdown as the period it compares to',
+  sameMonth.previous?.missedBreakdown !== undefined && Array.isArray(sameMonth.previous?.hours)
+    && sameMonth.previous.hours.length === 24,
+  Object.keys(sameMonth.previous || {}));
+
 /*
  * A day whose fetch stopped at the page cap is SHORT, and the whole point of
  * the appendix is to say so. This writes the partial day the way the fetcher

@@ -138,6 +138,10 @@ export const FIXTURES = {
       hold: { totalSeconds: 480, calls: 3, avgSeconds: 160 }
     },
     comparison: {
+      /* F3: the baseline's own name and length, as the server publishes them. */
+      mode: 'previous',
+      label: 'previous 5 days',
+      days: 5,
       previous: {
         start: '2026-07-27', end: '2026-07-31',
         counts: { total: 1900, inbound: 1300, outbound: 450, missed: 120, onnet: 30 },

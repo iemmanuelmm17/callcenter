@@ -1,3 +1,80 @@
+# CHANGES — Sprint B, phase 1: comparison modes (F3)
+
+**What this phase is about.** The dashboard had exactly one baseline: the
+previous period of equal length. The review's objection is the one a supervisor
+makes at a Wednesday huddle — "yesterday is the wrong baseline for a Wednesday,
+and last month is the wrong baseline for a monthly review that has a different
+number of business days in it". This phase makes the baseline a choice, and
+makes the screen say which one it used.
+
+## Five baselines, one implementation
+
+`comparePeriodFilters()` (includes/reporting/rows.php) shifts the requested
+range to another range, and `api/report.php` then runs the **same** pipeline
+over it — same `slaSeconds`, same directory, same queue targets, same hours
+scope — so a comparison can never be computed by different rules than the period
+it is compared against:
+
+| `compare` | baseline | example for 15 Sep |
+| --- | --- | --- |
+| `previous` (default) | the equal-length period immediately before | 14 Sep |
+| `weekday` | the same dates a week earlier | 8 Sep (a Tuesday) |
+| `mtd` | the same point last month | 15 Aug |
+| `month` | the same dates last month, clamped to a month end | 15 Aug (1–31 Aug → 1–31 Jul) |
+| `year` | the same dates a year earlier | 15 Sep 2025 |
+
+An unknown value is `previous`, so an old bookmarked URL behaves exactly as it
+did. `previousFilters()` survives as a thin wrapper over the same arithmetic, so
+there is only one implementation.
+
+**Month-end is clamped, not overflowed.** PHP's own `-1 month` turns 31 March
+into *3 March* — a comparison that silently points at the wrong month is worse
+than no comparison, so `shiftMonthsClamped()` clamps the day to the target
+month's length: 31 Mar → 28 Feb, 31 Jan → 31 Dec, 29 Feb 2028 → 28 Feb 2027.
+
+## The baseline is stated, not implied (review §5.3)
+
+Every report response now carries `comparison.mode`, `comparison.label` and
+`comparison.days`, and the dashboard prints them: the subtitle reads
+"…Deltas compare vs previous 5 days (2026-07-27 – 2026-07-31)", the total-calls
+delta says which period it is against, the missed-calls nudge and the hour-chart
+caption name it too. "vs last period" was a claim the reader could not check.
+
+The mode is part of the view, so it travels in the URL (`?compare=year`) with the
+dates: a link to "this week vs the same week last year" opens showing that, and
+both dashboard phases (the period, then the non-blocking comparison) request the
+same baseline.
+
+## Evidence
+
+`tests/php/report-metrics.mjs` grew two sections. The first checks the date
+arithmetic by hand, with no CDR involved at all — including the three cases that
+make clamping visible (31 Mar → 28 Feb, 31 Jan → 31 Dec, 29 Feb → 28 Feb), the
+singular "previous 1 day", and the fallbacks for an unknown or blank mode. The
+second seeds one call set on 2026-09-15 and one on 2026-08-15 and asserts that
+each mode fetched the range it named: `previous` → 14 Sep (empty), `weekday` →
+8 Sep (empty, and NOT the previous day), `month`/`mtd` → 15 Aug (two calls),
+`year` → 15 Sep 2025 (empty). A mode that quietly fell back would read 0 where
+`month` must read 2.
+
+`tests/js/smoke.mjs` asserts the control exists with the five modes, that the
+screen states the baseline from the payload (mode, label and both dates), and —
+by booting a second app with `?compare=year` — that the mode reaches **every**
+report request the dashboard makes. The select's own `change` handler cannot be
+driven in the jsdom harness (the standing React-controlled-input limitation), so
+the URL path is used to drive the same state; the test says so in a comment.
+The screen shows the mode the **server** reported rather than the one requested,
+because if the two ever differ the label has to describe the numbers on screen.
+
+`npm test` = 25 suites green.
+
+**Behaviour change to disclose:** none for an existing caller. `compare` is
+optional, and omitting it (or sending nonsense) still means "the previous period
+of equal length" — the exact behaviour before this phase. The new fields in the
+payload (`comparison.mode`/`label`/`days`) are additions.
+
+---
+
 # CHANGES — Sprint A, phase 7: totals rows, AHT by hour, the interval view, and the sort control
 
 **What this phase is about.** Phase 6 gave the reader the new numbers. This
