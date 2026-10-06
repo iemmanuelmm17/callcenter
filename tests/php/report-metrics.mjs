@@ -1510,6 +1510,71 @@ if (packRes.status === 200) {
 }
 
 
+/* ====== 10b. repeat callers carry the times they called (report §5) */
+
+console.log('\n== repeat callers: the number, and every time they called ==');
+
+/*
+ * Three calls from the same number on 2026-07-20 (a day nothing else owns), on
+ * two different DIDs, one of them missed and newest-last in the fixture so the
+ * sort is actually exercised:
+ *
+ *   r1  09:12  inbound, DID ...0001
+ *   r2  11:05  missed,  DID ...0001
+ *   r3  16:40  inbound, DID ...0002
+ *
+ * The caller must come back with calls 3 / answered 2 / missed 1, the first and
+ * last stamp, and the three times NEWEST FIRST (16:40, 11:05, 09:12) with the
+ * type and the DID of each. A number that called once is not a repeat caller.
+ */
+await harness.seedPbx('phonenumbers', [
+  { phonenumber: '8457620001', description: 'Main line', enabled: 'yes' },
+  { phonenumber: '8457620002', description: 'Support line', enabled: 'yes' },
+  { phonenumber: '8457620003', description: 'Quiet line', enabled: 'yes' }
+]);
+await harness.seedPbx('fetchCdrs', [
+  { id: 'r1', 'call-direction': 1, 'call-start-datetime': '2026-07-20T09:12:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-07-20T09:12:07Z[US/Eastern]', 'call-orig-to-user': '8457620001',
+    'call-orig-caller-id': '8454259810', 'call-term-user': '6080', 'call-talking-duration-seconds': 40 },
+  { id: 'r2', 'call-direction': 1, 'call-start-datetime': '2026-07-20T11:05:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-07-20T11:05:30Z[US/Eastern]', 'call-orig-to-user': '8457620001',
+    'call-orig-caller-id': '8454259810' },
+  { id: 'r3', 'call-direction': 1, 'call-start-datetime': '2026-07-20T16:40:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-07-20T16:40:09Z[US/Eastern]', 'call-orig-to-user': '8457620002',
+    'call-orig-caller-id': '8454259810', 'call-term-user': '6081', 'call-talking-duration-seconds': 25 },
+  /* A different number, once: it must NOT appear in the repeat list. */
+  { id: 'r4', 'call-direction': 1, 'call-start-datetime': '2026-07-20T12:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-07-20T12:00:04Z[US/Eastern]', 'call-orig-to-user': '8457620002',
+    'call-orig-caller-id': '8454259999', 'call-term-user': '6080', 'call-talking-duration-seconds': 10 }
+]);
+
+const repeats = await harness.request('telephone_numbers.php', {
+  body: { start: '2026-07-20', end: '2026-07-20' },
+  user: USERS.office_manager
+});
+check('telephone_numbers.php answers for the repeat day', repeats.status === 200, repeats.log ?? repeats.status);
+if (repeats.status === 200) {
+  const rows = repeats.body.data?.repeatCallers ?? repeats.body.repeatCallers ?? [];
+  const row = rows.find(r => r.caller === '8454259810');
+  check('the repeat caller is in the list with their counts',
+    !!row && row.calls === 3 && row.answered === 2 && row.missed === 1, row);
+  check('a number that called once is not a repeat caller',
+    rows.length === 1 && !rows.some(r => r.caller === '8454259999'), rows.map(r => r.caller));
+  check('the row carries every time they called, newest first',
+    (row?.times ?? []).map(t => t.at).join('|') === '2026-07-20 16:40|2026-07-20 11:05|2026-07-20 09:12',
+    row?.times);
+  check('each time says whether the call was answered or missed',
+    (row?.times ?? []).map(t => t.type).join(',') === 'inbound,missed,inbound',
+    (row?.times ?? []).map(t => t.type));
+  check('each time says which DID they dialled',
+    (row?.times ?? [])[0]?.number === '8457620002' && (row?.times ?? [])[1]?.number === '8457620001',
+    (row?.times ?? []).map(t => t.number));
+  check('the first and last stamps bracket the times',
+    row?.firstCall === '2026-07-20 09:12' && row?.lastCall === '2026-07-20 16:40',
+    [row?.firstCall, row?.lastCall]);
+  check('the row does not claim to be capped when it is not', row?.timesCapped === false, row?.timesCapped);
+}
+
 /* ====== 11b. the miss rate inside each wait band (Sprint B, §3) */
 
 console.log('\n== miss rate per wait band, each with its own base ==');

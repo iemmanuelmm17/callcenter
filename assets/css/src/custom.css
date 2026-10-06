@@ -3506,3 +3506,38 @@ html[data-theme="light"] .grid-totals td {
 
 /* The miss rate per wait band under the wait card (Sprint B, §3). */
 .ops-wait-miss { margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+/* The service-desk block inside the settings dialog (Sprint A). It is a normal
+ * body section now, so it gets body spacing and its own scroll room rather than
+ * competing with the footer buttons. */
+.set-section-note { margin: -4px 0 14px; font-size: 11px; line-height: 1.5; color: var(--color-slate-400); }
+.set-service { display: grid; gap: 12px; margin-bottom: 18px; }
+.set-service > .set-card { margin-bottom: 0; }
+.set-target-row { display: grid; grid-template-columns: minmax(0,1fr) 84px auto auto; align-items: center; gap: 8px; padding: 4px 0; }
+.set-target-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--color-slate-200); }
+.set-roster { display: grid; gap: 6px; overflow-x: auto; }
+.set-roster-head, .set-roster-row { display: grid; grid-template-columns: minmax(150px,1.4fr) auto 84px 84px minmax(80px,1fr) minmax(80px,1fr) 28px; align-items: center; gap: 6px; }
+.set-roster-head { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--color-slate-500); }
+.set-weekdays { display: inline-flex; gap: 2px; }
+.set-weekdays label { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border: 1px solid var(--color-slate-700); border-radius: 3px; font-size: 10px; color: var(--color-slate-500); cursor: pointer; }
+.set-weekdays label.is-on { border-color: var(--color-cyan-500, #06b6d4); color: var(--color-cyan-300, #67e8f9); }
+.set-weekdays input { position: absolute; opacity: 0; width: 0; height: 0; }
+.set-add, .set-remove { background: none; border: 1px solid var(--color-slate-700); border-radius: 4px; color: var(--color-slate-300); cursor: pointer; font-size: 12px; padding: 3px 8px; }
+.set-add:hover, .set-remove:hover { border-color: var(--color-cyan-500, #06b6d4); color: var(--color-cyan-300, #67e8f9); }
+
+/* Repeat callers (Telephone Numbers → Repeats). Each caller is a row with their
+ * number and their call times; the times strip sits under the row so a
+ * supervisor reads "who" and "when" without opening anything. */
+.tn-repeats { border: 1px solid var(--color-slate-700); background: var(--color-slate-900); }
+.tn-repeats-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 8px 10px; font-size: 12px; color: var(--color-slate-200); border-bottom: 1px solid var(--color-slate-800); }
+.tn-repeats-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.tn-repeats-table th { text-align: left; padding: 6px 10px; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--color-slate-500); border-bottom: 1px solid var(--color-slate-800); }
+.tn-repeats-table td { padding: 6px 10px; color: var(--color-slate-300); border-bottom: 1px solid var(--color-slate-800); vertical-align: top; }
+.tn-repeats-row { cursor: pointer; }
+.tn-repeats-row:hover td { background: rgba(148, 163, 184, .06); }
+.tn-repeats-num { font-family: var(--font-mono); color: var(--color-slate-100); }
+.tn-repeats-times { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 0 6px; }
+.tn-repeats-time { font-size: 10px; padding: 1px 6px; border: 1px solid var(--color-slate-700); border-radius: 10px; color: var(--color-slate-300); }
+.tn-repeats-time.is-missed { border-color: var(--color-rose-500, #f43f5e); color: var(--color-rose-300, #fda4af); }
+.tn-repeats-more { background: none; border: 0; padding: 1px 4px; font-size: 10px; color: var(--color-cyan-400, #22d3ee); cursor: pointer; }
+.tn-repeats-more:hover { text-decoration: underline; }

@@ -137,6 +137,36 @@ for (const tab of tabs) {
 check('simultaneous tab called its endpoint', requested.some(r => r.endpoint === 'simultaneous_calls'),
   JSON.stringify(requested.map(r => r.endpoint).slice(-6)));
 
+/*
+ * Repeat callers. The tab used to print "1 repeat caller" and nothing else -
+ * the numbers were in the payload and never rendered, so the one thing the
+ * screen exists for (who keeps calling, and when) was missing. The fixture
+ * caller is 8454259810 with three calls, the newest missed.
+ */
+{
+  const before = errors.length;
+  await goTo('Telephone Numbers');
+  await flush(8);
+  const repeatsTab = byText('.tn-tab', 'Repeat callers');
+  check('the repeats tab exists', !!repeatsTab);
+  if (repeatsTab) await click(repeatsTab);
+  await flush(8);
+  const text = root().textContent;
+  check('the repeats tab shows the caller NUMBER, not just a count',
+    text.includes('8454259810') || text.includes('(845) 425-9810'), text.slice(0, 300));
+  check('the repeats table has a column for when they called',
+    /When/.test(text) && /First call/.test(text) && /Last call/.test(text), text.slice(0, 300));
+  check('every call time the payload carries is on the page',
+    text.includes('2026-08-04 16:40') && text.includes('2026-08-03 11:05') && text.includes('2026-08-02 09:12'),
+    text.slice(0, 400));
+  check('a missed call in the history is marked as missed',
+    /16:40 \u00b7 missed/.test(text), text.slice(0, 400));
+  check('the caller counts are printed', /Calls/.test(text) && /Missed/.test(text), text.slice(0, 200));
+  check('the repeats tab can be opened from the keyboard',
+    !!document.querySelector('.tn-repeats-row[tabindex="0"]'), 'no focusable repeat row');
+  check('the repeats tab threw nothing', errors.length === before, errors.slice(before).join(' | '));
+}
+
 console.log('\n== settings modal ==');
 {
   const before = errors.length;
@@ -174,6 +204,20 @@ console.log('\n== service settings: opening hours, targets, roster ==');
   check('the closed weekend shows as closed',
     root().textContent.includes('closed'), root().textContent.slice(0, 120));
 
+  /*
+   * The layout bug the manager reported: the three service cards were rendered
+   * inside .set-foot-left - one flex row beside "Reset to defaults" - so the
+   * opening-hours inputs were jammed against the Save button and the rest of
+   * the block was unreadable. They belong in the scrolling body.
+   */
+  const scroll = document.querySelector('.set-scroll');
+  const foot = document.querySelector('.set-foot');
+  check('the service cards live in the dialog body, not the footer',
+    !!scroll && !!scroll.querySelector('.set-service') && !foot.querySelector('.set-service'),
+    'inBody=' + !!scroll?.querySelector('.set-service') + ' inFooter=' + !!foot?.querySelector('.set-service'));
+  check('the body stacks all three service cards',
+    scroll.querySelectorAll('.set-service > .set-card').length === 3,
+    scroll.querySelectorAll('.set-service > .set-card').length);
   check('the per-queue target rows come from the queue list',
     document.querySelectorAll('.set-target-row').length >= 1,
     document.querySelectorAll('.set-target-row').length);
@@ -551,6 +595,15 @@ console.log('\n== call modal (dashboard KPI drill-down) ==');
   check('calls endpoint requested by the modal', requested.some(r => r.endpoint === 'calls'),
     JSON.stringify(requested.map(r => r.endpoint).slice(-5)));
   check('call modal rendered', !!document.querySelector('.call-modal'), root().textContent.slice(-160));
+  /*
+   * Bug #4: the loader asked for a URL that did not exist and every drill-down
+   * shouted "Unable to load the call table." Whatever the table is, the
+   * error state must not be what a manager sees here.
+   */
+  check('the call table loaded instead of the load error',
+    !/Unable to load the call table/.test(root().textContent)
+      && !/Unable to load the call details/.test(root().textContent),
+    root().textContent.slice(-200));
   const closable = document.querySelector('.call-modal .ap-cols-btn') || containing('.call-modal button', 'Close') || containing('.call-modal button', '×');
   if (closable) await click(closable);
 }

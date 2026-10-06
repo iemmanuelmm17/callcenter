@@ -687,7 +687,32 @@ function buildRepeatCallers(array $cdrs, array $inventoryKeys = []): array
                 'answered' => 0,
                 'missed' => 0,
                 'dids' => [],
+                /* When each call came in, newest first. Capped so one abusive
+                 * number cannot put ten thousand timestamps in the payload; the
+                 * cap is published beside it as `timesCapped`. */
+                'times' => [],
+                'firstCall' => '',
+                'lastCall' => '',
             ];
+        }
+
+        $stamp = callStartStamp($call);
+        if ($stamp !== '') {
+            if (count($callers[$caller]['times']) < 50) {
+                $callers[$caller]['times'][] = [
+                    'at' => $stamp,
+                    'type' => $type === 'missed' ? 'missed' : 'inbound',
+                    'number' => $did,
+                ];
+            } else {
+                $callers[$caller]['timesCapped'] = true;
+            }
+            if ($callers[$caller]['firstCall'] === '' || $stamp < $callers[$caller]['firstCall']) {
+                $callers[$caller]['firstCall'] = $stamp;
+            }
+            if ($stamp > $callers[$caller]['lastCall']) {
+                $callers[$caller]['lastCall'] = $stamp;
+            }
         }
 
         $callers[$caller]['calls']++;
@@ -728,6 +753,14 @@ function buildRepeatCallers(array $cdrs, array $inventoryKeys = []): array
             return $b['calls'] <=> $a['calls'];
         });
         $row['dids'] = $dids;
+        /* Newest call first: the list answers "when did they call", and the most
+         * recent call is the one a supervisor acts on. */
+        $times = $row['times'];
+        usort($times, static function ($a, $b) {
+            return strcmp((string)$b['at'], (string)$a['at']);
+        });
+        $row['times'] = $times;
+        $row['timesCapped'] = !empty($row['timesCapped']);
         $out[] = $row;
     }
 

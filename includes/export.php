@@ -47,6 +47,11 @@ function wantsCsvExport(array $requested): bool
  */
 function csvBegin(string $filename): void
 {
+    /* Same guard as jsonResponse(): a warning printed before the export would
+     * otherwise land inside the CSV, in the middle of a customer's data. */
+    if (function_exists('discardBufferedOutput')) {
+        discardBufferedOutput();
+    }
     $safe = preg_replace('/[^A-Za-z0-9._-]+/', '-', $filename) ?? 'export.csv';
     $safe = trim($safe, '-');
     if ($safe === '' || !str_ends_with(strtolower($safe), '.csv')) {

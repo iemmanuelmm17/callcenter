@@ -207,6 +207,30 @@ function callLocalDate(array $call): string
     return $dt instanceof DateTimeImmutable ? $dt->format('Y-m-d') : '';
 }
 
+/**
+ * The moment a call started, as the screen should print it: "2026-08-19 09:04"
+ * in US/Eastern, or '' when the row carries no usable timestamp.
+ *
+ * The repeat-caller list needs it per call ("show me the number and the times
+ * they called"), and a repeated spelling of the same parse in three places is
+ * how two screens start disagreeing about which day a call belongs to.
+ */
+function callStartStamp(array $call): string {
+    $raw = trim((string)(
+        $call['startedAt']
+        ?? $call['call-start-datetime']
+        ?? $call['call-batch-start-datetime']
+        ?? ''
+    ));
+
+    if ($raw === '') {
+        return '';
+    }
+
+    $dt = parseEasternDateTime($raw);
+    return $dt instanceof DateTimeImmutable ? $dt->format('Y-m-d H:i') : '';
+}
+
 function filterCallsByLocalDate(array $calls, string $start, string $end): array
 {
     if ($start === '' || $end === '') {

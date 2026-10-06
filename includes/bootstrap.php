@@ -35,12 +35,44 @@ function appLog(string $message, ?Throwable $e = null): void {
     );
 }
 
+/**
+ * Every JSON answer leaves through here.
+ *
+ * `discardBufferedOutput()` first: a PHP notice or warning that printed before
+ * the payload (an undefined key on one tenant's data, a deprecation the host's
+ * php.ini surfaces) turns a perfectly good response into "Server returned
+ * invalid JSON" in the browser, because the body is no longer JSON. The
+ * endpoints never write output of their own before answering, so anything
+ * sitting in the buffer at this point is a diagnostic - it is dropped from the
+ * RESPONSE and left to the error log, where it belongs.
+ */
 function jsonResponse(array $data, int $status = 200): never {
+    discardBufferedOutput();
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-store');
     echo json_encode($data, JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
+}
+
+/**
+ * Throw away anything a diagnostic wrote before the real response.
+ *
+ * Returns the discarded text so a caller can log it; the CSV path uses that to
+ * keep a warning out of the file while still recording it.
+ */
+function discardBufferedOutput(): string {
+    $discarded = '';
+    while (ob_get_level() > 0) {
+        $chunk = (string)ob_get_clean();
+        if ($chunk !== '') {
+            $discarded = $chunk . $discarded;
+        }
+    }
+    if ($discarded !== '') {
+        appLog('discarded stray output before the response: ' . substr(trim($discarded), 0, 500));
+    }
+    return $discarded;
 }
 
 function requireMethod(string $method): void {

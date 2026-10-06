@@ -8,7 +8,7 @@ import { SimultaneousCallsPanel } from './simultaneous.js';
 import { ErrorState, Tooltip, skel, skelPanel } from './ui.js';
 import { api, apiDownload } from '../lib/api.js';
 import { fmt, fmtNum, fmtPct, formatPhoneNumber } from '../lib/format.js';
-import { h, useEffect, useMemo, useRef, useState } from '../lib/react.js';
+import { h, keyActivate, useEffect, useMemo, useRef, useState } from '../lib/react.js';
 import { countBy, sumBy } from '../lib/totals.js';
 
 function telephoneDestinationType(application) {
@@ -672,6 +672,109 @@ function TelephoneNumbersGraphs({charts, numbers, onNumberClick}) {
   );
 }
 
+/*
+ * Repeat callers (the honest first-contact-resolution proxy).
+ *
+ * The tab used to print a COUNT and nothing else — the rows were fetched and
+ * then never rendered, so a supervisor could see "3 repeat callers" and not who
+ * they were. Each caller is now a row with the number, what they did, and the
+ * times they called; the times expand for the long ones and the tail is
+ * summarised rather than dropped.
+ *
+ * A caller who called twice with both calls missed is the one to ring back, so
+ * the missed count is coloured and the DIDs they used are listed.
+ */
+const REPEAT_TIMES_SHOWN = 6;
+
+function RepeatCallers({callers, onCallClick}) {
+  const [open, setOpen] = useState('');
+  if (!callers.length) {
+    return h('div', {className:'border border-slate-700 bg-slate-900 p-3 text-xs text-slate-400'},
+      'No repeat callers in this range. A repeat caller is the same number calling in twice or more.');
+  }
+  return h('div', {className:'tn-repeats'},
+    h('div', {className:'tn-repeats-head'},
+      h('span', null, callers.length + (callers.length === 1 ? ' caller called' : ' callers called') + ' more than once'),
+      h('span', {className:'tn-faint'}, 'Newest call first. Click a row for every time they called.')),
+    h('table', {className:'tn-repeats-table'},
+      h('thead', null, h('tr', null,
+        h('th', null, 'Number'),
+        h('th', {className:'text-right'}, 'Calls'),
+        h('th', {className:'text-right'}, 'Answered'),
+        h('th', {className:'text-right'}, 'Missed'),
+        h('th', null, 'First call'),
+        h('th', null, 'Last call'),
+        h('th', null, 'Numbers they dialled'),
+        h('th', null, 'When')
+      )),
+      h('tbody', null, ...callers.map((row, index) => {
+        const key = String(row.caller || index);
+        const times = Array.isArray(row.times) ? row.times : [];
+        const shown = open === key ? times : times.slice(0, REPEAT_TIMES_SHOWN);
+        const hidden = times.length - shown.length;
+        const missed = Number(row.missed || 0);
+        const dids = Array.isArray(row.dids) ? row.dids : [];
+        return [
+          h('tr', {
+            key,
+            tabIndex: 0,
+            title: open === key ? 'Hide the call times' : 'Show every time this number called',
+            className: 'tn-repeats-row cursor-pointer' + (open === key ? ' is-open' : ''),
+            onClick: () => setOpen(open === key ? '' : key),
+            onKeyDown: keyActivate(() => setOpen(open === key ? '' : key))
+          },
+            h('td', null,
+              h('span', {className:'tn-repeats-num'}, formatPhoneNumber(row.caller) || row.caller)),
+            h('td', {className:'text-right tabular-nums'}, fmtNum(row.calls)),
+            h('td', {className:'text-right tabular-nums'}, fmtNum(row.answered)),
+            h('td', {className:'text-right tabular-nums ' + (missed > 0 ? 'text-rose-400 font-bold' : 'tn-faint')}, fmtNum(missed)),
+            h('td', {className:'tn-faint'}, row.firstCall || '—'),
+            h('td', null, row.lastCall || '—'),
+            h('td', {className:'tn-faint'}, dids.length
+              ? dids.slice(0, 2).map(d => formatPhoneNumber(d.number) || d.number).join(', ')
+                + (dids.length > 2 ? ' +' + (dids.length - 2) : '')
+              : '—'),
+            h('td', {className:'tn-faint'},
+              times.length
+                ? (open === key ? 'hide times' : times.length + (times.length === 1 ? ' time' : ' times'))
+                : '—')
+          ),
+          h('tr', {key: key + '-times', className:'tn-repeats-times-row'},
+            h('td', {colSpan: 8},
+              h('div', {className:'tn-repeats-times'},
+                ...shown.map((t, i) => h('span', {
+                  key: String(t.at) + i,
+                  className: 'tn-repeats-time' + (t.type === 'missed' ? ' is-missed' : ''),
+                  title: (t.type === 'missed' ? 'Missed' : 'Answered') + ' call' + (t.number ? ' to ' + t.number : '')
+                }, t.at + (t.type === 'missed' ? ' · missed' : ''))),
+                hidden > 0
+                  ? h('button', {
+                      key: 'more',
+                      type: 'button',
+                      className: 'tn-repeats-more',
+                      onClick: e => { e.stopPropagation(); setOpen(key); }
+                    }, '+' + hidden + ' more')
+                  : null,
+                row.timesCapped
+                  ? h('span', {key: 'cap', className: 'tn-faint'}, '(showing the 50 most recent)')
+                  : null,
+                h('button', {
+                  key: 'open',
+                  type: 'button',
+                  className: 'tn-repeats-more',
+                  onClick: e => {
+                    e.stopPropagation();
+                    if (onCallClick) onCallClick({ callerNumber: row.caller, metric: 'total' });
+                  }
+                }, 'Open every call →')
+              ))
+          )
+        ];
+      }))
+    )
+  );
+}
+
 function TelephoneNumbers({filters, onCallClick}) {
   const [numbers, setNumbers] = useState([]);
   const [summary, setSummary] = useState({totalNumbers:0, enabledNumbers:0, totalCalls:0, totalMissed:0, totalTalkSeconds:0});
@@ -812,9 +915,7 @@ function TelephoneNumbers({filters, onCallClick}) {
       : tnView === 'simultaneous'
       ? h(SimultaneousCallsPanel, { filters, onCallClick })
       : tnView === 'repeats'
-      ? h('div', {className:'border border-slate-700 bg-slate-900 p-3 text-xs text-slate-400'},
-          (repeatCallers.length ? repeatCallers.length + ' repeat callers' : 'No repeat callers in this range.')
-        )
+      ? h(RepeatCallers, {callers: repeatCallers, onCallClick})
       : h('div', null,
           h('div', {className:'tn-toolbar'},
             h('input', {

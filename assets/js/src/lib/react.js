@@ -20,17 +20,30 @@ const keyActivate = handler => event => {
  * QA-3: Tabulator is vendored (tools/vendor.mjs) and served from this origin.
  * portal.php renders the integrity hashes into #vendor-manifest so a lazily
  * injected script is checked the same way a <script> tag would be.
+ *
+ * The PATHS come out of that same manifest. They used to be built here by hand
+ * ('assets/vendor/tabulator/' + 'js/tabulator.min.js'), and when the vendored
+ * layout flattened to 'assets/vendor/tabulator/tabulator.min.js' the browser
+ * requested a file that does not exist: the script 404'd, the loader rejected,
+ * and every call modal said "Unable to load the call table." The manifest
+ * already publishes both the path and the hash, so there is now one place a
+ * path can be wrong and it is the file that generated itself.
  */
-const TABULATOR_BASE = 'assets/vendor/tabulator/';
+const VENDOR_FALLBACK = {
+    tabulatorJs: { src: 'assets/vendor/tabulator/tabulator.min.js' },
+    tabulatorCss: { href: 'assets/vendor/tabulator/tabulator_midnight.min.css' }
+};
 
-const vendorIntegrity = key => {
+const vendorEntry = key => {
+    const fallback = VENDOR_FALLBACK[key] || {};
     try {
       const node = document.getElementById('vendor-manifest');
-      if (!node) return '';
+      if (!node) return fallback;
       const parsed = JSON.parse(node.textContent || '{}');
-      return (parsed && parsed[key] && parsed[key].integrity) || '';
+      const entry = parsed && parsed[key];
+      return entry && typeof entry === 'object' ? entry : fallback;
     } catch (e) {
-      return '';
+      return fallback;
     }
   };
 
@@ -47,18 +60,18 @@ const ensureTabulator = () => {
         if (window.Tabulator) resolve(window.Tabulator);
         else reject(new Error('Tabulator did not initialise'));
       };
+      const cssEntry = vendorEntry('tabulatorCss');
       const css = document.createElement('link');
       css.rel = 'stylesheet';
-      css.href = TABULATOR_BASE + 'tabulator_midnight.min.css';
-      const cssIntegrity = vendorIntegrity('tabulatorCss');
-      if (cssIntegrity) css.integrity = cssIntegrity;
+      css.href = cssEntry.href || VENDOR_FALLBACK.tabulatorCss.href;
+      if (cssEntry.integrity) css.integrity = cssEntry.integrity;
       /* A missing stylesheet must not block the table itself. */
       css.onload = css.onerror = () => { cssReady = true; settle(); };
       document.head.appendChild(css);
+      const jsEntry = vendorEntry('tabulatorJs');
       const script = document.createElement('script');
-      const jsIntegrity = vendorIntegrity('tabulatorJs');
-      if (jsIntegrity) script.integrity = jsIntegrity;
-      script.src = TABULATOR_BASE + 'js/tabulator.min.js';
+      if (jsEntry.integrity) script.integrity = jsEntry.integrity;
+      script.src = jsEntry.src || VENDOR_FALLBACK.tabulatorJs.src;
       script.onload = () => { jsReady = true; settle(); };
       script.onerror = () => reject(new Error('Tabulator failed to load'));
       document.head.appendChild(script);

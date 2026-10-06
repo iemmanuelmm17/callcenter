@@ -1,3 +1,97 @@
+# CHANGES — production hotfix: the four failures reported from the live app
+
+**What this phase is about.** Four things broke in the deployed app, and each
+one had a different cause — a PHP warning that corrupted a JSON body, a vendor
+URL built by hand, a settings block rendered inside the footer, and a fetched
+payload that was never drawn. This phase fixes all four, and adds the checks that
+would have caught them.
+
+## 1. Queues — "Server returned invalid JSON" on both tabs
+
+`api/queue.php` closed over `$cdrIdBag` in a `use (...)` list, but `$cdrIdBag`
+is the name of a *function* in the file, not a variable in the request scope.
+A function name in a `use` list is an undefined-variable **warning on every
+request**, and where the host has `display_errors` on that text is printed
+before the JSON — so the client's `JSON.parse` failed on the queue route and
+both tabs died. The name is gone from the closure.
+
+It is not enough to fix one warning, so the class of failure is now closed off
+three ways:
+
+- `jsonResponse()` calls a new `discardBufferedOutput()`, which drains every
+  `ob_*` level and logs whatever it threw away via `appLog`. Stray output can no
+  longer land in a JSON body; `csvBegin()` does the same before a CSV.
+- `api/logout.php` guards its destroy with `session_status() ===
+  PHP_SESSION_ACTIVE` (it warned "Trying to destroy uninitialized session" when
+  no session existed).
+- **The test harness no longer hides warnings.** `tests/php/php.mjs` ran every
+  request with `error_reporting(E_ALL & ~E_WARNING & ~E_NOTICE)`, which is why
+  25 green suites shipped this. A new `CALLCENTER_STRICT_PHP=1` mode runs with
+  `E_ALL` and fails a request whose output contains a PHP diagnostic
+  (`Warning|Notice|Deprecated|Fatal error|Parse error|Strict Standards` —
+  diagnostics only: CSV and audio endpoints legitimately write to `php://output`).
+  All nine PHP suites now run strict inside `npm test`, and are clean.
+
+## 2. Settings — "it only shows the timeframe for business hour"
+
+The three service cards (opening hours, per-queue targets, roster) were rendered
+as children of `.set-foot-left`, the footer flex row next to "Reset to
+defaults" — three cards squashed into a strip beside two buttons, which is
+exactly what the manager saw. They now sit in `.set-scroll` as a labelled
+section ("Service desk · hours, targets, roster") ahead of Appearance, and the
+footer keeps only Reset and the scope note. New CSS: `.set-section-note`,
+`.set-service`, `.set-target-row`, `.set-roster*`, `.set-weekdays`, `.set-add`,
+`.set-remove`.
+
+A smoke check now asserts the cards are in the dialog **body** and that the
+footer contains none of them, so the layout cannot regress silently.
+
+## 3. Repeat callers — "doesn't show the repeat callers number"
+
+The Repeats tab rendered the string `"N repeat callers"` and nothing else: the
+rows were fetched, held in state, and then dropped on the floor, so the one
+thing the screen exists for — *who* keeps calling and *when* — was missing.
+
+`api/telephone_numbers.php`'s `buildRepeatCallers()` now emits per caller:
+`times[{at, type, number}]` (newest first, capped at 50 with `timesCapped`
+set when the cap bites), plus `firstCall` and `lastCall` (Eastern `Y-m-d H:i`,
+via a new `callStartStamp()` in `includes/reporting/support.php`).
+
+The tab draws a table: the **number** (formatted), calls / answered / missed
+(missed coloured when non-zero), first and last call, the DIDs dialled, and the
+times as chips — the newest six inline with a `+N more` control, each chip
+marked `missed` when it was, and a button into the call list for that number.
+Rows are `tabIndex=0` with `onKeyDown`, so they open from the keyboard.
+
+`tests/php/report-metrics.mjs` §10b seeds three calls from one number on
+2026-07-20 plus a single-call number, and asserts the counts (3/2/1), the
+newest-first order, the per-time type and DID, the first/last bracket, that the
+single-call number is excluded, and that `timesCapped` stays false.
+
+## 4. Call modal — "Unable to load the call table."
+
+`assets/js/src/lib/react.js` built the Tabulator URL by hand — `TABULATOR_BASE +
+'js/tabulator.min.js'` — but the vendored file ships **flat**
+(`assets/vendor/tabulator/tabulator.min.js`), so the request 404'd and every
+drill-down showed the error state. The loader now reads `src`, `href` and the
+two `integrity` hashes from the `#vendor-manifest` embedded in the page
+(VENDOR.json's `lazy` block) with a `VENDOR_FALLBACK` that must equal it, and a
+new `tests/js/vendor-paths.mjs` (registered in `tests/run.mjs`) asserts the
+manifest targets exist on disk, the fallbacks match the manifest, no URL is
+hand-built, and SRI is still applied.
+
+## Verification
+
+- `npm test` — **26 suites** (was 25; `vendor paths` added), all PHP suites in
+  strict mode, all green.
+- New: §10b (8 checks) in `report-metrics.mjs`; `vendor-paths.mjs`; the repeats
+  block (9 checks) and the settings-layout checks (3) in `smoke.mjs`; the call
+  modal now asserts it did **not** fall into the load-error state.
+- `dead-code.mjs --strict`, `ui-audit.mjs --strict`, `css-coverage.mjs`,
+  `module-budget.mjs`, `vendor.mjs --check`, `no-cdn`, `prod-build` — all clean.
+- Built assets re-hashed and committed: `assets/js/app.c793c61838.js`,
+  `assets/css/app.6c93ca1f77.css`.
+
 # CHANGES — Sprint B, phase 9: the miss rate inside each wait band
 
 **What this phase is about.** Sprint A split abandons by how long the caller
