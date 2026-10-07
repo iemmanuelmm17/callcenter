@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1312 names.
+ * 1314 names.
  */
 return [
     'aa',
@@ -663,6 +663,7 @@ return [
     'mb-5',
     'mc',
     'memory',
+    'memory_get_peak_usage',
     'memory_limit',
     'message',
     'metric',
@@ -1288,6 +1289,7 @@ return [
     'unanswered',
     'unavailable',
     'undefined',
+    'unknown',
     'unlimited',
     'unreturned',
     'up',
