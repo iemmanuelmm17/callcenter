@@ -9,6 +9,7 @@ declare(strict_types=1);
  *   php tools/cdr-cache.php import <domain> <first-day> [last-day] [--delete-json]
  *   php tools/cdr-cache.php prune  <domain> <before-day> [--vacuum]
  *   php tools/cdr-cache.php verify <domain> [limit]
+ *   php tools/cdr-cache.php promote [limit]
  *
  * Only the operator runs this. It is not part of the web application and is not
  * deployed; it is here because moving a live cache between backends (JSON day
@@ -281,6 +282,41 @@ switch ($command) {
         if ($vacuumAfter || $removed['days'] > 0) {
             cliOut(cdrStoreVacuum() ? 'vacuum done' : 'vacuum failed (see logs/app-*.log)');
         }
+        break;
+
+    /*
+     * Convert v1 day files (one JSON document each) to v2 (a header line plus
+     * one record per line). Reads inside the app already promote a day on the
+     * way past, so this is for doing it deliberately - after an upgrade, in
+     * one pass, without a user waiting for a request that touches 90 days.
+     * One day at a time: the peak is the largest day, not the cache.
+     */
+    case 'promote':
+        $limit = (int)($args[1] ?? 0);
+        $converted = 0;
+        $already = 0;
+        $failed = 0;
+        $skipped = 0;
+        foreach (cliDayCacheFiles() as $entry) {
+            if ($limit > 0 && $converted + $already + $skipped >= $limit) {
+                break;
+            }
+            if (cdrDayCacheReadHeader($entry['file']) !== null) {
+                $already++;
+                continue;
+            }
+            $cached = readCdrDayCache($entry['file']);
+            if (!is_array($cached)) {
+                $skipped++;
+                continue;
+            }
+            if (cdrDayCacheReadHeader($entry['file']) !== null) {
+                $converted++;
+                continue;
+            }
+            $failed++;
+        }
+        cliOut(sprintf('promoted %d day file(s); %d already in the new format, %d unreadable, %d failed', $converted, $already, $skipped, $failed));
         break;
 
     case 'verify':

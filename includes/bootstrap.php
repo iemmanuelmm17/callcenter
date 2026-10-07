@@ -56,7 +56,20 @@ function installApiFatalHandler(): void
         }
         $detail = (string)($error['message'] ?? '');
         $isMemory = stripos($detail, 'memory') !== false && stripos($detail, 'exhausted') !== false;
-        appLog('FATAL ' . $detail . ' in ' . (string)($error['file'] ?? '') . ':' . (int)($error['line'] ?? 0));
+        /* The numbers that were missing the first time this happened in
+         * production: how much the process was actually using when it died,
+         * what the limit is, and where it died. memory_get_peak_usage() still
+         * answers during shutdown on a real PHP. */
+        $peak = function_exists('memory_get_peak_usage') ? (int)memory_get_peak_usage(true) : 0;
+        $limit = (string)ini_get('memory_limit');
+        $where = (string)($error['file'] ?? '') . ':' . (int)($error['line'] ?? 0);
+        appLog(sprintf(
+            'FATAL %s in %s (peak %s, memory_limit %s)',
+            $detail,
+            $where,
+            $peak > 0 ? round($peak / 1048576) . ' MB' : 'unknown',
+            $limit !== '' ? $limit : 'unknown'
+        ));
         if (headers_sent()) {
             return;
         }
@@ -66,7 +79,12 @@ function installApiFatalHandler(): void
         header('Cache-Control: no-store');
         echo json_encode([
             'error' => $isMemory
-                ? 'This report needs more memory than this server allows (PHP memory_limit). Narrow the range, or raise memory_limit in php.ini. The size that failed is in logs/app-*.log.'
+                ? sprintf(
+                    'This report needs more memory than this server allows: the process reached %s of a %s limit (at %s). Narrow the range, raise memory_limit in php.ini, or run php tools/cdr-memory.php to see what fits. The full detail is in logs/app-*.log.',
+                    $peak > 0 ? round($peak / 1048576) . ' MB' : 'the limit',
+                    $limit !== '' ? $limit : 'server',
+                    basename((string)($error['file'] ?? 'unknown'))
+                )
                 : 'The report stopped before it could finish. The detail is in logs/app-*.log.',
             'code' => $isMemory ? 'out_of_memory' : 'fatal',
         ], JSON_INVALID_UTF8_SUBSTITUTE);

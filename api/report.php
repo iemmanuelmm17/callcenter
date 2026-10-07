@@ -325,6 +325,16 @@ if (
             $queueIds,
             $settings
         );
+
+        /*
+         * Release the comparison range here, not at the end of the script: it
+         * is a second full period of raw calls, and the baseline pass at the
+         * bottom of this file loads a third. Without this the peak of a
+         * month-vs-month pack with a baseline was three ranges at once - the
+         * production out-of-memory (cache.php:299) was measured while the
+         * report was assembling its payload with all three still alive.
+         */
+        unset($previousCalls);
     }
 
     /*
@@ -544,7 +554,16 @@ $current['topAgents'] = $topAgents;
             $baselineEnd
         );
         $packRows['baseline'] = packBaseline($calls, $baselineCalls, $baselineStart, $baselineEnd);
+        unset($baselineCalls);
     }
+
+    /*
+     * Everything the payload carries is derived data from here on, so the raw
+     * rows can go before the response is encoded: json_encode() builds the
+     * whole body as a string, and holding the rows through that is another
+     * full copy of the period at the peak.
+     */
+    unset($calls);
 
     /*
      * Audit and return.

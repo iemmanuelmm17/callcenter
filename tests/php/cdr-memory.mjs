@@ -308,6 +308,194 @@ echo json_encode($out);
   check('summary() and agentPerformance() are byte-identical after a trim', out.metricsSame);
 }
 
+console.log('\n== a day is stored and read as lines, not as one document ==');
+{
+  /*
+   * The production fatal was the merge loop, but what filled the memory was
+   * HOW a day arrived: a 20,000-record day as a single JSON document is a
+   * ~35 MB string handed to json_decode, and the metadata calls decoded the
+   * same file again three more times per request. Days are JSONL now.
+   */
+  await harness.write('includes/config.local.php', `<?php
+declare(strict_types=1);
+define('PBX_SERVERS', ['nms1' => 'https://pbx.example']);
+define('REPORTING_MEMORY_HEADROOM_BYTES', 1073741824);
+`);
+  const raw = await harness.script(`<?php
+require_once TEST_TMP . '/includes/reporting.php';
+$file = cdrDayCacheFile('test.example', '2026-09-10');
+$rows = [];
+for ($i = 0; $i < 5; $i++) {
+    $rows[] = ['id' => 'v2-' . $i, 'call-direction' => 1, 'call-start-datetime' => '2026-09-10T14:0' . $i . ':00Z', 'call-term-user' => '6080'];
+}
+writeCdrDayCache($file, $rows, true, 5);
+$text = (string)file_get_contents($file);
+$lines = array_values(array_filter(explode("\n", $text), static fn($l) => $l !== ''));
+$head = json_decode($lines[0] ?? '', true);
+$out = [
+    'firstLineIsHeader' => is_array($head) && ($head['v'] ?? 0) === 2,
+    'headerRecords' => $head['records'] ?? null,
+    'headerComplete' => $head['complete'] ?? null,
+    'headerOffset' => $head['nextOffset'] ?? null,
+    'recordLines' => count($lines) - 1,
+    'oneRecordPerLine' => true,
+];
+foreach (array_slice($lines, 1) as $line) {
+    $row = json_decode($line, true);
+    if (!is_array($row) || !isset($row['id'])) { $out['oneRecordPerLine'] = false; }
+}
+/* The reader must give back exactly what was written. */
+$read = readCdrDayCache($file);
+$out['readRecords'] = count($read['records'] ?? []);
+$out['readComplete'] = $read['complete'] ?? null;
+$out['readFormat'] = $read['format'] ?? null;
+$out['readFetchedAt'] = ($read['fetchedAt'] ?? 0) > 0;
+
+/*
+ * The metadata reader must answer from the header ALONE. Prove it by
+ * corrupting the record lines: a reader that decodes the body would fail or
+ * come back empty, a header reader cannot notice.
+ */
+$broken = $file . '.broken';
+$body = explode("\n", $text);
+file_put_contents($broken, $body[0] . "\n{ not json at all\n{{{\n");
+$out['headOnBrokenBody'] = cdrDayCacheReadHeader($broken);
+$legacyName = cdrDayCacheFile('test.example', '2026-09-10');
+file_put_contents($legacyName, $text);
+$out['metaFromHeader'] = cdrDayCacheMeta('test.example', '2026-09-10');
+@unlink($broken);
+echo json_encode($out);
+`);
+  const out = asJson(raw, 'day format') || {};
+  check('a day file starts with a versioned header line', out.firstLineIsHeader === true, out.head);
+  check('the header carries the count, completeness and resume offset',
+    out.headerRecords === 5 && out.headerComplete === true && out.headerOffset === 5,
+    { records: out.headerRecords, complete: out.headerComplete, offset: out.headerOffset });
+  check('one record per line, each a JSON object', out.recordLines === 5 && out.oneRecordPerLine === true, out.recordLines);
+  check('reading the day gives back every record', out.readRecords === 5 && out.readComplete === true, out);
+  check('the reader reports the format and the fetch time', out.readFormat === 2 && out.readFetchedAt === true, out);
+  check('metadata is answered from the header, without decoding a record',
+    out.headOnBrokenBody && (out.headOnBrokenBody.records ?? 0) === 5,
+    out.headOnBrokenBody);
+  check('the metadata call agrees with the header',
+    (out.metaFromHeader?.records ?? 0) === 5 && out.metaFromHeader?.complete === true,
+    out.metaFromHeader);
+}
+
+console.log('\n== a legacy cache is read, and promoted to the new format ==');
+{
+  /* Every day file on the deployed server is v1 today, so the first request
+   * after this change has to read them - and leave them streamable. */
+  const legacy = JSON.stringify({
+    complete: true,
+    nextOffset: 3,
+    records: [
+      { id: 'v1-a', 'call-direction': 1, 'call-start-datetime': '2026-09-11T10:00:00Z', 'call-term-user': '6080', 'call-vendor-junk': '' },
+      { id: 'v1-b', 'call-direction': 1, 'call-start-datetime': '2026-09-11T11:00:00Z', 'call-term-user': '6080' },
+      { id: 'v1-c', 'call-direction': 1, 'call-start-datetime': '2026-09-11T12:00:00Z', 'call-term-user': '6080' }
+    ]
+  });
+  await harness.write('cache/cdr-day-v1-probe.json', legacy);
+  const raw = await harness.script(`<?php
+require_once TEST_TMP . '/includes/reporting.php';
+/* Point the day at the legacy file this test controls: cdrDayCacheFile() is
+ * deterministic, so write the legacy document to that exact path. */
+$file = cdrDayCacheFile('test.example', '2026-09-11');
+copy(TEST_TMP . '/cache/cdr-day-v1-probe.json', $file);
+$before = (string)file_get_contents($file);
+$read = readCdrDayCache($file);
+$after = (string)file_get_contents($file);
+$lines = array_values(array_filter(explode("\n", $after), static fn($l) => $l !== ''));
+$head = json_decode($lines[0] ?? '', true);
+echo json_encode([
+  'records' => count($read['records'] ?? []),
+  'complete' => $read['complete'] ?? null,
+  'offset' => $read['nextOffset'] ?? null,
+  'wasLegacy' => str_starts_with(ltrim($before), '{"complete"') && !str_contains($before, "\n"),
+  'nowV2' => is_array($head) && ($head['v'] ?? 0) === 2 && count($lines) === 4,
+  'trimmed' => !isset($read['records'][0]['call-vendor-junk']),
+  'meta' => cdrDayCacheMeta('test.example', '2026-09-11'),
+]);
+`);
+  const out = asJson(raw, 'legacy') || {};
+  check('a v1 day file still reads completely', out.records === 3 && out.complete === true && out.offset === 3, out);
+  check('the fixture really was the legacy shape', out.wasLegacy === true, out.wasLegacy);
+  check('reading it rewrote it as the line format', out.nowV2 === true, out.nowV2);
+  check('the promotion keeps the trim', out.trimmed === true, out.trimmed);
+  check('metadata on the promoted day comes from the header',
+    (out.meta?.records ?? 0) === 3 && out.meta?.complete === true, out.meta);
+}
+
+console.log('\n== the CLI can promote the whole cache ==');
+{
+  /* Lazy promotion happens on the way past a read; the operator may prefer one
+   * deliberate pass after an upgrade, with nobody waiting. */
+  const CLI = readFileSync(path.join(ROOT, 'tools/cdr-cache.php'), 'utf8');
+  await harness.write('tools/cdr-cache.php', CLI);
+  const legacy = JSON.stringify({
+    complete: true,
+    nextOffset: 2,
+    records: [
+      { id: 'cli-a', 'call-direction': 1, 'call-start-datetime': '2026-09-12T10:00:00Z', 'call-term-user': '6080' },
+      { id: 'cli-b', 'call-direction': 1, 'call-start-datetime': '2026-09-12T11:00:00Z', 'call-term-user': '6080' }
+    ]
+  });
+  await harness.write('cache/cdr-day-cli-v1.json', legacy);
+  /* One legacy file, one already in the new format, so the command has to tell
+   * them apart and leave the second alone. The CLI writes to STDOUT (not to the
+   * output buffer), which is what the harness collects. */
+  await harness.script(`<?php
+require_once TEST_TMP . '/includes/reporting.php';
+$legacy = cdrDayCacheFile('test.example', '2026-09-12');
+copy(TEST_TMP . '/cache/cdr-day-cli-v1.json', $legacy);
+writeCdrDayCache(cdrDayCacheFile('test.example', '2026-09-13'), [['id' => 'v2-a', 'call-direction' => 1]], true, 1);
+$_SERVER['argv'] = ['cdr-cache.php', 'promote'];
+$_SERVER['argc'] = 2;
+require TEST_TMP . '/tools/cdr-cache.php';
+`);
+  const cliText = String(await harness.script(`<?php
+/* The CLI ran in the previous pass; report what the cache looks like now. */
+require_once TEST_TMP . '/includes/reporting.php';
+$head = cdrDayCacheReadHeader(cdrDayCacheFile('test.example', '2026-09-12'));
+echo json_encode([
+    'promotedToV2' => is_array($head) && ($head['v'] ?? 0) === 2,
+    'headerRecords' => $head['records'] ?? null,
+    'stillReads' => count(readCdrDayCache(cdrDayCacheFile('test.example', '2026-09-12'))['records'] ?? []),
+    'secondUntouched' => (cdrDayCacheReadHeader(cdrDayCacheFile('test.example', '2026-09-13'))['records'] ?? 0) === 1,
+]);
+`));
+  const out = asJson(cliText, 'promote cli') || {};
+  check('the legacy file is now v2', out.promotedToV2 === true && out.headerRecords === 2, out);
+  check('and it still reads back completely', out.stillReads === 2, out.stillReads);
+  check('a day already in the new format is left alone', out.secondUntouched === true, out);
+}
+
+console.log('\n== a request reads each day once ==');
+{
+  const cacheSource = readFileSync(path.join(ROOT, 'includes/reporting/cache.php'), 'utf8');
+  /* The body of loadRawCdrs alone: from its declaration to reportingDateList. */
+  const loader = cacheSource.slice(
+    cacheSource.indexOf('function loadRawCdrs'),
+    cacheSource.indexOf('function reportingDateList')
+  );
+  check('the range loader does not call the metadata reader at all',
+    !/=\s*cdrDayCacheMeta\(/.test(loader) && !/cdrDayCacheMeta\(\$/.test(loader),
+    (loader.match(/cdrDayCacheMeta\(/g) || []).length + ' call(s) left in the loader');
+  check('freshness comes from the read that already happened',
+    /\$fetchedAt = is_array\(\$cached\)/.test(loader), 'no fetchedAt from the read');
+  const isCached = cacheSource.slice(
+    cacheSource.indexOf('function cdrDayIsCached'),
+    cacheSource.indexOf('function cdrRangeCacheStatus')
+  );
+  check('the cache-status check answers existence without reading the file',
+    !isCached.includes('readNodeDayJsonl'), 'cdrDayIsCached still decodes the node JSONL');
+  const report = readFileSync(path.join(ROOT, 'api/report.php'), 'utf8');
+  check('the report releases the comparison range once its summary is taken',
+    /unset\(\$previousCalls\);/.test(report));
+  check('the report releases the raw rows before it encodes the payload',
+    /unset\(\$calls\);/.test(report));
+}
+
 console.log('\n== the fetch callback gets one page at a time ==');
 {
   check('the real client no longer hands over the accumulated list',
@@ -503,7 +691,55 @@ echo json_encode($out);
   check('a day that fits still loads', out3.threw === false && out3.loaded === 400, out3);
 }
 
-console.log('\n== the operator meter runs ==');
+console.log('\n== a report request over a cached range ==');
+{
+  /*
+   * The end-to-end version of the repro that found this: two days of realistic
+   * records in the day cache, then the Reports page's own request (baseline=1,
+   * so the current period, the comparison period and the 28-day baseline are
+   * all in one PHP process). What this catches that the unit checks cannot is
+   * the ARRANGEMENT - a range held alive into the payload assembly, a day
+   * decoded twice, a third period loaded while two are still open.
+   */
+  await harness.write('includes/config.local.php', `<?php
+declare(strict_types=1);
+define('PBX_SERVERS', ['nms1' => 'https://pbx.example']);
+define('REPORTING_MEMORY_HEADROOM_BYTES', 67108864);
+`);
+  await harness.script(`<?php
+require_once TEST_TMP . '/includes/reporting.php';
+$wide = json_decode(base64_decode('${Buffer.from(wideJson).toString('base64')}'), true);
+foreach (['2026-10-01', '2026-10-02'] as $day) {
+    $rows = [];
+    for ($i = 0; $i < 3000; $i++) {
+        $copy = $wide;
+        $copy['id'] = $day . '-' . $i;
+        $copy['call-direction'] = $i % 9 === 0 ? 0 : 1;
+        $copy['call-start-datetime'] = $day . 'T' . str_pad((string)(8 + ($i % 11)), 2, '0', STR_PAD_LEFT) . ':' . str_pad((string)($i % 60), 2, '0', STR_PAD_LEFT) . ':00.000Z';
+        $rows[] = $copy;
+    }
+    cdrDayCacheWrite('test.example', $day, $rows, true, 3000, true);
+}
+echo 'seeded';
+`);
+  const result = await harness.request('report.php', {
+    body: { start: '2026-10-01', end: '2026-10-02', baseline: 1 },
+    user: USERS.office_manager
+  });
+  const body = result.body?.data ?? result.body ?? {};
+  check('the report answers 200 over a cached range', result.status === 200,
+    { status: result.status, body: JSON.stringify(body).slice(0, 300) });
+  check('both days are counted', (body.summary?.counts?.total ?? 0) === 6000, body.summary?.counts);
+  check('the data-quality appendix answers for both days',
+    Object.keys(body.dataQuality?.days ?? {}).length === 2
+      && body.dataQuality.days['2026-10-01']?.records === 3000,
+    body.dataQuality?.days);
+  check('the cache status is complete', body.cacheStatus?.ready === 2 && body.cacheStatus?.complete === true,
+    body.cacheStatus);
+  check('the baseline was computed', body.pack?.baseline !== undefined, Object.keys(body.pack || {}));
+}
+
+console.log('\n== the operator meter runs ==');console.log('\n== the operator meter runs ==');
 {
   /* The tool the operator runs after this fatal (php tools/cdr-memory.php):
    * it must work on a cache that exists, read one day, and print the numbers
