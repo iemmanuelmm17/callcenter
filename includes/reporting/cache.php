@@ -43,17 +43,76 @@ function cdrDayCacheTtl(string $date): int
     return defined('CACHE_TTL_SECONDS') ? (int)CACHE_TTL_SECONDS : 86400;
 }
 
+/**
+ * Read one day, streaming when the file is in the current format.
+ *
+ * FORMAT
+ * ------
+ * v2 (what this writes now) is JSONL: a one-line header, then one record per
+ * line. A wide day is 20,000 records; as a single JSON document that is a
+ * ~35 MB string handed to json_decode, which materialises the whole day at
+ * once. Streamed, the peak is one record plus the day being built - and the
+ * day is the unit the caller works in, so nothing is held twice.
+ *
+ * v1 (a single JSON document, the shape every cache written before this
+ * change has) still reads, and is rewritten as v2 on the way out: the records
+ * are already decoded and in hand, so the promotion is I/O only, and the next
+ * request streams. That matters because the alternative - leaving the deployed
+ * cache in v1 - would leave every day paying the old cost for ever.
+ */
 function readCdrDayCache(string $file): ?array
 {
-    if (!is_file($file)) {
+    if (!is_file($file) || !is_readable($file)) {
         return null;
     }
+
+    $handle = @fopen($file, 'rb');
+    if ($handle === false) {
+        return null;
+    }
+    $head = null;
+    $records = [];
+    $streamed = false;
+    try {
+        $first = fgets($handle);
+        if ($first === false) {
+            return null;
+        }
+        $head = json_decode(trim($first), true);
+        if (is_array($head) && (int)($head['v'] ?? 0) === 2) {
+            $streamed = true;
+            while (($line = fgets($handle)) !== false) {
+                $line = trim($line);
+                if ($line === '') {
+                    continue;
+                }
+                $row = json_decode($line, true);
+                if (is_array($row)) {
+                    $records[] = cdrTrimRecord($row);
+                }
+            }
+        }
+    } finally {
+        fclose($handle);
+    }
+
+    if ($streamed) {
+        return [
+            'complete' => !empty($head['complete']),
+            'nextOffset' => (int)($head['nextOffset'] ?? 0),
+            'records' => $records,
+            'fetchedAt' => (int)filemtime($file),
+            'format' => 2,
+        ];
+    }
+
+    /* v1: the whole file is one JSON document. */
     $data = json_decode((string)file_get_contents($file), true);
     if (!is_array($data)) {
         return null;
     }
     if (isset($data['records']) && is_array($data['records'])) {
-        return [
+        $out = [
             'complete' => !empty($data['complete']),
             'nextOffset' => (int)($data['nextOffset'] ?? 0),
             /* Day files written before the trim existed hold every PBX field;
@@ -61,34 +120,132 @@ function readCdrDayCache(string $file): ?array
              * (fatal) amount of memory. It is idempotent. */
             'records' => cdrTrimRecords($data['records']),
         ];
-    }
-    if ($data === [] || isset($data[0])) {
-        return [
+    } elseif ($data === [] || isset($data[0])) {
+        $out = [
             'complete' => true,
             'nextOffset' => 0,
             'records' => cdrTrimRecords($data),
         ];
+    } else {
+        return null;
     }
-    return null;
+
+    /* Promote: the records are in hand, so this only costs the write. */
+    cdrDayCachePromote($file, $out['records'], $out['complete'], $out['nextOffset']);
+    $out['fetchedAt'] = (int)filemtime($file);
+    $out['format'] = 2;
+    return $out;
 }
 
-function writeCdrDayCache(string $file, array $records, bool $complete, int $nextOffset): void
+/**
+ * The header line of a v2 day file. Its `records` count is what lets
+ * cdrDayCacheMeta() answer without decoding a single record - the callers that
+ * only want "how many, complete?" (the cache status, the data-quality appendix)
+ * used to decode the whole day for it, four times per request between them.
+ */
+function cdrDayCacheHeaderLine(bool $complete, int $nextOffset, int $records): string
 {
-    $ok = @file_put_contents(
-        $file,
-        json_encode(
-            [
-                'complete' => $complete,
-                'nextOffset' => $nextOffset,
-                'records' => $records,
-            ],
-            JSON_UNESCAPED_SLASHES
-        ),
-        LOCK_EX
-    );
-    if ($ok === false) {
-        appLog("Could not write CDR cache {$file}");
+    return json_encode([
+        'v' => 2,
+        'complete' => $complete,
+        'nextOffset' => $nextOffset,
+        'records' => $records,
+    ], JSON_UNESCAPED_SLASHES) . "\n";
+}
+
+/**
+ * Rewrite a v1 day file as v2. Best effort on purpose: a read-only cache
+ * directory (or a full disk) must not break a request that has already got its
+ * data - it just keeps paying the v1 cost.
+ *
+ * @param list<array> $records
+ */
+function cdrDayCachePromote(string $file, array $records, bool $complete, int $nextOffset): bool
+{
+    $written = writeCdrDayCache($file, $records, $complete, $nextOffset);
+    if ($written) {
+        appLog('CDR day cache promoted to v2: ' . basename($file));
     }
+    return $written;
+}
+
+/**
+ * Write one day as v2 (JSONL): header line, then one record per line.
+ *
+ * Streamed in chunks (so a wide day is never one giant string in memory) to a
+ * temporary file, then moved into place, so a reader never sees a half-written
+ * day. Returns whether the day is on disk in the new format.
+ */
+function writeCdrDayCache(string $file, array $records, bool $complete, int $nextOffset): bool
+{
+    /* Trim on the way out as well as on the way in: the JSON driver is also
+     * written by tools/cdr-cache.php's import, which reads legacy files. */
+    $header = cdrDayCacheHeaderLine($complete, $nextOffset, count($records));
+
+    $temporary = $file . '.tmp-' . getmypid() . '-' . bin2hex(random_bytes(4));
+    $handle = @fopen($temporary, 'wb');
+    if ($handle === false) {
+        appLog("Could not open CDR cache for writing: {$temporary}");
+        return false;
+    }
+
+    $ok = true;
+    $buffer = '';
+    try {
+        if (fwrite($handle, $header) === false) {
+            $ok = false;
+        }
+        foreach ($records as $record) {
+            if (!is_array($record)) {
+                continue;
+            }
+            $line = json_encode(cdrTrimRecord($record), JSON_UNESCAPED_SLASHES);
+            if (!is_string($line)) {
+                continue;
+            }
+            $buffer .= $line . "\n";
+            if (strlen($buffer) >= 1048576) {
+                if (fwrite($handle, $buffer) === false) {
+                    $ok = false;
+                    break;
+                }
+                $buffer = '';
+            }
+        }
+        if ($ok && $buffer !== '' && fwrite($handle, $buffer) === false) {
+            $ok = false;
+        }
+    } finally {
+        fclose($handle);
+    }
+
+    if (!$ok) {
+        @unlink($temporary);
+        appLog("Could not write CDR cache {$file}");
+        return false;
+    }
+
+    if (!@rename($temporary, $file)) {
+        /* Windows can refuse to replace an open file; unlinking first is the
+         * documented way round it, and the day is rewritten in full either
+         * way (the temp file is complete). */
+        @unlink($file);
+        if (!@rename($temporary, $file)) {
+            /* Last resort: write in place, as the v1 writer did. */
+            $ok = @file_put_contents($file, file_get_contents($temporary), LOCK_EX) !== false;
+            @unlink($temporary);
+            if (!$ok) {
+                appLog("Could not move CDR cache into place: {$file}");
+            }
+        }
+    }
+
+    if ($ok) {
+        /* The file was replaced, so its mtime is the fetch time - which is what
+         * cdrDayCacheTtl() and cdrDayIsCached() compare against. */
+        @touch($file);
+    }
+    return $ok;
 }
 
 function nodeCdrDir(): string
@@ -189,14 +346,67 @@ function cdrDayCacheMeta(string $domain, string $day): array
     }
 
     $file = cdrDayCacheFile($domain, $day);
+    $empty = [
+        'exists' => false,
+        'complete' => false,
+        'nextOffset' => 0,
+        'records' => 0,
+        'fetchedAt' => is_file($file) ? (int)filemtime($file) : 0,
+    ];
+
+    /* v2: the header line carries the whole answer, so none of the day's
+     * records are decoded. This is the difference between the data-quality
+     * appendix costing a few kilobytes per day and costing a full decode of
+     * every day - which is what made a wide range die while the payload was
+     * being assembled (long after the metrics were computed). */
+    $head = cdrDayCacheReadHeader($file);
+    if (is_array($head)) {
+        return [
+            'exists' => true,
+            'complete' => !empty($head['complete']),
+            'nextOffset' => (int)($head['nextOffset'] ?? 0),
+            'records' => (int)($head['records'] ?? 0),
+            'fetchedAt' => $empty['fetchedAt'],
+        ];
+    }
+
+    /* v1 or unknown: read the day (which may promote it to v2). */
     $cached = readCdrDayCache($file);
     return [
         'exists' => is_array($cached),
         'complete' => is_array($cached) ? !empty($cached['complete']) : false,
         'nextOffset' => is_array($cached) ? (int)$cached['nextOffset'] : 0,
         'records' => is_array($cached) ? count($cached['records']) : 0,
-        'fetchedAt' => is_file($file) ? (int)filemtime($file) : 0
+        'fetchedAt' => $empty['fetchedAt'],
     ];
+}
+
+/**
+ * The v2 header of a day file, or null when the file is absent/empty/legacy.
+ * Reads a bounded prefix of the file and never touches a record.
+ */
+function cdrDayCacheReadHeader(string $file): ?array
+{
+    if (!is_file($file) || !is_readable($file)) {
+        return null;
+    }
+    $handle = @fopen($file, 'rb');
+    if ($handle === false) {
+        return null;
+    }
+    try {
+        $line = fgets($handle, 4096);
+    } finally {
+        fclose($handle);
+    }
+    if ($line === false) {
+        return null;
+    }
+    $head = json_decode(trim($line), true);
+    if (!is_array($head) || (int)($head['v'] ?? 0) !== 2) {
+        return null;
+    }
+    return $head;
 }
 
 function loadRawCdrs(array $user, array $filters): array {
@@ -225,9 +435,16 @@ function loadRawCdrs(array $user, array $filters): array {
         $file = cacheFile($user['domain'], $date . '|' . $tzName);
         $ttl = cdrDayCacheTtl($date);
         $cached = cdrDayCacheRead((string)$user['domain'], $date, $ttl);
-        $meta = cdrDayCacheMeta((string)$user['domain'], $date);
-        $fresh = is_array($cached) && !empty($cached['complete']) && $meta['fetchedAt'] > 0
-            && (time() - (int)$meta['fetchedAt']) < $ttl;
+        /*
+         * Freshness comes from the read that just happened, not from a second
+         * cdrDayCacheMeta() call: on the JSON driver that call decoded the
+         * same day file a second time, which doubled the cost of every day in
+         * the range at the worst possible moment (while the range was being
+         * merged and the day itself was still alive).
+         */
+        $fetchedAt = is_array($cached) ? (int)($cached['fetchedAt'] ?? 0) : 0;
+        $fresh = is_array($cached) && !empty($cached['complete']) && $fetchedAt > 0
+            && (time() - $fetchedAt) < $ttl;
 
         $records = [];
         $fromNode = isClosedRange($date) ? readNodeDayJsonl($date) : null;
@@ -353,8 +570,10 @@ function reportingDateList(string $start, string $end): array
 function cdrDayIsCached(array $user, string $date): bool
 {
     $date = substr($date, 0, 10);
-    if (isClosedRange($date) && is_array(readNodeDayJsonl($date))) {
-        return true;
+    /* Existence, not a read: this answered "is it there?" by decoding the
+     * whole JSONL file, once per day, on every cache-status request. */
+    if (isClosedRange($date) && is_file(nodeCdrDir() . '/cdr-' . $date . '.jsonl')) {
+        return is_readable(nodeCdrDir() . '/cdr-' . $date . '.jsonl');
     }
     $meta = cdrDayCacheMeta((string)$user['domain'], $date);
     if (empty($meta['exists']) || empty($meta['complete'])) {

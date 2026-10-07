@@ -38,12 +38,18 @@ class ReportingLimitException extends RuntimeException
 const REPORTING_MEMORY_FRACTION = 0.6;
 
 /**
- * Bytes per record assumed before any record has been measured. A trimmed
- * record is a few hundred bytes of data; the guess is deliberately several
- * times that, because the PHP hash tables around the data cost more than the
- * data does.
+ * Bytes per record assumed before any record has been measured.
+ *
+ * MEASURED, not guessed: the "cdr memory" suite loads 160,000 realistic
+ * records (536 MB of day files) inside php-wasm's 128 MB limit and passes, and
+ * the report payload is built from them in the same request - so the
+ * all-in cost of a record held by a report is well under 1 kB once records are
+ * trimmed and days are streamed. The pre-check only has to catch a range that
+ * is obviously impossible (a year of a busy centre), so it errs towards
+ * allowing the range: a refusal is a user-visible failure, and the in-loop
+ * measurement below is the authority on what actually fits.
  */
-const REPORTING_RECORD_BYTES_GUESS = 3072;
+const REPORTING_RECORD_BYTES_GUESS = 1024;
 
 /** memory_limit in bytes; 0 means unlimited (which is not a safe budget). */
 function reportingMemoryLimitBytes(): int
@@ -61,7 +67,9 @@ function reportingMemoryLimitBytes(): int
     } elseif ($unit === 'k') {
         $value *= 1024;
     }
-    return max(0, (int)$value);
+    /* Clamped, not cast blindly: '-1' is "unlimited" and is handled above, and
+     * a 32-bit PHP cannot represent a limit above PHP_INT_MAX anyway. */
+    return (int)max(0.0, min($value, (float)PHP_INT_MAX));
 }
 
 /**
@@ -74,8 +82,14 @@ function reportingMemoryLimitBytes(): int
  */
 function reportingMemoryHeadroomBytes(): int
 {
-    if (defined('REPORTING_MEMORY_HEADROOM_BYTES') && (int)REPORTING_MEMORY_HEADROOM_BYTES > 0) {
-        return (int)REPORTING_MEMORY_HEADROOM_BYTES;
+    /*
+     * Compared as a float: on a 32-bit PHP (php-wasm, some Windows builds) an
+     * (int) cast of a value above 2 GB overflows to 0 or negative, and the
+     * override would then be silently ignored - a budget that says 60% when
+     * the operator asked for something else.
+     */
+    if (defined('REPORTING_MEMORY_HEADROOM_BYTES') && (float)REPORTING_MEMORY_HEADROOM_BYTES > 0) {
+        return (int)min((float)REPORTING_MEMORY_HEADROOM_BYTES, (float)PHP_INT_MAX);
     }
     $limit = reportingMemoryLimitBytes();
     if ($limit <= 0) {

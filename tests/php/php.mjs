@@ -46,6 +46,22 @@ function jsonResponse(array $data, int $status = 200): never {
 function requireMethod(string $method): void {
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== $method) jsonResponse(['error' => 'Method not allowed'], 405);
 }
+/*
+ * The real bootstrap's failure shape. It has to be here: without it an
+ * endpoint's catch block fatals on the missing function and the original
+ * exception is never seen (that is how a memory refusal looked like an
+ * undefined-function error the first time it ran in the harness).
+ */
+function jsonResponseThrowable(Throwable $e, string $fallback): never {
+    if ($e instanceof ReportingLimitException) {
+        appLog('Report capacity: ' . $e->getMessage());
+        jsonResponse(['error' => $e->getMessage(), 'code' => 'range_too_large'], 413);
+    }
+    appLog($fallback . ': ' . get_class($e) . ' ' . $e->getMessage());
+    jsonResponse(['error' => $fallback, 'exception' => get_class($e) . ': ' . $e->getMessage()], 502);
+}
+function discardBufferedOutput(): string { return ''; }
+function installApiFatalHandler(): void {}
 function readJsonBody(?string $raw = null): array {
     $raw = $raw ?? (string)file_get_contents(TEST_BODY);
     if (trim($raw) === '') return [];

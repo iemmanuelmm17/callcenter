@@ -1,3 +1,97 @@
+# CHANGES — the fatal, part two: a day is streamed, not decoded four times
+
+**What this phase is about.** The first fix (trimming records to the fields the
+app reads) was necessary but not sufficient: the report still died on a real
+cache. Reproducing it in the test harness with realistic records found the rest
+of it, and it was not one leak — it was the same day file being read up to
+**four times per request**, and each read materialising the whole day at once.
+
+## What was actually happening
+
+For every day in the range, on the JSON cache driver:
+
+1. `cdrDayCacheRead()` — `file_get_contents()` the whole file (a 20,000-record
+   day is a ~35 MB string) and `json_decode()` it into an array;
+2. `cdrDayCacheMeta()` in `loadRawCdrs()` — **the same file, decoded again**,
+   just to read `fetchedAt`;
+3. `cdrRangeCacheStatus()` → `cdrDayIsCached()` → `cdrDayCacheMeta()` — **again**
+   (and on the node-CLI path, `readNodeDayJsonl()` decoded a whole JSONL file to
+   answer "is it there?"); and
+4. the data-quality appendix loop in `api/report.php` → `cdrDayCacheMeta()` —
+   **again**, once per day, while the loaded ranges were still in memory.
+
+Step 4 is the one that matches the production trace: it runs near the end of the
+request, *after* the metrics are computed, so the process was carrying the
+current range **plus** the comparison range **plus** the 28-day baseline, and
+then decoding every day of all three again. `cache.php:299` was simply where the
+allocator gave up.
+
+## The fix
+
+**A day is now a JSONL file: one header line, then one record per line.**
+
+* `writeCdrDayCache()` streams the day out in 1 MB chunks to a temporary file and
+  moves it into place, so no single giant string is ever built and a reader never
+  sees a half-written day. `rename()` with an unlink-then-retry fallback (Windows
+  can refuse to replace a file).
+* `readCdrDayCache()` streams it back, decoding and trimming one record at a
+  time. The peak is one record plus the day being built — and the day is already
+  the unit callers work in, so nothing is held twice.
+* **Every existing v1 file is read and promoted to v2 on the way past** — the
+  records are already decoded and in hand, so the promotion costs only the write.
+  Without that, a deployed cache would keep paying the old cost for ever.
+  `php tools/cdr-cache.php promote` does the whole cache deliberately, one day at
+  a time, for an operator who would rather not have a user wait for it.
+
+**The metadata calls stop decoding records.** The header line carries
+`complete`, `nextOffset` and `records`, so `cdrDayCacheMeta()` answers by reading
+the first 4 KB — the cache-status check and the data-quality appendix became
+kilobyte reads instead of full day decodes.
+
+**`loadRawCdrs()` reads each day once.** `fetchedAt` comes from the read that
+already happened, not from a second metadata call.
+
+**The report releases what it is done with.** `unset($previousCalls)` as soon as
+its summary is taken, `unset($baselineCalls)` after the baseline, and
+`unset($calls)` before `json_encode()` builds the response — the peak of a
+month-vs-month pack with a baseline was three ranges at once.
+
+**The capacity guard's estimate now matches the measurement** (1 kB/record, not
+3 kB) so it stops refusing ranges that fit; the in-loop projection, measured from
+real memory, stays the authority.
+
+## Measured, in the harness, on this code
+
+`node /tmp/repro-memory.mjs <days> <recordsPerDay>` seeds a day cache of
+realistic records and calls `report.php` exactly as the Reports page does
+(`baseline=1`, so current + comparison + baseline in one process), inside
+php-wasm's **128 MB** limit:
+
+| range | records | day-file size | before | after |
+| --- | --- | --- | --- | --- |
+| 30 days | 60,000 | 100 MB | 70.8 s, 200 (at the edge) | **26.1 s**, 200 |
+| 8 days | 160,000 | **536 MB** | died (80k was the old ceiling) | **82.6 s**, 200 |
+
+Counts are identical before and after (`160,000 / 136,904 / 22,864 / 232`), and
+the legacy-v1 pass is the slower one (118 s) because it promotes 8 × 20,000
+records on the way through.
+
+## Verification
+
+`npm test` — 28 suites, all green. `cdr memory` grew 13 checks: the day file's
+format, the header-only metadata (proved by answering with the record lines
+deliberately corrupted), the v1 read + promotion + trim, the source assertions
+that the loader makes no metadata call and the cache-status check reads no file,
+the report's `unset()`s, and an **end-to-end** `report.php` request over a cached
+range (6,000 records, both days counted, both days in the data-quality appendix,
+cache status complete, baseline computed). `dead-code --strict`, `module-budget`,
+`php-lint` and the rest of the tool set are clean.
+
+**One leak-shaped thing that was NOT a leak**, for the record: `PbxClient::$memo`
+is static and holds whole result sets for the life of a request, but the
+reporting path does not use the memoised `cdrs()` — it pages with `fetchCdrs()` —
+so it was never in this.
+
 # CHANGES — the 512 MB fatal: CDR records are trimmed to what the app reads
 
 **What this phase is about.** On the deployed host a report died with

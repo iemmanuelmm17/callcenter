@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1310 names.
+ * 1312 names.
  */
 return [
     'aa',
@@ -479,6 +479,7 @@ return [
     'font-mono',
     'footer',
     'form',
+    'format',
     'formula',
     'found',
     'fresh',
@@ -889,6 +890,7 @@ return [
     'previous',
     'previous_range',
     'probing',
+    'promote',
     'prompt',
     'prompts',
     'prune',
