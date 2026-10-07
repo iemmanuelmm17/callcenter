@@ -426,6 +426,50 @@ echo json_encode([
     (out.meta?.records ?? 0) === 3 && out.meta?.complete === true, out.meta);
 }
 
+console.log('\n== the CLI can promote the whole cache ==');
+{
+  /* Lazy promotion happens on the way past a read; the operator may prefer one
+   * deliberate pass after an upgrade, with nobody waiting. */
+  const CLI = readFileSync(path.join(ROOT, 'tools/cdr-cache.php'), 'utf8');
+  await harness.write('tools/cdr-cache.php', CLI);
+  const legacy = JSON.stringify({
+    complete: true,
+    nextOffset: 2,
+    records: [
+      { id: 'cli-a', 'call-direction': 1, 'call-start-datetime': '2026-09-12T10:00:00Z', 'call-term-user': '6080' },
+      { id: 'cli-b', 'call-direction': 1, 'call-start-datetime': '2026-09-12T11:00:00Z', 'call-term-user': '6080' }
+    ]
+  });
+  await harness.write('cache/cdr-day-cli-v1.json', legacy);
+  /* One legacy file, one already in the new format, so the command has to tell
+   * them apart and leave the second alone. The CLI writes to STDOUT (not to the
+   * output buffer), which is what the harness collects. */
+  await harness.script(`<?php
+require_once TEST_TMP . '/includes/reporting.php';
+$legacy = cdrDayCacheFile('test.example', '2026-09-12');
+copy(TEST_TMP . '/cache/cdr-day-cli-v1.json', $legacy);
+writeCdrDayCache(cdrDayCacheFile('test.example', '2026-09-13'), [['id' => 'v2-a', 'call-direction' => 1]], true, 1);
+$_SERVER['argv'] = ['cdr-cache.php', 'promote'];
+$_SERVER['argc'] = 2;
+require TEST_TMP . '/tools/cdr-cache.php';
+`);
+  const cliText = String(await harness.script(`<?php
+/* The CLI ran in the previous pass; report what the cache looks like now. */
+require_once TEST_TMP . '/includes/reporting.php';
+$head = cdrDayCacheReadHeader(cdrDayCacheFile('test.example', '2026-09-12'));
+echo json_encode([
+    'promotedToV2' => is_array($head) && ($head['v'] ?? 0) === 2,
+    'headerRecords' => $head['records'] ?? null,
+    'stillReads' => count(readCdrDayCache(cdrDayCacheFile('test.example', '2026-09-12'))['records'] ?? []),
+    'secondUntouched' => (cdrDayCacheReadHeader(cdrDayCacheFile('test.example', '2026-09-13'))['records'] ?? 0) === 1,
+]);
+`));
+  const out = asJson(cliText, 'promote cli') || {};
+  check('the legacy file is now v2', out.promotedToV2 === true && out.headerRecords === 2, out);
+  check('and it still reads back completely', out.stillReads === 2, out.stillReads);
+  check('a day already in the new format is left alone', out.secondUntouched === true, out);
+}
+
 console.log('\n== a request reads each day once ==');
 {
   const cacheSource = readFileSync(path.join(ROOT, 'includes/reporting/cache.php'), 'utf8');
