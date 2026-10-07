@@ -139,6 +139,26 @@ verify, days, prune) — see `CHANGES.md` for what each command guarantees. Unti
 day has been imported, the JSON file for it is still read, so the switch can be
 flipped without a cold cache.
 
+A node client's `cdr-out/cdr-<date>.jsonl` files are imported into the day cache
+the first time a day is read and served from the cache after that, so a
+deployment with those files does not re-parse them on every request.
+
+### When a range is slow
+
+Two read-only meters, run from the command line on the server:
+
+```
+php tools/cdr-timing.php <domain> [start] [end] [--runs=2]   # where the time goes
+php tools/pbx-bench.php <domain> [server] --token=<bearer>   # what the PBX allows
+```
+
+`cdr-timing` times the whole report path stage by stage (twice, so the cold and
+warm requests are side by side) and prints peak memory; it refuses a range that
+is not fully cached and names the days to warm. `pbx-bench` proves whether the
+PBX honours a page larger than 250 and how many requests per second it sustains,
+then prints the `CDR_PAGE_SIZE` / `PBX_REQUESTS_PER_SECOND` lines for
+`includes/config.local.php`.
+
 ## Development
 
 `package.json` exists **only** for the development toolchain; it is not needed in

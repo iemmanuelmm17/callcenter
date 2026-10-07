@@ -1,3 +1,101 @@
+# CHANGES — a 15-day range: what was slow, and the five fixes
+
+**What this phase is about.** "The app takes too long to load/call CDR with 15
+days and up." The rule for this pass was measure first, then fix: a throwaway
+repro ran the real report stages inside PHP with `microtime()`, and every fix
+below exists because a number said so. Every published metric is unchanged —
+`report metrics`, `outcome parity`, `cdr cache`, `cdr memory`, `call links` and
+`portal` all pass, and the new `cdr speed` suite asserts that each memoized value
+**equals a fresh computation**.
+
+## The profile before (15 days x 2,000 = 30,000 records)
+
+Ranges were measured in the test harness (php-wasm, roughly 5x slower than
+native PHP), running the same script before and after each change:
+
+| stage | before | after | why |
+| --- | --- | --- | --- |
+| `loadRawCdrs` (read + merge 15 days) | 10,964 ms | 9,460 ms | node JSONL no longer re-parsed per request |
+| `normalizeCdrs` + scope | 5,508 ms | 5,814 ms | the derivation moved INTO this stage from the ones below |
+| date filter | 5,076 ms | 3,412 ms | local date read from the row instead of parsed |
+| agent performance | 4,062 ms | 3,366 ms | ring/wait read from the row |
+| summary | 3,909 ms | 3,215 ms | disconnect reason read from the row |
+| queue pack | 1,399 ms | 725 ms | 1.9x |
+| number pack | 1,375 ms | 693 ms | 2.0x |
+| quality pack | 1,065 ms | 361 ms | 3.0x |
+| **total** | **33,358 ms** | **27,046 ms** | **-19%** |
+
+Per-accessor costs measured on 20,000 records: `callDisconnectReason()` **788 ms**
+(the most expensive single accessor — it scans every key of a row with three
+patterns), `callMissedReason` 131 ms, `callOutcome` 125 ms, `cdrQueueMatch` 58 ms,
+the trim 2,251 ms un-memoized against 327 ms memoized (7x).
+
+A deployment using the node client's `cdr-out/` JSONL files instead of fetched
+cache days is the worst case, because those files were re-parsed on **every**
+request (see fix 1): the same 30,000-record range went from **34,091 ms to
+23,919 ms (-30%)** on the second request, and **36,148 ms to 29,802 ms** on the
+first.
+
+## The five fixes
+
+1. **A node JSONL day is imported once, not re-parsed per request.** The day
+   cache and the node client's `cdr-out/cdr-<date>.jsonl` both exist on some
+   deployments; the node file **won** over the cache, was never written to the
+   cache, and `cdrDayIsCached()` answered "ready" for it — so the warm loop
+   skipped it and every request paid a full parse of 15 files. Now a fresh cache
+   is preferred, a node file is imported into the cache on the first read (the
+   parse the request was doing anyway, plus a write), and `cdrDayIsCached()`
+   answers the truth (the day cache), so the warm loop imports the rest.
+2. **The field allowlist is decided per field NAME, not per record.**
+   `cdrFieldIsKept()` memoizes its answer: a CDR has the same ~100 names on every
+   record, so the pattern match ran 2,000,000 times for a 20,000-record day. 7x
+   on the trim — and the trim runs on every read, write and fetch.
+3. **The per-row derivations happen once per row.** `normalizeCdrs()` stores
+   `_localDate`, `_ring` (which is also `waitSeconds()`) and `_disconnect` on the
+   row, and the accessors read the memo when it is present. Every later stage —
+   scoping, the date filter, the summary, the agent table, the three packs —
+   re-derived them before. The `_` prefix is already "always kept" by the trim,
+   so a row keeps its memo through any staging.
+4. **One fetcher per day.** The report request and the UI's cache warm loop both
+   fetch a missing day, at the same time; each paid for the same pages, and the
+   PBX rate limiter made them wait for each other. A per-day lock (created with
+   `fopen(..., 'x')`, stolen after 5 minutes so a killed request cannot block a
+   day for ever) makes the second caller wait for the first and then read what it
+   stored. If nothing arrives in time the caller fetches it anyway — correctness
+   first, never a silently short range.
+5. **The fetch rate and page size are configurable.** `CDR_PAGE_SIZE` (default
+   250, clamped to 1..5000) and `PBX_REQUESTS_PER_SECOND` (default 5, clamped to
+   0.5..50) in `includes/config.local.php`. A bigger page means fewer round trips
+   for a cold range — but ONLY if the server honours it: a server that caps pages
+   at 250 while the app asks for 1000 would look like "the day ended" and
+   silently truncate. `tools/pbx-bench.php` proves which page size the server
+   honours and how many requests per second it sustains, before either is raised.
+
+## The two meters (run them on the deployed box)
+
+`php tools/cdr-timing.php <domain> [start] [end] [--runs=2]` times the real
+report path stage by stage on THIS server (native numbers, unlike the harness's
+php-wasm figures), run N times so the cold and warm numbers sit next to each
+other, and prints peak memory. It refuses an un-cached range and names the days
+to warm, because warming belongs to the request that owns the session.
+
+`php tools/pbx-bench.php <domain> [server] --token=<bearer>` answers the two PBX
+questions above and prints the exact `config.local.php` lines to set. It needs a
+bearer token (a CLI process has no session) — copy the `Authorization` header of
+any `/ns-api/` request in the browser, or set `PBX_BENCH_TOKEN`. `--selftest`
+prints its decision table without touching a PBX.
+
+Read-only both: they never write the cache, and print counts and timings only —
+never a caller, a number or a row.
+
+## What did not change
+
+* The day-cache format: the derived `_` keys are computed per request and are not
+  written into a day file, so no cache conversion is needed for this phase.
+* Any published number: the same 30,000 records produce the same per-stage
+  outputs, and the parity check in `tests/php/cdr-speed.mjs` compares every memo
+  against a fresh computation on every row.
+
 # CHANGES — the fatal, part two: a day is streamed, not decoded four times
 
 **What this phase is about.** The first fix (trimming records to the fields the

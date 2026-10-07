@@ -83,6 +83,11 @@ function parseEasternDateTime(string $value, ?DateTimeZone $tz = null): ?DateTim
 
 function ringSeconds(array $row): int
 {
+    /* Derived once by normalizeCdrs() (includes/reporting/cdr_fields.php).
+     * waitSeconds() is this function, so one memo covers both. */
+    if (isset($row['_ring'])) {
+        return (int)$row['_ring'];
+    }
     $talk = seconds($row, 'call-talking-duration-seconds');
     $hold = seconds($row, 'call-batch-on-hold-duration-seconds');
     $batch = seconds($row, 'call-batch-total-duration-seconds');
@@ -193,6 +198,10 @@ function percentileInt(array $values, float $p): int
 
 function callLocalDate(array $call): string
 {
+    /* Derived once by normalizeCdrs() (includes/reporting/cdr_fields.php). */
+    if (isset($call['_localDate'])) {
+        return (string)$call['_localDate'];
+    }
     $raw = trim((string)(
         $call['startedAt']
         ?? $call['call-start-datetime']

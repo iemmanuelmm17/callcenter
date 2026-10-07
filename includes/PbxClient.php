@@ -13,12 +13,55 @@ final class PbxClient
     private const PBX_RATE_LIMIT_DIR =
         __DIR__ . '/../cache/pbx-rate-limit';
 
+    /**
+     * Requests per second to ONE PBX server, enforced with a file lock shared
+     * by every PHP process. 5 is the conservative default; a deployment whose
+     * PBX tolerates more can raise it in includes/config.local.php with
+     *   define('PBX_REQUESTS_PER_SECOND', 10);
+     * and tools/pbx-bench.php measures what the server actually sustains
+     * before you try.
+     */
     private const PBX_REQUESTS_PER_SECOND = 5;
 
     private const PAGE_ATTEMPTS = 3;
 
     /** Parallel CDR pages in flight (curl_multi). Stay under NS 429. */
     private const MULTI_CONCURRENCY = 4;
+
+    /** The configured request rate, clamped to something sane. */
+    public static function requestsPerSecond(): float
+    {
+        $rate = defined('PBX_REQUESTS_PER_SECOND') ? (float)PBX_REQUESTS_PER_SECOND : 5.0;
+        if ($rate < 0.5) {
+            $rate = 0.5;
+        }
+        if ($rate > 50.0) {
+            $rate = 50.0;
+        }
+        return $rate;
+    }
+
+    /**
+     * The page size to ask for, from CDR_PAGE_SIZE (default 250).
+     *
+     * A bigger page means fewer round trips for the same records, which is the
+     * whole cost of a cold range - but ONLY if the PBX honours it: a server
+     * that caps the page at 250 while we ask for 1000 would look like "the day
+     * ended" and silently truncate. tools/pbx-bench.php proves which size the
+     * server honours before this is raised, and the fetch loop below treats a
+     * short page as the last page either way.
+     */
+    public static function pageSize(): int
+    {
+        $size = defined('CDR_PAGE_SIZE') ? (int)CDR_PAGE_SIZE : 250;
+        if ($size < 1) {
+            $size = 250;
+        }
+        if ($size > 5000) {
+            $size = 5000;
+        }
+        return $size;
+    }
 
     /**
      * In-request memoization so one PHP request
@@ -106,7 +149,7 @@ final class PbxClient
             }
 
             $now = microtime(true);
-            $interval = 1.0 / self::PBX_REQUESTS_PER_SECOND;
+            $interval = 1.0 / self::requestsPerSecond();
             $next = $now;
 
             if (is_file($timeFile)) {
@@ -380,13 +423,7 @@ final class PbxClient
     ): array {
 
         $all = [];
-        $pageSize = defined('CDR_PAGE_SIZE')
-            ? (int)CDR_PAGE_SIZE
-            : 250;
-
-        if ($pageSize < 1) {
-            $pageSize = 250;
-        }
+        $pageSize = self::pageSize();
 
         for (
             $offset = 0;
@@ -487,13 +524,7 @@ final class PbxClient
         ?callable $onPage = null
     ): array {
 
-        $pageSize = defined('CDR_PAGE_SIZE')
-            ? (int)CDR_PAGE_SIZE
-            : 250;
-
-        if ($pageSize < 1) {
-            $pageSize = 250;
-        }
+        $pageSize = self::pageSize();
 
         $path =
             '/ns-api/v2/domains/' .
