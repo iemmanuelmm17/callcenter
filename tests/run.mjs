@@ -54,6 +54,7 @@ const SUITES = {
     { name: 'cdr store', cmd: ['node', 'tests/php/cdr-store.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'cdr cache', cmd: ['node', 'tests/php/cdr-cache.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'cdr memory', cmd: ['node', 'tests/php/cdr-memory.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
+    { name: 'cdr speed', cmd: ['node', 'tests/php/cdr-speed.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'outcome parity', cmd: ['node', 'tests/php/outcomes.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'report metrics', cmd: ['node', 'tests/php/report-metrics.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'call links', cmd: ['node', 'tests/php/call-links.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },

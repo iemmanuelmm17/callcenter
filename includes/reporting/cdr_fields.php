@@ -11,6 +11,11 @@ declare(strict_types=1);
 
 function callDisconnectReason(array $row): string
 {
+    /* Derived once per row by normalizeCdrs() - the scan below is the most
+     * expensive per-row read in the app (see callDerivedFields()). */
+    if (isset($row['_disconnect'])) {
+        return (string)$row['_disconnect'];
+    }
     $preferred = [];
     $fallback = [];
 
@@ -294,6 +299,48 @@ function callHasFlowHint(array $row): bool
     return callRecordingCallId($row) !== '' || callTraceApi($row) !== '';
 }
 
+/**
+ * The per-row values that are expensive to derive and cheap to keep.
+ *
+ * WHY
+ * ---
+ * A report walks the same rows through several stages (scoping, date filter,
+ * summary, agent performance, the queue/number/quality packs), and each stage
+ * re-derived the same things: every one of those stages asked for the row's
+ * local date and its ring/wait time, and each of those parses one or more
+ * ISO-8601 timestamps into DateTimeImmutable objects. Measured on 30,000
+ * records: 5.7 s in the date filter alone, and the time-derived numbers are
+ * asked for by 25 call sites.
+ *
+ * normalizeCdrs() calls this once per row and stores the answers under keys
+ * prefixed with "_", which the CDR trim always keeps
+ * (includes/reporting/cdr_trim.php). The accessors below then return the memo
+ * when it is there and compute it when it is not - so any caller that has not
+ * normalised its rows keeps the old behaviour exactly.
+ *
+ * The keys are deliberately NOT part of the PBX field allowlist: they are
+ * derived here, never read from the wire, and cdLocalDate()/ringSeconds() are
+ * the single source of truth for how they are computed.
+ */
+function callDerivedFields(array $row): array
+{
+    return [
+        '_localDate' => callLocalDate($row),
+        '_ring' => ringSeconds($row),
+        /*
+         * callDisconnectReason() is the one reader that cannot use the field
+         * list: it scans EVERY key of the row for /disconnect|release|hangup/i
+         * and then ranks the matches. On a 90-field record that is 90
+         * iterations and ~270 pattern matches per call, and the report calls
+         * it for the summary, the miss reasons and two packs - measured at
+         * 788 ms per 20,000 records, the most expensive single accessor in the
+         * application. It is a pure function of the row, so it is derived here
+         * once and read back by callDisconnectReason().
+         */
+        '_disconnect' => callDisconnectReason($row),
+    ];
+}
+
 /** Every id that identifies this call, for an exact call lookup. */
 function callCallIds(array $row): array
 {
@@ -335,6 +382,14 @@ function normalizeCdrs(array $calls, array $directory): array {
         $row['_agent'] = $agent;
         $row['_department'] = callDepartment($row) ?: (string)($directory[$agent]['department'] ?? '');
         $row['_site'] = callSite($row) ?: (string)($directory[$agent]['site'] ?? '');
+        /*
+         * The expensive derivations, computed ONCE for every stage that
+         * follows (see callDerivedFields()): the date filter, the summary, the
+         * agent table and the packs all read these back out of the row.
+         */
+        foreach (callDerivedFields($row) as $key => $value) {
+            $row[$key] = $value;
+        }
     }
     unset($row);
     return $calls;

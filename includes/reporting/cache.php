@@ -409,6 +409,70 @@ function cdrDayCacheReadHeader(string $file): ?array
     return $head;
 }
 
+/**
+ * One fetcher per day, process-wide.
+ *
+ * WHY
+ * ---
+ * Two things fetch the same day at the same time: the report request (which
+ * fetches any day it is missing) and the client's warm loop, which starts as
+ * soon as a range is a week or more. Both paid for the day - twice the PBX
+ * requests for the same 20,000 records - and because the PBX client is
+ * rate-limited (PBX_REQUESTS_PER_SECOND), each one made the other wait. The
+ * lock makes the second caller wait for the first and then read what it wrote.
+ *
+ * The lock is a file created with 'x' (atomic on every filesystem this app
+ * runs on), and it is STOLEN when it is older than $staleSeconds: a request
+ * killed mid-fetch must not block a day for ever.
+ */
+function cdrDayFetchLock(string $domain, string $day, int $staleSeconds = 300): ?string
+{
+    $file = CACHE_DIR . '/cdr-fetch-' . hash('sha256', $domain . '|' . $day) . '.lock';
+    $handle = @fopen($file, 'x');
+    if ($handle === false) {
+        $age = is_file($file) ? (time() - (int)@filemtime($file)) : PHP_INT_MAX;
+        if ($age < $staleSeconds) {
+            return null;
+        }
+        /* Stale: the fetcher died. Take it over. */
+        @unlink($file);
+        $handle = @fopen($file, 'x');
+        if ($handle === false) {
+            return null;
+        }
+    }
+    fwrite($handle, (string)getmypid());
+    fclose($handle);
+    return $file;
+}
+
+function cdrDayFetchUnlock(?string $file): void
+{
+    if (is_string($file) && $file !== '') {
+        @unlink($file);
+    }
+}
+
+/**
+ * Wait for another process to finish fetching a day, then read it back.
+ * Returns the day when it appeared, null when it did not (the caller then
+ * fetches it itself - correctness first, never a silently missing day).
+ *
+ * @return array{complete:bool,nextOffset:int,records:list<array>}|null
+ */
+function cdrDayWaitForFetcher(array $user, string $day, int $waitMs = 2000): ?array
+{
+    $deadline = microtime(true) + ($waitMs / 1000);
+    do {
+        usleep(100000);
+        $cached = cdrDayCacheRead((string)$user['domain'], $day, cdrDayCacheTtl($day));
+        if (is_array($cached) && !empty($cached['complete']) && ($cached['records'] ?? []) !== []) {
+            return $cached;
+        }
+    } while (microtime(true) < $deadline);
+    return null;
+}
+
 function loadRawCdrs(array $user, array $filters): array {
     $client = new PbxClient($_SESSION['token']);
     $merged = [];
@@ -447,9 +511,29 @@ function loadRawCdrs(array $user, array $filters): array {
             && (time() - $fetchedAt) < $ttl;
 
         $records = [];
-        $fromNode = isClosedRange($date) ? readNodeDayJsonl($date) : null;
+        /*
+         * A node-client JSONL file used to WIN over the day cache and be
+         * re-read, re-decoded and re-trimmed on every single request - no
+         * cache, no TTL, and because cdrDayIsCached() says such a day is
+         * ready, the warm loop never imported it either. A 15-day range with
+         * those files present paid a full parse of every day, every time.
+         * Now the day cache is preferred when it is fresh, and a node file is
+         * IMPORTED into it once (the parse the request was going to do anyway,
+         * plus a write) so the next request streams.
+         */
+        /* Fresh cache first; the node file is a source of last resort. */
+        $fromNode = (!$fresh && isClosedRange($date)) ? readNodeDayJsonl($date) : null;
         if (is_array($fromNode)) {
             $records = $fromNode;
+            cdrDayCacheWrite(
+                (string)$user['domain'],
+                $date,
+                $fromNode,
+                true,
+                count($fromNode),
+                true
+            );
+            appLog("CDR day imported from node JSONL into the day cache: {$date} (" . count($fromNode) . ' records)');
         } elseif ($fresh) {
             $records = $cached['records'];
         } else {
@@ -461,6 +545,39 @@ function loadRawCdrs(array $user, array $filters): array {
                 $existing = $cached['records'];
                 $offset = (int)$cached['nextOffset'];
             }
+            /*
+             * One fetcher per day: if another request is already fetching this
+             * day (the report and the warm loop overlap constantly), wait for
+             * it and use what it stored instead of paying for the same pages
+             * twice.
+             */
+            $lock = cdrDayFetchLock((string)$user['domain'], $date);
+            if ($lock === null) {
+                $waited = cdrDayWaitForFetcher($user, $date);
+                if (is_array($waited)) {
+                    $records = $waited['records'];
+                    foreach ($records as $record) {
+                        if (!is_array($record)) {
+                            continue;
+                        }
+                        $merged[cdrCacheKey($record, count($merged))] = $record;
+                    }
+                    $records = [];
+                    unset($cached, $fromNode);
+                    $processedDays++;
+                    if ($remainingDays !== [] && $remainingDays[0] === $date) {
+                        array_shift($remainingDays);
+                    }
+                    $overflow = reportingProjectedOverflow(count($merged), $baselineBytes, $processedDays, $dayCounts, $remainingDays);
+                    if ($overflow !== null) {
+                        throw new ReportingLimitException($overflow);
+                    }
+                    continue;
+                }
+                /* Nothing arrived in time: fetch it ourselves rather than
+                 * serve a short range. */
+            }
+
             /* First page of a fresh fetch: replace the day instead of merging
              * into whatever a previous fetch left behind. */
             $replace = $existing === [];
@@ -518,9 +635,11 @@ function loadRawCdrs(array $user, array $filters): array {
                 if ($existing !== []) {
                     $records = $existing;
                 } else {
+                    cdrDayFetchUnlock($lock ?? null);
                     throw $e;
                 }
             }
+            cdrDayFetchUnlock($lock ?? null);
         }
 
         foreach ($records as $record) {
@@ -570,11 +689,14 @@ function reportingDateList(string $start, string $end): array
 function cdrDayIsCached(array $user, string $date): bool
 {
     $date = substr($date, 0, 10);
-    /* Existence, not a read: this answered "is it there?" by decoding the
-     * whole JSONL file, once per day, on every cache-status request. */
-    if (isClosedRange($date) && is_file(nodeCdrDir() . '/cdr-' . $date . '.jsonl')) {
-        return is_readable(nodeCdrDir() . '/cdr-' . $date . '.jsonl');
-    }
+    /*
+     * "Cached" means the DAY CACHE has it fresh - not "a node-client JSONL
+     * file happens to exist somewhere". The old check answered true for a node
+     * file, so such a day was never imported (the warm loop skipped it,
+     * warmCdrDay() returned early) and every request re-parsed the file from
+     * scratch. The import now happens once - in warmCdrDay() or on the first
+     * read - and this reports the truth afterwards.
+     */
     $meta = cdrDayCacheMeta((string)$user['domain'], $date);
     if (empty($meta['exists']) || empty($meta['complete'])) {
         return false;
@@ -614,12 +736,56 @@ function warmCdrDay(array $user, string $date): array
     if ($date === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
         return ['date' => $date, 'complete' => false];
     }
-    if (cdrDayIsCached($user, $date)) {
-        return ['date' => $date, 'complete' => true];
+    /*
+     * "Is it ready?" must mean "will a report find it in the CACHE", not "is
+     * there a file somewhere". It used to answer yes for a node JSONL file,
+     * which is how those days were never imported and every request re-parsed
+     * them.
+     */
+    $ttl = cdrDayCacheTtl($date);
+    $cachedReady = cdrDayCacheRead((string)$user['domain'], $date, $ttl);
+    $ready = is_array($cachedReady) && !empty($cachedReady['complete'])
+        && (int)($cachedReady['fetchedAt'] ?? 0) > 0
+        && (time() - (int)$cachedReady['fetchedAt']) < $ttl;
+    if (!$ready && isClosedRange($date)) {
+        $nodeRows = readNodeDayJsonl($date);
+        if (is_array($nodeRows)) {
+            /* Import once: a report would have re-parsed this file on every
+             * request; now it is read once here and served from the cache. */
+            cdrDayCacheWrite((string)$user['domain'], $date, $nodeRows, true, count($nodeRows), true);
+            return [
+                'date' => $date,
+                'complete' => true,
+                'records' => count($nodeRows),
+                'driver' => cdrCacheDriver(),
+                'source' => 'node-jsonl',
+            ];
+        }
+    }
+    if ($ready) {
+        return ['date' => $date, 'complete' => true, 'records' => count($cachedReady['records'] ?? [])];
+    }
+
+    /*
+     * One fetcher per day: the loop below is driven by the UI while the report
+     * request is doing its own fetches, so without this the same day was paid
+     * for twice.
+     */
+    $lock = cdrDayFetchLock((string)$user['domain'], $date);
+    if ($lock === null) {
+        $waited = cdrDayWaitForFetcher($user, $date, 3000);
+        if (is_array($waited)) {
+            return [
+                'date' => $date,
+                'complete' => true,
+                'records' => count($waited['records'] ?? []),
+                'driver' => cdrCacheDriver(),
+                'source' => 'waited',
+            ];
+        }
     }
 
     $client = new PbxClient((string)($_SESSION['token'] ?? ''));
-    $ttl = cdrDayCacheTtl($date);
     $cached = cdrDayCacheRead((string)$user['domain'], $date, $ttl);
     $existing = [];
     $offset = 0;
@@ -652,6 +818,7 @@ function warmCdrDay(array $user, string $date): array
         (int)($result['nextOffset'] ?? 0),
         $pageStored ? false : $replace
     );
+    cdrDayFetchUnlock($lock);
     return [
         'date' => $date,
         'complete' => !empty($result['complete']),
