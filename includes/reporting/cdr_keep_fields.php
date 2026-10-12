@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1334 names.
+ * 1336 names.
  */
 return [
     'aa',
@@ -621,11 +621,13 @@ return [
     'is-down',
     'is-flat',
     'is-good',
+    'is-no',
     'is-on',
     'is-onnet',
     'is-out',
     'is-up',
     'is-warn',
+    'is-yes',
     'items',
     'js',
     'json',

@@ -135,7 +135,17 @@ console.log('== CSV exports (real PHP 8.4)\n');
    * assertion is what keeps them from ever disagreeing.
    */
   check('calls export header matches the modal columns',
-    lines[0] === 'date,time,type,outcome,from_name,from,dialed,to,agent,talk,wait,hold,reason,total,transfers,recording,sip_flow', lines[0]);
+    lines[0] === 'date,time,type,outcome,from_name,from,dialed,to,agent,talk,wait,hold,reason,total,transfers,callback,recording,sip_flow', lines[0]);
+  check('every export row has a cell for every header',
+    lines.every(line => parse(line).length === parse(lines[0]).length),
+    lines.map(l => parse(l).length));
+  /* Sprint A's other half: the callback column is the Follow-ups card's answer.
+   * It is only ever filled on a missed call — an answered call must not be
+   * exported as "not returned", which would invent a failure nobody had. */
+  const callbackCells = lines.slice(1).map(line => parse(line)[15]);
+  check('the callback column is blank except on missed calls',
+    callbackCells.every(cell => cell === '' || cell === 'returned' || cell === 'not returned'),
+    callbackCells);
   check('calls export writes every matching call',
     lines.length - 1 === 17, { dataRows: lines.length - 1 });
   check('calls export formats durations as HH:MM:SS',

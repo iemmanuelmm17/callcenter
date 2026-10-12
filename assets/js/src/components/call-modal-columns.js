@@ -276,6 +276,53 @@ function buildCallColumns({slaSeconds, playingRef, onPlay, onFlow}) {
 
 
         /*
+         * CALLBACK
+         *
+         * Whether this missed call was returned, in the same words the
+         * Follow-ups card counts it in. The answer comes from the server
+         * (`callback`) because it needs the whole scoped row set — the return
+         * leg is a different call row, and a modal narrowed to one agent, one
+         * hour or one type cannot see it and would call a returned miss
+         * "not returned".
+         *
+         * The column exists because the card is only a count: opening the
+         * calls behind "2 missed calls not returned" used to show a table with
+         * nothing in it that said why the row was there, so the list could not
+         * be checked against the number. A null (not a missed call) prints a
+         * dash rather than "not returned" — an answered call was not ignored,
+         * and the outbound leg IS the return call.
+         */
+        {
+            title:
+                'Callback',
+
+            field:
+                'callback',
+
+            minWidth:
+                104,
+
+            formatter:
+                cell => {
+                    const value = cell.getValue();
+                    const badge = document.createElement('span');
+                    if (value !== true && value !== false) {
+                        badge.className = 'cm-callback is-na';
+                        badge.textContent = '—';
+                        badge.title = 'Only a missed call can be left unreturned';
+                        return badge;
+                    }
+                    badge.className = 'cm-callback ' + (value ? 'is-yes' : 'is-no');
+                    badge.textContent = value ? 'Returned' : 'Not returned';
+                    badge.title = value
+                        ? 'An outbound call to this customer number followed the miss'
+                        : 'No outbound call to this customer number after the miss';
+                    return badge;
+                }
+        },
+
+
+        /*
          * RECORDING
          *
          * The cell knows only whether the CDR points at a

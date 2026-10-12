@@ -574,6 +574,28 @@ console.log('\n== dashboard: wait bands and follow-ups ==');
   try { body2 = posted2 ? JSON.parse(posted2.body) : {}; } catch { body2 = {}; }
   check('the returned-call worklist drills with its own filter',
     body2.callbackState === 'unreturned', body2.callbackState);
+  /*
+   * ...and on the population the card counts. A call nobody returned is a
+   * MISSED call, so the drill used to ask for metric=inbound — answered
+   * inbound legs only — which emptied the row set before the callback filter
+   * ever ran, and the modal opened with "No calls found." under a card that
+   * said 2. Both callback rows must drill on misses.
+   */
+  check('the not-returned worklist drills on missed calls, not inbound ones',
+    body2.metric === 'missed', body2.metric);
+  await press(document, 'Escape');
+  await flush(4);
+  const returnedRow = [...document.querySelectorAll('.ops-link-row')]
+    .find(r => r.textContent.includes('Returned within 24h'));
+  if (returnedRow) {
+    await click(returnedRow);
+    await flush(8);
+  }
+  const posted3 = [...requested].reverse().find(r => r.endpoint === 'calls');
+  let body3 = {};
+  try { body3 = posted3 ? JSON.parse(posted3.body) : {}; } catch { body3 = {}; }
+  check('the returned list drills on the misses that were called back',
+    body3.callbackState === 'returned' && body3.metric === 'missed', body3);
   await press(document, 'Escape');
   await flush(4);
   check('the dashboard cards threw nothing', errors.length === before, errors.slice(before).join(' | '));
@@ -994,8 +1016,32 @@ console.log('\n== call modal: recording + sip flow (P7) ==');
     cols.map(c => c.title).join('|'));
   /* QA-11: the columns now live in call-modal-columns.js — pin the set. */
   check('the drill-down table keeps its full column set and order',
-    cols.map(c => c.title).join('|') === 'Date|Time|Type|From Name|From|Dialed|To|Talk|Ring|Reason|Total|Rec|SIP flow',
+    cols.map(c => c.title).join('|') === 'Date|Time|Type|From Name|From|Dialed|To|Talk|Ring|Reason|Total|Callback|Rec|SIP flow',
     cols.map(c => c.title).join('|'));
+  const cbCol = cols.find(c => c.title === 'Callback');
+  check('the Callback column is bound to the server flag', !!cbCol && cbCol.field === 'callback',
+    cbCol && cbCol.field);
+  /*
+   * The card is a count, so the list behind it has to show the state per row —
+   * otherwise "2 not returned" cannot be checked against anything. null must NOT
+   * render as "Not returned": that would print a failure on a call the desk
+   * answered.
+   */
+  if (cbCol) {
+    const badge = row => cbCol.formatter({ getValue: () => row });
+    const na = badge(null);
+    const no = badge(false);
+    const yes = badge(true);
+    check('the Callback column reads "Not returned" for an unreturned miss',
+      no.textContent === 'Not returned' && no.className.includes('is-no'), no.outerHTML);
+    check('the Callback column reads "Returned" for a returned miss',
+      yes.textContent === 'Returned' && yes.className.includes('is-yes'), yes.outerHTML);
+    check('the Callback column shows a dash, never "Not returned", on a non-miss row',
+      na.textContent === '—' && na.className.includes('is-na'), na.outerHTML);
+    /* SEC-9: a formatter must never hand Tabulator a string it will innerHTML. */
+    check('the Callback column returns an element, not markup in a string',
+      yes instanceof window.Element && na instanceof window.Element, typeof yes);
+  }
   check('the Rec column is bound to hasRecordingHint and the flow column to hasFlowHint',
     !!recCol && recCol.field === 'hasRecordingHint' && !!flowCol && flowCol.field === 'hasFlowHint',
     [recCol && recCol.field, flowCol && flowCol.field]);

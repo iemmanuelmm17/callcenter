@@ -585,15 +585,24 @@ function OverviewDashboard({loading, report, filters, inventory, inventoryReady,
       reportReady && links
         ? h('section', {className:'ops-card ops-links'},
             h('div', {className:'ops-label'}, 'Follow-ups', qHelp('Transfers: how often a call was handed to a different agent (a call routed through three agents counts as two hand-offs but one transferred call). Callbacks: missed calls an outbound call to the same number came after, within 24 hours — matched on the customer number, so a return call from a softphone counts. Repeat callers: the same number calling in twice or more.')),
+            /*
+             * Both rows drill into MISSED calls, not into inbound ones, and the
+             * difference is the whole card: a "not returned" call is by
+             * definition a call nobody answered, so it has no inbound-answered
+             * row to open. metric:'inbound' narrowed the list to answered
+             * inbound legs first, the callback filter then had no misses left to
+             * match, and the modal opened empty under a number that said two
+             * or three. The card counts misses, so the drill asks for misses.
+             */
             h('button', {type:'button', className:'ops-link-row', title: 'Open the calls that were not returned',
-              onClick: () => onMetric && onMetric('inbound', { callbackState: 'unreturned' })
+              onClick: () => onMetric && onMetric('missed', { callbackState: 'unreturned' })
             },
               h('span', {className:'ops-link-k'}, 'Missed calls not returned'),
               h('span', {className:'ops-link-v'}, fmtNum(links.callbacks?.unreturned || 0)),
               h('span', {className:'ops-link-h'}, (links.callbacks?.ratePct || 0) + '% of ' + fmtNum(links.callbacks?.missed || 0) + ' were')
             ),
             h('button', {type:'button', className:'ops-link-row', title: 'Open the returned calls',
-              onClick: () => onMetric && onMetric('inbound', { callbackState: 'returned' })
+              onClick: () => onMetric && onMetric('missed', { callbackState: 'returned' })
             },
               h('span', {className:'ops-link-k'}, 'Returned within 24h'),
               h('span', {className:'ops-link-v'}, fmtNum(links.callbacks?.returned || 0)),

@@ -3004,3 +3004,92 @@ PASS: zero client-supplied clientId/clientSecret references remain
 - `tests/harness/api/` — copies of the 5 patched endpoints
 - `tests/harness/run.php <api> <scenario>` — re-runnable: `php run.php queue.php supervisor`
 - `scripts/reconstruct_cradle.py` — the assertion-based cradle reconstruction (also regenerates the pre-patch baseline)
+
+# CHANGES — the "returned missed call" card and the list behind it (2026-10-12)
+
+**The report.** "The 'returned missed call' is either not computing correctly or
+the filter is not working: it shows something is not returned, and when you
+check on the modal, it doesn't show anything." Both halves were real, and they
+had different causes — one in the drill, one in the endpoint.
+
+## 1. The modal opened empty: the drill asked for a type that excludes misses
+
+`assets/js/src/components/overview.js` (Follow-ups card) opened its two callback
+rows with `onMetric('inbound', { callbackState })`. In `api/calls.php` the
+metric filter runs BEFORE the callback filter, and `metric=inbound` keeps only
+rows whose `callType()` is `inbound` — answered inbound legs. A call nobody
+returned is a MISS, and the outbound leg that returns one is an outbound row;
+neither survives that narrowing, so the intersection was empty **by
+construction**. The card said 2, the modal said "No calls found."
+
+The card counts missed calls, so the card now drills on `missed`. The count and
+the list are the same population, whatever the row set looks like after.
+
+## 2. A returned call was listed as "not returned": one side was computed twice
+
+`api/calls.php` built the returned set from the loaded + scoped rows
+(`$rowContext['returnedMisses']`, before any drill-down narrowing — the intent
+documented there) but re-derived the unreturned set with a SECOND
+`cdrCallbacks($calls)` over the ALREADY-narrowed rows. That answers a different
+question — "is there a return call in this subset" — so any drill that leaves
+the outbound leg out (a call type, an agent, an hour) turned a call the
+dashboard counted as returned into an unreturned one, and the card and the work
+list disagreed about that call. The flag on the row and the list beside it came
+from different passes.
+
+There is now ONE `cdrCallbacks()` pass per request, both of its sets are kept
+(`returnedMisses` / `unreturnedMisses`), and the filter, the per-row flag and
+the CSV read those same two maps. It is also cheaper: the second pass, over the
+narrowed rows, is gone.
+
+`filterCallsByCallback()` (includes/reporting/rows.php) states the contract in
+its docblock and enforces the one case that still matters — a root present in
+both sets is a returned miss, never a worklist item.
+
+## 3. `callbackOnly` matched nothing when the interaction root is a number
+
+The "callbacks only" worklist merged the two root-keyed sets with
+`array_merge()`. Both maps are keyed on the interaction root, and these exports
+key a call on a NUMERIC cdr id — a numeric string is an integer key to PHP, and
+`array_merge()` renumbers integer keys. The merged map became `0,1,2...`, every
+`isset()` on a real root missed, and the filter quietly returned nothing for a
+day that had calls in it. A union (`+`) preserves the keys; both sets are
+disjoint by construction so nothing is dropped. Same fix in `api/report.php`.
+
+## 4. What a row says about its own callback state
+
+`callsRow()`'s `callback` flag answered `false` for every row that was not a
+returned miss — including calls the desk actually answered, which read as "we
+never called this customer back". Only a missed leg can be left unreturned, so
+the flag is now `null` on every other row (`null` also stays the "not computed"
+answer for a plain list without the links context).
+
+The modal gained a **Callback** column that shows the same answer the card
+counted (`Returned` / `Not returned` / `—`), because the card is only a count:
+opening the calls behind it used to show nothing that explained why a row was
+there, which is what made the number impossible to check. The CSV export gained
+the matching `callback` column so the file and the table cannot drift apart.
+
+## Verification
+
+`node tests/run.mjs` — all suites pass (build, prod build, php lint, cdr
+fields, css coverage, ui audit, module budget, dead code, no cdn, vendor,
+deploy check, js smoke, api matrix, url policy, csv exports, cdr store/cache/
+memory/speed, outcome parity, report metrics, call links, portal).
+
+New negative control: the added checks fail against the pre-fix source, which is
+the only thing that makes them worth having.
+
+- `tests/php/call-links.mjs` §6 — for every metric the UI can pair with a
+  callback state, the rows are the card's own worklist
+  (`metric=missed&callbackState=unreturned` used to return the returned miss too);
+  the per-row flag agrees with the list; `metric=inbound` + a callback state is
+  pinned as honestly-empty so nobody re-reads it as a lost call.
+- `tests/php/call-links.mjs` §7 — a day whose roots are numeric: `callbackOnly`
+  finds both misses (before: `{"ids":[],"total":0}`), and the two states split
+  one miss each way.
+- `tests/js/smoke.mjs` — both Follow-ups rows drill with `metric=missed`
+  (before: `inbound`), and the Callback column renders all three states,
+  returning an element rather than markup (SEC-9).
+- `tests/php/export.mjs` — the export header carries `callback`, every row has a
+  cell for every header, and the column is only ever filled on missed calls.

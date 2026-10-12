@@ -398,6 +398,10 @@ export const FIXTURES = {
    * Two rows, because the Rec / SIP flow columns have to render BOTH states:
    * c1 points at a recording and a trace, c2 at neither. The field set is the
    * one callsRow() builds (api/calls.php).
+   *
+   * `callback` follows the same rule the server uses: only a missed call has a
+   * returned / not-returned state (c2), and every other row carries null so the
+   * Callback column prints a dash instead of claiming a failure (c1).
    */
   calls: {
     data: [
@@ -406,13 +410,13 @@ export const FIXTURES = {
         outcome: 'answered', ringing: 12, talking: 180, type: 'inbound', disconnectReason: 'Orig: Bye',
         origCallId: 'c1-orig', termCallId: 'c1-term', origUser: '8454259810', termUser: '6080',
         recordingCallId: 'c1-term', recordingUser: '6080', traceApi: '/ns-api/v2/sipflow?call=c1', servers: 'pbx.example',
-        hasRecordingHint: true, hasFlowHint: true },
+        hasRecordingHint: true, hasFlowHint: true, callback: null },
       { id: 'c2', startedAt: '2026-08-02T14:30:00Z[US/Eastern]', disconnectedAt: '2026-08-02T14:31:00Z[US/Eastern]',
         fromNumber: '8454259811', from: 'Bob', dialed: '8457620002', to: 'Main line', agent: '6080', agentName: 'Ada Lovelace',
         outcome: 'missed', ringing: 20, talking: 0, type: 'missed', disconnectReason: 'Orig: Bye',
         origCallId: 'c2-orig', termCallId: '', origUser: '8454259811', termUser: '6080',
         recordingCallId: '', recordingUser: '6080', traceApi: '', servers: '',
-        hasRecordingHint: false, hasFlowHint: false }
+        hasRecordingHint: false, hasFlowHint: false, callback: false }
     ],
     total: 2, page: 1, size: 25, last_page: 1
   },

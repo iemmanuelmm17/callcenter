@@ -635,6 +635,15 @@ function filterCallsByWait(array $calls, string $bucket = '', ?int $waitedOver =
  * "not returned", so filtering on the complement alone turned a two-row
  * worklist into the whole day. `unreturnedRoots` is the set of MISSED
  * conversations nobody called back - that, and only that, is the worklist.
+ *
+ * CONTRACT: `$returnedRoots` and `$unreturnedRoots` must come from the SAME
+ * cdrCallbacks() pass over the SAME row set the numbers being drilled are
+ * computed from. Two callers read this: the per-row flag and the worklist. If
+ * they are built from different sets - typically one pre-narrowing and one
+ * post - a call can be "returned" to the card and "not returned" in the list
+ * under it, which is worse than either answer on its own. The `returned` check
+ * below is what keeps a caller that gets that wrong from producing the
+ * contradiction: a miss present in both sets is a returned one.
  */
 function filterCallsByCallback(
     array $calls,
@@ -652,7 +661,7 @@ function filterCallsByCallback(
             $root = cdrRootKey($call, $legIndex);
             return $state === 'returned'
                 ? isset($returnedRoots[$root])
-                : isset($unreturnedRoots[$root]);
+                : (!isset($returnedRoots[$root]) && isset($unreturnedRoots[$root]));
         }
     ));
 }

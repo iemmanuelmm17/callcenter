@@ -203,7 +203,11 @@ if (
             $legIndexForCallback
         );
         if ($requestedCallbackState === '' && !empty($requested['callbackOnly'])) {
-            $callbackRoots = array_merge($links['returned'], $links['unreturned']);
+            /* Union, not array_merge(): both maps are keyed on the interaction
+             * root, and a numeric root is an integer key that array_merge
+             * renumbers - which would leave this isset() with no roots to
+             * match and the worklist empty. */
+            $callbackRoots = $links['returned'] + $links['unreturned'];
             $calls = array_values(array_filter(
                 $calls,
                 static fn(array $call): bool => isset($callbackRoots[cdrRootKey($call, $legIndexForCallback)])

@@ -571,6 +571,113 @@ if (ledger.status === 200) {
   const plainRow = (await callList({ callId: 'w6' })).body?.data?.[0];
   check('an unreturned miss is not flagged',
     plainRow && plainRow.callback === false, plainRow && plainRow.callback);
+
+  /*
+   * THE CARD AND THE LIST BEHIND IT MUST AGREE.
+   *
+   * The Overview's Follow-ups rows drill with a call-type metric as well as the
+   * callback state, and both halves of that used to break:
+   *
+   *   - the drill asked for metric=inbound, which narrowed the rows to ANSWERED
+   *     inbound legs before the callback filter ran. A not-returned call is a
+   *     miss, so the intersection is empty by construction: the modal opened on
+   *     "No calls found." under a card that said 2. (Fixed in the card: it
+   *     drills on misses now — tests/js/smoke.mjs pins that.)
+   *   - metric=missed kept the misses but dropped w8, the outbound return leg,
+   *     and `unreturned` was recomputed over those narrowed rows while
+   *     `returned` came from the full set. w5 therefore looked unreturned: the
+   *     card and the list disagreed about one call, in the direction that
+   *     invents a failure nobody had.
+   *
+   * Both sets come from the one pre-narrowing pass, so whatever metric is paired
+   * with the state, the worklist is the card's own answer.
+   */
+  for (const [state, expected] of [['returned', ['w5']], ['unreturned', ['w6', 'w7']]]) {
+    for (const metric of ['total', 'missed', 'incoming']) {
+      const res = await callList({ metric, callbackState: state });
+      const ids = (res.body?.data ?? []).map(r => r.id).sort();
+      check(`metric=${metric} + callbackState=${state} is the card's ${state} worklist`,
+        ids.join(',') === expected.join(','), { ids, expected, status: res.status });
+    }
+  }
+  /*
+   * The contradictory pair, recorded rather than fixed: metric=inbound selects
+   * answered legs, and no answered leg is ever in a not-returned worklist, so 0
+   * rows is the honest answer. A card must never send it — which is why the
+   * smoke test pins the drill's metric.
+   */
+  check('a type metric that excludes misses is honestly empty, not silently wrong',
+    (await callList({ metric: 'inbound', callbackState: 'unreturned' })).body?.total === 0,
+    (await callList({ metric: 'inbound', callbackState: 'unreturned' })).body?.total);
+
+  /*
+   * And the flag on each row says the same thing as the list it came from —
+   * a returned miss stays "returned" in a view that does not list its return
+   * leg, while a call that is not a miss has no state to report (null, so the
+   * UI prints a dash instead of "not returned" beside an answered call).
+   */
+  const missedView = (await callList({ metric: 'missed' })).body?.data ?? [];
+  check('a returned miss is still flagged returned inside the missed view',
+    missedView.find(r => r.id === 'w5')?.callback === true, missedView.map(r => [r.id, r.callback]));
+  const allView = (await callList({})).body?.data ?? [];
+  check('an answered call carries no callback state rather than a false one',
+    allView.find(r => r.id === 'w2')?.callback === null, allView.map(r => [r.id, r.callback]));
+  check('a CSV of the day keeps one cell per header for the callback column too',
+    allView.length > 0 && allView.every(r => 'callback' in r), allView.map(r => r.callback));
+}
+
+/* ================================== 7. callbackOnly over roots that look numeric */
+
+console.log('\n== callbackOnly when the interaction root is a number ==');
+
+/*
+ * These exports key a call on a NUMERIC cdr id, so an interaction root is a
+ * numeric string — which PHP stores as an integer key. The two worklists were
+ * merged with array_merge(), and array_merge renumbers integer keys: the merged
+ * map became 0,1,2..., every isset() on a real root missed, and "callbacks only"
+ * answered with an empty list for a day that had two. The fix is a union
+ * (`+`), which preserves keys; this fixture is built specifically so that a
+ * re-merge anywhere in this path fails the test instead of quietly passing.
+ */
+await harness.seedPbx('fetchCdrs', [
+  { id: '9001', 'call-orig-call-id': '9001', 'call-direction': 1,
+    'call-start-datetime': '2026-08-11T13:00:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-11T13:00:03Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-orig-caller-id': '5551111111', 'call-orig-from-user': '5551111111' },
+  { id: '9002', 'call-orig-call-id': '9002', 'call-direction': 1,
+    'call-start-datetime': '2026-08-11T14:00:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-11T14:00:04Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-orig-caller-id': '5551111112', 'call-orig-from-user': '5551111112' },
+  { id: '9003', 'call-orig-call-id': '9003', 'call-direction': 0,
+    'call-start-datetime': '2026-08-11T13:20:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-11T13:20:05Z[US/Eastern]', 'call-orig-user': '6080',
+    'call-orig-to-user': '5551111111', 'call-talking-duration-seconds': 60 }
+]);
+
+const numList = async (extra) => await harness.request('calls.php', {
+  body: Object.assign({ start: '2026-08-11', end: '2026-08-11', metric: 'total', perPage: 100 }, extra),
+  user: USERS.office_manager,
+});
+const numDay = await harness.request('report.php', {
+  body: { start: '2026-08-11', end: '2026-08-11', skipPrevious: true, hours: 'all' },
+  user: USERS.office_manager,
+});
+const numLinks = numDay.body?.links?.callbacks;
+check('the numeric-id day has two misses, one returned',
+  numLinks?.missed === 2 && numLinks?.returned === 1 && numLinks?.unreturned === 1, numLinks);
+{
+  const both = await numList({ callbackOnly: true });
+  const bothIds = (both.body?.data ?? []).map(r => r.id).sort();
+  check('callbackOnly finds both misses even though their roots are numbers',
+    bothIds.join(',') === '9001,9002', { ids: bothIds, total: both.body?.total });
+  const unreturned = await numList({ callbackState: 'unreturned' });
+  check('and the unreturned worklist is the miss nobody called back',
+    (unreturned.body?.data ?? []).map(r => r.id).join(',') === '9002',
+    (unreturned.body?.data ?? []).map(r => r.id));
+  const returned = await numList({ callbackState: 'returned' });
+  check('with the returned one on the other side',
+    (returned.body?.data ?? []).map(r => r.id).join(',') === '9001',
+    (returned.body?.data ?? []).map(r => r.id));
 }
 
 console.log('');

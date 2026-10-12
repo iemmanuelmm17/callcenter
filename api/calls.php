@@ -115,11 +115,22 @@ function callsRow(array $c, array $context = []): array
         'transfers' =>
             isset($context['legIndex']) ? cdrTransferCount($c, $context['legIndex'], $outcomeArgs[0]) : null,
 
-        /* True when this missed call's conversation was returned inside 24 h;
-         * null when the caller asked for a plain list without the links
-         * context, so a client can tell "not returned" from "not computed". */
+        /*
+         * True when this missed call's conversation was returned inside 24 h,
+         * false when it was not, and null when the question does not apply.
+         *
+         * It only applies to a missed leg: an answered call was not "left
+         * unreturned" and an outbound leg is the return call itself, so the
+         * flag used to answer `false` for both and read as "nobody called this
+         * customer back" on calls the desk actually took. Null is also what a
+         * caller asking for a plain list without the links context gets, so a
+         * client can still tell "not returned" from "not computed".
+         */
         'callback' => (static function (array $call) use ($context): ?bool {
             if (!isset($context['returnedMisses'], $context['legIndex'])) {
+                return null;
+            }
+            if (callType($call) !== 'missed') {
                 return null;
             }
             $root = cdrRootKey($call, $context['legIndex']);
@@ -415,9 +426,19 @@ try {
      * Cost: one leg index and one callback index per request, both linear in the
      * rows in scope, shared by every row the page returns and by the CSV export.
      */
+    $rowCallbacks = cdrCallbacks($calls, 86400);
     $rowContext = [
         'legIndex' => cdrLegIndex($calls),
-        'returnedMisses' => cdrCallbacks($calls, 86400)['returned'],
+        /*
+         * ONE callback pass over the loaded + scoped rows, and BOTH of its
+         * sets. The per-row `callback` flag and the callbackState filter at the
+         * bottom of this file read these same two maps: they are the answer the
+         * Follow-ups card published, and a filter that re-derived "unreturned"
+         * from the already-narrowed rows would disagree with the number the
+         * reader just clicked on.
+         */
+        'returnedMisses' => $rowCallbacks['returned'],
+        'unreturnedMisses' => $rowCallbacks['unreturned'],
         'directory' => $directory,
         'queueIds' => $queueIdsAll,
     ];
@@ -656,19 +677,33 @@ try {
     }
 
     if ($callbackOnly || $callbackState !== '') {
-        /* The links index is over the loaded, scoped set (built above), so this
-         * still finds the returned/unreturned calls when combined with another
-         * filter. */
-        $allCallbacks = cdrCallbacks($calls, 86400);
+        /*
+         * Both sides come from the one pre-narrowing pass built above
+         * (`$rowContext`), and that symmetry is the point. Recomputing
+         * `unreturned` over the already-narrowed rows answers a different
+         * question — "is there a return call IN THIS SUBSET" — so any drill
+         * that leaves the outbound leg out (a call-type metric, an agent, an
+         * hour) turned a call the dashboard counted as returned into an
+         * unreturned one, and the card and the list disagreed about it.
+         */
         $calls = filterCallsByCallback(
             $calls,
             $callbackState,
             $rowContext['returnedMisses'],
-            $allCallbacks['unreturned'],
+            $rowContext['unreturnedMisses'],
             $rowContext['legIndex']
         );
         if ($callbackOnly && $callbackState === '') {
-            $callbackRoots = array_merge($rowContext['returnedMisses'], $allCallbacks['unreturned']);
+            /*
+             * A union, not array_merge(). Both sets are keyed on the
+             * interaction root, and a root that looks like a number (a numeric
+             * CDR id, which is what these exports carry) is an integer key to
+             * PHP: array_merge renumbered the whole worklist to 0,1,2... and
+             * the isset() below then matched nothing, so "callbacks only"
+             * quietly returned an empty list. The two sets are disjoint by
+             * construction, so `+` drops nothing.
+             */
+            $callbackRoots = $rowContext['returnedMisses'] + $rowContext['unreturnedMisses'];
             $calls = array_values(array_filter(
                 $calls,
                 static fn(array $call): bool => isset($callbackRoots[cdrRootKey($call, $rowContext['legIndex'])])
@@ -830,7 +865,7 @@ try {
 
         csvBegin('calls-' . $metric . '-' . ($filters['start'] ?? '') . '-' . ($filters['end'] ?? '') . '.csv');
         $out = csvOpen();
-        csvRow($out, ['date', 'time', 'type', 'outcome', 'from_name', 'from', 'dialed', 'to', 'agent', 'talk', 'wait', 'hold', 'reason', 'total', 'transfers', 'recording', 'sip_flow']);
+        csvRow($out, ['date', 'time', 'type', 'outcome', 'from_name', 'from', 'dialed', 'to', 'agent', 'talk', 'wait', 'hold', 'reason', 'total', 'transfers', 'callback', 'recording', 'sip_flow']);
 
         $written = 0;
         foreach ($calls as $c) {
@@ -858,6 +893,13 @@ try {
                 csvDuration($r['total']),
                 /* Hand-offs inside this call's conversation. */
                 $r['transfers'] === null ? '' : (string)$r['transfers'],
+                /*
+                 * The callback state, in the words the card uses. Blank on a
+                 * call that is not a missed one: only a miss can be left
+                 * unreturned, and an empty cell is honest where "no" would be
+                 * a claim about a call we actually answered.
+                 */
+                $r['callback'] === null ? '' : ($r['callback'] ? 'returned' : 'not returned'),
                 /*
                  * The two columns the table gained. They say whether a
                  * recording / sip flow EXISTS for the call, not whether one

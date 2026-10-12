@@ -3131,6 +3131,36 @@ html[data-theme="light"] .ops-rank-tab.is-on {
   background: color-mix(in srgb, var(--color-cyan-400, #22d3ee) 14%, transparent);
 }
 
+/* The callback badge in the drill-down table: the Follow-ups card's answer on
+ * the row it was counted from. Same palette as the dashboard's own good/bad
+ * deltas, so "Not returned" reads as the failure it is. */
+.cm-callback {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.cm-callback.is-yes {
+  color: var(--good, #35D0A0);
+  border-color: color-mix(in srgb, var(--good, #35D0A0) 45%, transparent);
+  background: color-mix(in srgb, var(--good, #35D0A0) 12%, transparent);
+}
+.cm-callback.is-no {
+  color: var(--bad, #F0555A);
+  border-color: color-mix(in srgb, var(--bad, #F0555A) 45%, transparent);
+  background: color-mix(in srgb, var(--bad, #F0555A) 12%, transparent);
+}
+.cm-callback.is-na {
+  color: var(--color-slate-500, #64748b);
+  border-color: var(--color-slate-700, #334155);
+  background: transparent;
+  font-weight: 400;
+}
+
 .cm-tray {
   flex-shrink: 0;
   border-top: 1px solid var(--color-slate-700, #334155);
