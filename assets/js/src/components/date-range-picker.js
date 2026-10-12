@@ -24,7 +24,11 @@ function DateRangePicker({start, end, onChange, disabled, maxRangeDays}) {
     const [viewDate, setViewDate] = useState(
         start
             ? new Date(start + 'T00:00:00')
-            : new Date()
+            /* Open on the desk's current month, not the browser's: `today` is
+             * the date in the reporting timezone (finding C7), and a picker that
+             * opens on a different month than the field it is filled with invites
+             * the reader to click the wrong day. */
+            : new Date(today + 'T00:00:00')
     );
 
     const [selecting, setSelecting] = useState('start');
@@ -701,10 +705,10 @@ function DateRangePicker({start, end, onChange, disabled, maxRangeDays}) {
                             /*
                              * Today
                              */
-                            const todayValue =
-                                dateString(
-                                    new Date()
-                                );
+                            /* The desk's today, which is the day the report
+                             * beside this picker is about (finding C7) - not the
+                             * date the reader's machine thinks it is. */
+                            const todayValue = today;
 
                             /*
                              * ---------------------------------

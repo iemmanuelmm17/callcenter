@@ -79,15 +79,77 @@ function hoursHaveOpenDay(hours) {
   });
 }
 
+/**
+ * The desks this app is usually staffed in, with the IANA id the server stores.
+ *
+ * A curated list rather than all 595 zones, and rather than a free-text box:
+ * the value decides which calendar DAY a call falls on, so a typo is not a
+ * cosmetic problem - and `US/Eastern`/`America/New_York` are the same zone
+ * spelled two ways, which is enough to split a tenant's cache files in two.
+ * The ids are exactly what PHP's DateTimeZone and Intl both accept; the server
+ * validates again on save.
+ */
+const TIMEZONES = [
+  ['US/Eastern', 'Eastern — New York (the default)'],
+  ['US/Central', 'Central — Chicago'],
+  ['US/Mountain', 'Mountain — Denver'],
+  ['America/Phoenix', 'Arizona — Phoenix (no DST)'],
+  ['US/Pacific', 'Pacific — Los Angeles'],
+  ['US/Alaska', 'Alaska — Anchorage'],
+  ['Pacific/Honolulu', 'Hawaii — Honolulu'],
+  ['America/Toronto', 'Eastern — Toronto'],
+  ['America/Mexico_City', 'Central — Mexico City'],
+  ['America/Bogota', 'Colombia — Bogotá (no DST)'],
+  ['America/Lima', 'Peru — Lima (no DST)'],
+  ['America/Santiago', 'Chile — Santiago'],
+  ['America/Sao_Paulo', 'Brazil — São Paulo'],
+  ['America/Argentina/Buenos_Aires', 'Argentina — Buenos Aires'],
+  ['UTC', 'UTC (no local time at all)'],
+  ['Europe/London', 'UK — London'],
+  ['Europe/Madrid', 'Spain — Madrid'],
+  ['Europe/Paris', 'France — Paris'],
+  ['Europe/Berlin', 'Germany — Berlin'],
+  ['Europe/Athens', 'Greece — Athens'],
+  ['Africa/Lagos', 'Nigeria — Lagos'],
+  ['Africa/Johannesburg', 'South Africa — Johannesburg'],
+  ['Asia/Dubai', 'UAE — Dubai (no DST)'],
+  ['Asia/Karachi', 'Pakistan — Karachi'],
+  ['Asia/Kolkata', 'India — Kolkata'],
+  ['Asia/Dhaka', 'Bangladesh — Dhaka'],
+  ['Asia/Bangkok', 'Thailand — Bangkok'],
+  ['Asia/Jakarta', 'Indonesia — Jakarta'],
+  ['Asia/Kuala_Lumpur', 'Malaysia — Kuala Lumpur'],
+  ['Asia/Singapore', 'Singapore'],
+  ['Asia/Manila', 'Philippines — Manila'],
+  ['Asia/Hong_Kong', 'Hong Kong SAR'],
+  ['Asia/Shanghai', 'China — Shanghai'],
+  ['Asia/Taipei', 'Taipei'],
+  ['Asia/Seoul', 'Korea — Seoul'],
+  ['Asia/Tokyo', 'Japan — Tokyo'],
+  ['Australia/Brisbane', 'Australia — Brisbane (no DST)'],
+  ['Australia/Sydney', 'Australia — Sydney'],
+  ['Pacific/Auckland', 'New Zealand — Auckland']
+];
+
+/** What a tenant that has never set one is measured in. */
+const DEFAULT_TIMEZONE_ID = 'US/Eastern';
+
 function ServiceSettings({value, onChange, canSave, agents, queues}) {
   const hours = normalizeHours(value && value.businessHours);
   const queueSla = (value && value.queueSla) || {};
   const roster = Array.isArray(value && value.roster) ? value.roster : [];
+  /* '' until the settings have been read: the dialog then shows the zone the
+   * server actually resolves to, which is the same answer it gives the reports. */
+  const timezone = (value && value.timezone) || '';
+  const zone = timezone || DEFAULT_TIMEZONE_ID;
 
   const patch = next => onChange({
     businessHours: hours,
     queueSla,
     roster,
+    /* Not every caller of patch() names every concern, and the save payload is
+     * built from this state: a dropped key here is a silently reverted setting. */
+    timezone,
     ...next
   });
 
@@ -199,7 +261,7 @@ function ServiceSettings({value, onChange, canSave, agents, queues}) {
     ),
     h('p', { className: 'set-note' },
       'A shift that closes before it opens (22:00 to 06:00) is read as crossing midnight. ' +
-      'Calls are matched on their start time, in US/Eastern.'),
+      'Calls are matched on their start time, in ' + zone + '.'),
     h('div', { className: 'set-holidays' },
       h('span', { className: 'set-hint' }, 'Closed on'),
       ...(hours.holidays.length === 0
@@ -372,12 +434,48 @@ function ServiceSettings({value, onChange, canSave, agents, queues}) {
       : null
   );
 
+  /*
+   * --------------------------------------------------------------- clock card
+   */
+  const zoneOptions = (TIMEZONES.some(([id]) => id === zone)
+    ? []
+    /* A zone the tenant stores that this list does not know (an older build, a
+     * hand-edited settings file) is still shown as itself: dropping it from the
+     * select would make the next save write something else over it. */
+    : [h('option', { key: zone, value: zone }, zone + ' (stored)')]).concat(
+      TIMEZONES.map(([id, label]) => h('option', { key: id, value: id }, label))
+    );
+
+  const clockCard = h('div', { className: 'set-card' },
+    h('div', { className: 'set-card-head' },
+      h('span', null, 'Timezone'),
+      h('span', { className: 'set-hint' },
+        'The zone the desk is measured in. It decides which date a call belongs to, ' +
+        'so it moves the day, the hour chart, the opening hours above and "Today".')
+    ),
+    h('div', { className: 'set-holidays' },
+      h('span', { className: 'set-hint' }, 'Reporting timezone'),
+      h('select', {
+        className: input,
+        value: zone,
+        disabled,
+        'aria-label': 'Reporting timezone',
+        onChange: e => patch({ timezone: e.target.value })
+      }, ...zoneOptions)
+    ),
+    h('p', { className: 'set-note' },
+      'A day of calls is cached per timezone, on purpose: switching this re-fetches ' +
+      'the range from the PBX instead of showing you the old zone\'s boundaries under ' +
+      'the new name. Numbers that were computed before the change stay where they are.')
+  );
+
   return h('div', { className: 'set-service' },
     h('h3', { className: 'set-section' }, 'Service desk'),
+    clockCard,
     hoursCard,
     targetsCard,
     rosterCard
   );
 }
 
-export { ServiceSettings, normalizeHours, defaultBusinessHours, hoursHaveOpenDay, DAYS };
+export { ServiceSettings, normalizeHours, defaultBusinessHours, hoursHaveOpenDay, DAYS, TIMEZONES, DEFAULT_TIMEZONE_ID };

@@ -15,6 +15,22 @@ function domainSettingsFile(string $domain): string {
 
 function defaultDomainSettings(): array {
     return [
+        /*
+         * The zone the desk's day is measured in (review, finding C7).
+         *
+         * Every date in this app is a wall-clock date in THIS zone: the day a
+         * CDR belongs to, the hour buckets, the opening-hours calendar below,
+         * the "Today" the filter bar opens with. DEFAULT_TIMEZONE in
+         * includes/config.php is the deployment-wide fallback; a desk staffed
+         * in another region used to need a config edit and a redeploy to change
+         * it, and until then its day BOUNDARIES - not just its labels - followed
+         * New York.
+         *
+         * Changing it re-fetches the day cache on purpose: the zone is part of
+         * every cache filename, so a day's rows are never read under the wrong
+         * date. Default is deliberately the value every install has always had.
+         */
+        'timezone' => 'US/Eastern',
         'slaSeconds' => 20,
         'slaPct' => 80.0,
         'missedPct' => 20.0,
@@ -55,9 +71,10 @@ function defaultDomainSettings(): array {
          * in Settings rather than something that arrives with a deploy. Once it
          * is on, the report filter defaults to `business`.
          *
-         * The calendar is expressed in the desk's own timezone (APP_TZ,
-         * US/Eastern) because that is how CDR timestamps are resolved
-         * everywhere else in the reporting layer.
+         * The calendar is expressed in the desk's own timezone (the `timezone`
+         * setting above, US/Eastern until a manager says otherwise) because
+         * that is how CDR timestamps are resolved everywhere else in the
+         * reporting layer. An 08:00 opening means nothing without it.
          */
         'businessHours' => [
             'enabled' => false,
@@ -309,6 +326,21 @@ function saveDomainSettings(string $domain, array $in): array {
      * rather than 1.
      */
     $cur['topAgentMinCalls'] = max(0, min(10000, (int)$pick('topAgentMinCalls', 20)));
+
+    /*
+     * The desk's timezone (finding C7), validated rather than clamped: an id
+     * the runtime does not know is dropped silently by every date helper
+     * downstream, so the honest answer here is the deployment default and a
+     * Settings screen that re-reads what was actually stored. Like $pick, an
+     * OMITTED key keeps the stored value - the thresholds dialog saves without
+     * mentioning the calendar or the roster, and it must not reset the clock
+     * either.
+     */
+    $timezone = normalizeTimezoneName((string)$pick('timezone', ''));
+    if ($timezone === '') {
+        $timezone = normalizeTimezoneName(defined('DEFAULT_TIMEZONE') ? DEFAULT_TIMEZONE : 'US/Eastern');
+    }
+    $cur['timezone'] = $timezone !== '' ? $timezone : 'US/Eastern';
 
     /*
      * Opening hours. The $pick rule above (a missing key keeps the stored

@@ -215,9 +215,22 @@ console.log('\n== service settings: opening hours, targets, roster ==');
   check('the service cards live in the dialog body, not the footer',
     !!scroll && !!scroll.querySelector('.set-service') && !foot.querySelector('.set-service'),
     'inBody=' + !!scroll?.querySelector('.set-service') + ' inFooter=' + !!foot?.querySelector('.set-service'));
-  check('the body stacks all three service cards',
-    scroll.querySelectorAll('.set-service > .set-card').length === 3,
+  check('the body stacks all four service cards',
+    scroll.querySelectorAll('.set-service > .set-card').length === 4,
     scroll.querySelectorAll('.set-service > .set-card').length);
+  /*
+   * C7: the timezone is a setting, not a config edit, and it sits beside the
+   * calendar it is the clock of. The dialog must show what is stored (not its
+   * own idea of the default) and send it back on save.
+   */
+  const zoneSelect = scroll.querySelector('.set-service select[aria-label="Reporting timezone"]');
+  check('the dialog offers the desk timezone beside the calendar', !!zoneSelect,
+    zoneSelect && zoneSelect.className);
+  check('and it shows the zone the server stored',
+    !!zoneSelect && zoneSelect.value === 'US/Eastern', zoneSelect && zoneSelect.value);
+  check('the zone list is a choice of real zones, not a free-text box',
+    !!zoneSelect && [...zoneSelect.options].some(o => o.value === 'Asia/Manila')
+      && [...zoneSelect.options].length > 20, zoneSelect && zoneSelect.options.length);
   check('the per-queue target rows come from the queue list',
     document.querySelectorAll('.set-target-row').length >= 1,
     document.querySelectorAll('.set-target-row').length);
@@ -249,6 +262,8 @@ console.log('\n== service settings: opening hours, targets, roster ==');
   check('saving posts the service-desk block with the thresholds',
     posted !== undefined && body.businessHours !== undefined && body.queueSla !== undefined
       && body.roster !== undefined, posted ? posted.body : 'no POST');
+  check('the timezone rides in the same payload (one Save, one write)',
+    posted !== undefined && body.timezone === 'US/Eastern', body.timezone);
   check("the stepped queue target is in the payload (15 -> 16)",
     Number(body.queueSla && body.queueSla['700']) === 16, JSON.stringify(body.queueSla));
   check('the roster row is in the payload',
@@ -907,6 +922,80 @@ console.log('\n== drill-down filters match the clicked item (P7) ==');
     check('compare drill scopes to the clicked agent', Array.isArray(body.agents) && body.agents.length === 1, body.agents);
     check('compare drill keeps a date range', !!body.start && !!body.end, [body.start, body.end]);
     await closeModal();
+  }
+
+  /*
+   * 6 — C1: a scope chosen in the FILTER BAR, not by the card. The sentiment and
+   * outcome selects narrow every figure on the dashboard, so the list a card
+   * opens has to be narrowed by the same thing (api/calls.php used not to read
+   * `sentiment` at all) and, above all, say so — a subset that looks like the
+   * whole set is how a wrong number survives.
+   */
+  requested.length = 0;
+  await goTo('Dashboard');
+  await flush(12);
+  const barSelect = title => [...document.querySelectorAll('select')]
+    .find(sel => (sel.getAttribute('title') || '').startsWith(title));
+  const sentimentSelect = barSelect('Scope every figure');
+  const outcomeSelect = barSelect('Filter by how the call ended');
+  check('the filter bar offers a sentiment and an outcome scope',
+    !!sentimentSelect && !!outcomeSelect, [!!sentimentSelect, !!outcomeSelect]);
+  if (sentimentSelect) {
+    await act(async () => {
+      sentimentSelect.value = 'negative';
+      sentimentSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
+    });
+    await flush(12);
+  }
+  if (outcomeSelect) {
+    await act(async () => {
+      outcomeSelect.value = 'abandoned';
+      outcomeSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
+    });
+    await flush(12);
+  }
+  requested.length = 0;
+  const scopedKpi = document.querySelector('.ops-total-n');
+  check('a KPI is clickable under the bar scope', !!scopedKpi);
+  if (scopedKpi) {
+    await click(scopedKpi);
+    await flush(10);
+    const body = JSON.parse(bodyOf(lastCall()) || '{}');
+    check('the drill is asked for the sentiment the bar holds',
+      body.sentiment === 'negative', body.sentiment);
+    check('and the outcome', body.outcome === 'abandoned', body.outcome);
+    const chips = [...(modalEl()?.querySelectorAll('.call-modal-chip') ?? [])]
+      .map(chip => chip.textContent || '');
+    check('the list says it is showing negative-only calls',
+      chips.some(text => /Sentiment.*negative/.test(text)), chips);
+    check('and which outcome it narrowed to',
+      chips.some(text => /Outcome.*abandoned/.test(text)), chips);
+    /* The CSV is the same request without paging, so it must not lose the scope
+     * the table on screen has. */
+    requested.length = 0;
+    const modalExport = [...(modalEl() || document).querySelectorAll('button')]
+      .find(b => /^Export CSV$/.test((b.textContent || '').trim()));
+    check('the scoped drill can be exported', !!modalExport);
+    if (modalExport) {
+      await click(modalExport);
+      await flush(10);
+      const exported = requested.find(r => r.endpoint === 'calls' && String(r.body || '').includes('"export":true'));
+      check('the export carries the sentiment and the outcome too',
+        !!exported && /\"sentiment\":\"negative\"/.test(String(exported.body))
+          && /\"outcome\":\"abandoned\"/.test(String(exported.body)),
+        exported && String(exported.body).slice(0, 240));
+    }
+    await closeModal();
+  }
+  /* Put the bar back, for the suites that follow in this same harness. */
+  if (sentimentSelect) {
+    await act(async () => {
+      sentimentSelect.value = '';
+      outcomeSelect && (outcomeSelect.value = '');
+      sentimentSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
+      outcomeSelect && outcomeSelect.dispatchEvent(new window.Event('change', { bubbles: true }));
+    });
+    await flush(10);
   }
 
   check('drill-down filter paths threw nothing', errors.length === 0, errors.slice(0, 2));

@@ -4,7 +4,7 @@
  * tools/split-js-file.mjs. The body below is byte-identical to the
  * original source — the move is verified by declaration hash. */
 
-import { rangeDateTimes } from './time.js';
+import { applyServerTimezone, rangeDateTimes } from './time.js';
 
 let authExpiredHandler = null;
 
@@ -99,6 +99,19 @@ const api = async (path, body = null) => {
         );
 
     }
+
+    /*
+     * The desk's clock travels with the data (review, finding C7): every report
+     * payload says which timezone its day boundaries were cut in, and the client
+     * adopts it, so a tenant that moved from New York to Manila stops being
+     * shown yesterday's numbers at 09:00 local. An endpoint that does not answer
+     * a question about time says nothing, and changes nothing.
+     *
+     * It happens here rather than in each screen because this is the one place a
+     * response can be seen: a screen that forgot to re-apply the zone would
+     * otherwise drift back to the browser's clock one click later.
+     */
+    if (json && typeof json.timezone === 'string') applyServerTimezone(json.timezone);
 
     if (
         json &&

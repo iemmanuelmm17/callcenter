@@ -9,6 +9,7 @@ import { ServiceSettings, normalizeHours, defaultBusinessHours, hoursHaveOpenDay
 import { api } from '../lib/api.js';
 import { h, useEffect, useEscape, useState } from '../lib/react.js';
 import { writeSlaSeconds } from '../lib/sla.js';
+import { applyServerTimezone } from '../lib/time.js';
 
 function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClose, onSaved, onNotify}) {
   useEscape(true, onClose);
@@ -37,7 +38,8 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
   const [service, setService] = useState(() => ({
     businessHours: defaultBusinessHours(),
     queueSla: {},
-    roster: []
+    roster: [],
+    timezone: ''
   }));
   /* The lists the editors need (agents, queues) come with the filter payload
    * every role already fetches on load. */
@@ -49,7 +51,8 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
       setService({
         businessHours: normalizeHours(d.businessHours),
         queueSla: (d.queueSla && typeof d.queueSla === 'object') ? d.queueSla : {},
-        roster: Array.isArray(d.roster) ? d.roster : []
+        roster: Array.isArray(d.roster) ? d.roster : [],
+        timezone: typeof d.timezone === 'string' ? d.timezone : ''
       });
       setForm({
         slaSeconds: Number(d.slaSeconds || DEFAULTS.slaSeconds),
@@ -143,7 +146,11 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
          */
         businessHours: service.businessHours,
         queueSla: service.queueSla,
-        roster: service.roster
+        roster: service.roster,
+        /* An empty string leaves the stored zone alone (the server keeps the
+         * current value for any key a payload omits), so a dialog that has not
+         * finished loading cannot blank the desk's clock. */
+        timezone: service.timezone
       };
       if (payload.businessHours && payload.businessHours.enabled && !hoursHaveOpenDay(payload.businessHours)) {
         throw new Error('Opening hours need at least one open day before they can be switched on.');
@@ -151,6 +158,12 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
       const saved = await api('settings', payload);
       const d = saved && saved.data ? saved.data : saved;
       onSlaChange(writeSlaSeconds(d.slaSeconds));
+      /*
+       * Re-seat the client clock with what the server STORED (it may have
+       * refused an unusable id) so "Today" in the filter bar and the day the
+       * next click asks for are the new zone's, without a reload.
+       */
+      if (d && d.timezone) applyServerTimezone(d.timezone);
       if (onSaved) onSaved(d);
       /*
        * Warn when the server did not echo back the top-agent keys: the

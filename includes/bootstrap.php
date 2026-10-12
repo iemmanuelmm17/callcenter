@@ -4,7 +4,14 @@ declare(strict_types=1);
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/security.php';
 require_once __DIR__ . '/export.php';
+require_once __DIR__ . '/timezone.php';
+/*
+ * The process default. What a REPORT is measured in is a different question and
+ * has its own answer: see includes/timezone.php, where the desk's own timezone
+ * (the per-domain `timezone` setting, review finding C7) is resolved.
+ */
 date_default_timezone_set(DEFAULT_TIMEZONE);
+
 foreach ([CACHE_DIR, LOG_DIR] as $directory) {
     if (!is_dir($directory) && !@mkdir($directory, 0770, true) && !is_dir($directory)) {
         error_log("Call reporting dashboard cannot create {$directory}");

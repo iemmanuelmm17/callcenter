@@ -23,14 +23,30 @@ declare(strict_types=1);
  * is what the endpoints and the other includes require.
  */
 
-function isClosedRange(string $end): bool { return $end < (new DateTimeImmutable('today', new DateTimeZone(DEFAULT_TIMEZONE)))->format('Y-m-d'); }
+    /*
+     * 'today' in the DESK's zone (reportingTimezoneName(), which honours the
+     * per-domain `timezone` setting - finding C7). A day is "closed" once the
+     * tenant's date has moved past it; using the deployment default here made a
+     * tenant west/east of US/Eastern re-fetch yesterday as an open day for
+     * several hours, or freeze today as closed before its day had ended.
+     */
+    function isClosedRange(string $end): bool { return $end < (new DateTimeImmutable('today', reportingTimezone()))->format('Y-m-d'); }
 
 /**
  * The JSON day-cache filename. Kept (with its exact hash input) because the
  * deployed cache/ directories are full of these files and the CLI can import
  * them into the store.
  */
-function cdrDayCacheFile(string $domain, string $day): string { return CACHE_DIR . '/cdr-day-' . hash('sha256', implode('|', ['v7', $domain, $day, implode(',', array_keys(PBX_SERVERS))])) . '.json'; }
+/*
+ * The day cache is keyed on the desk's timezone (finding C7), on both drivers:
+ * the SQLite store carries `tz` in its primary key (see cdr_store.php) and this
+ * filename hashes it in. A day is a wall-clock window, so a day fetched for
+ * US/Eastern is not the day an Asia/Manila desk means - and reusing it would
+ * show a tenant the wrong hours of a day, in silence. Like the `v7` in the
+ * hash, a zone that changes costs one re-fetch of the days in the range, which
+ * is the cheaper failure by a wide margin.
+ */
+function cdrDayCacheFile(string $domain, string $day): string { return CACHE_DIR . '/cdr-day-' . hash('sha256', implode('|', ['v7', $domain, $day, reportingTimezoneName(), implode(',', array_keys(PBX_SERVERS))])) . '.json'; }
 
 function cacheFile(string $domain, string $day): string { return cdrDayCacheFile($domain, $day); }
 
@@ -476,7 +492,6 @@ function cdrDayWaitForFetcher(array $user, string $day, int $waitMs = 2000): ?ar
 function loadRawCdrs(array $user, array $filters): array {
     $client = new PbxClient($_SESSION['token']);
     $merged = [];
-    $tzName = defined('DEFAULT_TIMEZONE') ? DEFAULT_TIMEZONE : 'America/New_York';
     $driver = cdrCacheDriver();
 
     /*
@@ -496,7 +511,6 @@ function loadRawCdrs(array $user, array $filters): array {
         $day = $day->modify('+1 day')
     ) {
         $date = $day->format('Y-m-d');
-        $file = cacheFile($user['domain'], $date . '|' . $tzName);
         $ttl = cdrDayCacheTtl($date);
         $cached = cdrDayCacheRead((string)$user['domain'], $date, $ttl);
         /*

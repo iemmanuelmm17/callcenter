@@ -35,8 +35,21 @@ const DAY = (day, hour, extra = {}) => ({
 
 const cdrs = [];
 for (let hour = 9; hour < 17; hour++) {
-  cdrs.push(DAY(2, hour));
-  cdrs.push(DAY(3, hour));
+  /*
+   * Two of these are call-intelligence scored, one negative and one positive, so
+   * the SENTIMENT scope can be checked against the export path as well as the
+   * list (finding C1: the report narrowed by sentiment, the drill and its CSV
+   * did not know the key existed). 9:00 AM, so each row is findable by time.
+   */
+  cdrs.push(DAY(2, hour, hour === 9 ? {
+    'call-intelligence-percent-negative': 70,
+    'call-intelligence-percent-positive': 10,
+    'call-intelligence-percent-neutral': 20
+  } : {}));
+  cdrs.push(DAY(3, hour, hour === 9 ? {
+    'call-intelligence-percent-positive': 80,
+    'call-intelligence-percent-neutral': 20
+  } : {}));
 }
 /* 16 answered + this one hostile-named call = 17 rows over two days. */
 cdrs.push(DAY(4, 9, { 'call-orig-from-name': '=HYPERLINK("http://evil","click")' }));
@@ -162,6 +175,42 @@ console.log('== CSV exports (real PHP 8.4)\n');
    * single call id both have to narrow the file, or the spreadsheet and the
    * table disagree about what was exported.
    */
+  {
+    /*
+     * C1: a file a manager mails to the department has to be the subset the
+     * screen shows. The sentiment scope is the filter that used to reach only the
+     * KPI payload, so it is the one worth pinning here.
+     */
+    const negative = await harness.request('calls.php', {
+      method: 'POST',
+      body: { start: '2026-08-02', end: '2026-08-04', metric: 'total', sentiment: 'negative', export: true },
+      user: USERS.office_manager
+    });
+    const negativeLines = csvLines(negative.phpOutput);
+    check('a negative-only export is the negative call, not the whole range',
+      negativeLines.length - 1 === 1
+        && parse(negativeLines[1])[0] === '2026-08-02' && parse(negativeLines[1])[1] === '9:00 AM',
+      negativeLines);
+    const positive = await harness.request('calls.php', {
+      method: 'POST',
+      body: { start: '2026-08-02', end: '2026-08-04', metric: 'total', sentiment: 'positive', export: true },
+      user: USERS.office_manager
+    });
+    const positiveLines = csvLines(positive.phpOutput);
+    check('the positive side is the other scored call',
+      positiveLines.length - 1 === 1
+        && parse(positiveLines[1])[0] === '2026-08-03' && parse(positiveLines[1])[1] === '9:00 AM',
+      positiveLines);
+    /* A value outside the vocabulary is no filter — on the file as on the list. */
+    const junk = await harness.request('calls.php', {
+      method: 'POST',
+      body: { start: '2026-08-02', end: '2026-08-04', metric: 'total', sentiment: 'grumpy', export: true },
+      user: USERS.office_manager
+    });
+    check('an unknown sentiment exports everything, exactly as the list does',
+      csvLines(junk.phpOutput).length - 1 === 17, csvLines(junk.phpOutput).length - 1);
+  }
+
   const windowed = await harness.request('calls.php', {
     method: 'POST',
     body: { start: '2026-08-02', end: '2026-08-04', metric: 'total', timeFrom: '09:00', timeTo: '10:00', export: true },

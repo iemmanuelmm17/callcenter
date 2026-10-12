@@ -34,6 +34,8 @@ export const FIXTURES = {
     remaining: 1800, warningAt: 900, tokenRemaining: 3600
   },
   settings: {
+    /* The desk's clock, as loadDomainSettings() stores it (review C7). */
+    timezone: 'US/Eastern',
     slaSeconds: 20, slaPct: 80, abandonPct: 10, missedPct: 20,
     ahtMinutes: 5, ahtOutboundMinutes: 5, contactPct: 50, topAgentAhtMinutes: 5, topAgentMinCalls: 20,
     /* Sprint A: the service-desk block. The calendar ships OFF, exactly as a

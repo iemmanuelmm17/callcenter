@@ -1,6 +1,9 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/../includes/auth.php';
+/* For the tenant's timezone below; see api/session.php for why this is required
+ * directly instead of through the includes/reporting.php facade. */
+require_once __DIR__ . '/../includes/reporting/settings.php';
 requireMethod('POST');
 $input = readJsonBody();
 /*
@@ -34,4 +37,18 @@ if (session_status() === PHP_SESSION_ACTIVE) {
 $_SESSION['last_activity'] = time();
 storePbxToken(is_array($token) ? $token : [], $clientId);
 $_SESSION['user'] = ['username' => $token['username'] ?? $username, 'displayName' => $token['displayName'] ?? $username, 'domain' => $token['domain'], 'department' => $token['department'] ?? '', 'site' => $token['site'] ?? '', 'extension' => $extension, 'role' => normalizedRole((string)($token['scope'] ?? 'Basic User'))];
-jsonResponse(['user' => $_SESSION['user'], 'expiresIn' => (int)($token['expires_in'] ?? 3600)]);
+/*
+ * The desk's clock, handed over with the session (finding C7): the SPA does not
+ * reload after a sign-in, so without this the first "Today" the dashboard opens
+ * with is the browser's - and for a tenant east or west of the deployment
+ * default that is a whole day of the wrong numbers until something else
+ * re-seats it.
+ */
+$deskTimezone = setReportingTimezone(
+    loadDomainSettings((string)($token['domain'] ?? ''))['timezone'] ?? null
+);
+jsonResponse([
+    'user' => $_SESSION['user'],
+    'timezone' => $deskTimezone,
+    'expiresIn' => (int)($token['expires_in'] ?? 3600)
+]);

@@ -31,6 +31,14 @@ declare(strict_types=1);
  */
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/security.php';
+/*
+ * NOT a double: includes/timezone.php is real code the harness mirrors like any
+ * other file under includes/, and the real bootstrap requires it here too. The
+ * desk's timezone is the one piece of bootstrap.php that is a rule rather than
+ * plumbing (a per-domain setting every date boundary resolves against), so
+ * stubbing it would mean testing a copy. See the header of that file.
+ */
+require_once __DIR__ . '/timezone.php';
 date_default_timezone_set(DEFAULT_TIMEZONE);
 foreach ([CACHE_DIR, LOG_DIR] as $directory) {
     if (!is_dir($directory) && !@mkdir($directory, 0770, true) && !is_dir($directory)) {}

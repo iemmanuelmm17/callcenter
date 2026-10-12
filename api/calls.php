@@ -288,6 +288,18 @@ try {
     if (!in_array($outcomeFilter, callOutcomeKinds(), true)) {
         $outcomeFilter = '';
     }
+    /*
+     * C1 FIX: the sentiment filter was read and applied by api/report.php only,
+     * so a drill-down opened while "negative only" was on in the filter bar
+     * listed every call instead of the negative ones - the card collapsed, the
+     * list beside it did not. It is validated exactly the way the report side
+     * validates it, through the same helper, so neither endpoint can quietly
+     * accept a value the other one ignores.
+     */
+    $sentimentFilter = strtolower(trim((string)($requested['sentiment'] ?? '')));
+    if (!in_array($sentimentFilter, callSentimentFilterKinds(), true)) {
+        $sentimentFilter = '';
+    }
     $callbackState = strtolower(trim((string)($requested['callbackState'] ?? '')));
     if (!in_array($callbackState, ['returned', 'unreturned'], true)) {
         $callbackState = '';
@@ -676,6 +688,15 @@ try {
         $calls = filterCallsByOutcome($calls, $outcomeFilter, $directory, $queueIdsAll);
     }
 
+    if ($sentimentFilter !== '') {
+        /*
+         * Same helper as api/report.php, same position in the pipeline (after
+         * the outcome, before the callback state) - a card and the list behind
+         * it are then the same population by construction, not by luck.
+         */
+        $calls = filterCallsBySentiment($calls, $sentimentFilter);
+    }
+
     if ($callbackOnly || $callbackState !== '') {
         /*
          * Both sides come from the one pre-narrowing pass built above
@@ -726,9 +747,13 @@ try {
 
         if ($hour >= 0 && $hour <= 23) {
 
-            $timezone = new DateTimeZone(
-                DEFAULT_TIMEZONE
-            );
+            /*
+             * The hour bucket is the desk's hour, not the deployment's (finding
+             * C7): the 08:00 bar has to hold the calls that rang at 08:00 in the
+             * tenant's own zone - the same zone the row's `localDate` and the
+             * report beside it were resolved in.
+             */
+            $timezone = reportingTimezone();
 
             $calls = array_values(
                 array_filter(
@@ -987,7 +1012,22 @@ try {
             $lastPage,
 
         'total' =>
-            $total
+            $total,
+
+        /*
+         * C1: the list says what it narrowed itself by, in the same shape as
+         * api/report.php's `appliedFilters`, so the modal's chips are the
+         * server's answer rather than the client's assumption - and a filter
+         * one of the two endpoints stops honouring shows up as a failed
+         * comparison instead of a card that quietly disagrees with its list.
+         */
+        'appliedFilters' => [
+            'outcome' => $outcomeFilter,
+            'waitBucket' => $waitBucket,
+            'waitedOver' => $waitedOver,
+            'callbackState' => $callbackState,
+            'sentiment' => $sentimentFilter,
+        ]
     ]);
 
 } catch (Throwable $e) {

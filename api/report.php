@@ -138,7 +138,7 @@ if (
                     'hours'  => $previous['hours'] ?? [],
                 ],
             ],
-            'timezone' => DEFAULT_TIMEZONE,
+            'timezone' => reportingTimezoneName(),
         ]);
     }
 
@@ -159,6 +159,24 @@ if (
         (string)$filters['start'],
         (string)$filters['end']
     );
+
+    /*
+     * The SCOPE the call links are computed over (review C2).
+     *
+     * Everything below this line narrows `$calls` further - to an outcome, a
+     * wait band, a sentiment - and a narrowed row set is the right input for a
+     * KPI card, because the card is supposed to answer the filtered question.
+     * It is the wrong input for the link layer, for one reason: a returned
+     * missed call is only visible in the OUTBOUND leg, and any filter that
+     * keeps calls by what happened to the caller drops that leg. Computing the
+     * worklist over the narrowed rows turned calls the dashboard had counted as
+     * returned into unreturned ones, so the card and the list it opens disagreed
+     * about the same interaction - which is exactly what api/calls.php avoided
+     * by building its callback sets before narrowing (`$rowContext`). This copy
+     * is the same decision on this side: scope-level classification, narrowed
+     * counts.
+     */
+    $linkScope = $calls;
 
     /*
      * The Sprint A narrowing filters, applied to the SAME row set every figure
@@ -193,13 +211,19 @@ if (
         $requestedCallbackState = '';
     }
     if ($requestedCallbackState !== '' || !empty($requested['callbackOnly'])) {
-        $links = cdrCallbacks($calls, 86400);
-        $legIndexForCallback = cdrLegIndex($calls);
+        /*
+         * Over the scope, not the narrowed rows - see $linkScope above, and the
+         * matching `$rowContext` pass in api/calls.php. Recomputing `unreturned`
+         * here would answer "is there a return call inside this subset", which
+         * is a different question than the one the card asks.
+         */
+        $callbackScope = cdrCallbacks($linkScope, 86400);
+        $legIndexForCallback = cdrLegIndex($linkScope);
         $calls = filterCallsByCallback(
             $calls,
             $requestedCallbackState,
-            $links['returned'],
-            $links['unreturned'],
+            $callbackScope['returned'],
+            $callbackScope['unreturned'],
             $legIndexForCallback
         );
         if ($requestedCallbackState === '' && !empty($requested['callbackOnly'])) {
@@ -207,7 +231,7 @@ if (
              * root, and a numeric root is an integer key that array_merge
              * renumbers - which would leave this isset() with no roots to
              * match and the worklist empty. */
-            $callbackRoots = $links['returned'] + $links['unreturned'];
+            $callbackRoots = $callbackScope['returned'] + $callbackScope['unreturned'];
             $calls = array_values(array_filter(
                 $calls,
                 static fn(array $call): bool => isset($callbackRoots[cdrRootKey($call, $legIndexForCallback)])
@@ -279,7 +303,7 @@ if (
      * number in this payload, so the hours filter, the department filter and the
      * site filter move them together with the counts beside them.
      */
-    $links = callLinkReport($calls, $directory);
+    $links = callLinkReport($linkScope, $directory);
 
     /*
      * Previous period.
@@ -619,7 +643,7 @@ $current['topAgents'] = $topAgents;
 		'cacheStatus' => $cacheStatus,
 		'dataQuality' => $dataQuality,
 		'settings' => $settings,
-		'timezone' => DEFAULT_TIMEZONE
+		'timezone' => reportingTimezoneName()
 	]);
 
 } catch (Throwable $e) {

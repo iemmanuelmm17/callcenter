@@ -1782,6 +1782,219 @@ if (baseRes.status === 200) {
     day && day.date === '2026-06-15' && day.volume === 6 && day.baseline === 4 && day.index === 150, day);
 }
 
+
+/* ================================= 9. the desk's own timezone (review finding C7) */
+
+console.log('\n== the desk\'s timezone: the setting, the boundaries it moves, the cache it keys ==');
+
+/*
+ * DEFAULT_TIMEZONE (includes/config.php) used to be the only answer, so one
+ * constant decided the calendar of every tenant on the box and the only way to
+ * change it was a config edit and a redeploy. The setting is per domain now, and
+ * this section pins the four things it has to touch — none of them a label:
+ *
+ *   1. the day a call belongs to (`callLocalDate`, which `filterCallsByLocalDate`
+ *      and every card on the screen are built on);
+ *   2. the hour bucket the drill-down filters by;
+ *   3. the window the day is fetched from the PBX with (`easternDayWindow`);
+ *   4. the day-cache filename and the Settings round-trip, including the rule
+ *      that an omitted or unusable value must not move the clock.
+ *
+ * The arithmetic, by hand: 1790028000 is 2026-09-21T22:00:00Z, which is 18:00 on
+ * Monday the 21st in US/Eastern (UTC-4 in September) and 06:00 on Tuesday the
+ * 22nd in Asia/Manila (UTC+8, no DST). Same record, different report. That date
+ * is used by no other section of this file, on purpose: the day cache answers
+ * from whatever was cached for a day first, so a shared day would make this
+ * section read another section's fixture.
+ */
+const ONE_INSTANT = '1790028000';
+/* Monday 17:00-23:00 open, every other day closed: the instant above is inside
+ * Monday in New York and outside Tuesday in Manila, so the two desks have to
+ * disagree about whether anyone was at the desk when it rang. */
+const HOURS_PHP = `['enabled' => true, 'days' => [
+        1 => ['closed' => false, 'open' => '17:00', 'close' => '23:00'],
+        2 => ['closed' => true, 'open' => '', 'close' => ''],
+        3 => ['closed' => true, 'open' => '', 'close' => ''],
+        4 => ['closed' => true, 'open' => '', 'close' => ''],
+        5 => ['closed' => true, 'open' => '', 'close' => ''],
+        6 => ['closed' => true, 'open' => '', 'close' => ''],
+        7 => ['closed' => true, 'open' => '', 'close' => ''],
+    ], 'holidays' => []]`;
+
+const tzEastRaw = await harness.script(`
+require_once TEST_TMP . '/includes/reporting.php';
+$domain = 'tz-move.example';
+@unlink(domainSettingsFile($domain));
+$row = ['call-start-datetime' => '${ONE_INSTANT}'];
+echo json_encode([
+    'default_setting' => defaultDomainSettings()['timezone'],
+    /* Nothing has claimed a zone: the deployment answer, in every form. */
+    'name' => reportingTimezoneName(),
+    'window' => easternDayWindow('2026-09-21'),
+    'local_date' => callLocalDate($row),
+    'hour' => (int) parseEasternDateTime('${ONE_INSTANT}')->format('G'),
+    'in_hours' => callWithinBusinessHours($row, ['businessHours' => ${HOURS_PHP}]),
+    'day_file' => basename(cdrDayCacheFile($domain, '2026-09-21')),
+    /* A timezone the runtime does not know is refused, and refused without
+     * taking the rest of the save down with it. */
+    'refused' => saveDomainSettings($domain, ['timezone' => 'Mars/Olympus_Mons', 'slaSeconds' => 25]),
+    /* A UTC offset is not a timezone: no DST rules, so it would move the desk's
+     * hours twice a year on its own. Rejected on the way in, not on the chart. */
+    'offset_refused' => saveDomainSettings($domain, ['timezone' => '+08:00'])['timezone'],
+]);
+`);
+const tzEast = parseJson(tzEastRaw, '{', '}');
+check('the eastern block parses', tzEast !== null, tzEastRaw.slice(0, 400));
+if (tzEast) {
+  check('a fresh install is measured in the zone every install has always used',
+    tzEast.default_setting === 'US/Eastern' && tzEast.name === 'US/Eastern', tzEast);
+  check('the day window is built in the desk zone, not hard-coded',
+    tzEast.window[0] === '2026-09-21T00:00:00Z[US/Eastern]'
+      && tzEast.window[1] === '2026-09-21T23:59:59Z[US/Eastern]', tzEast.window);
+  check('22:00Z is 18:00 on Monday the 21st for an Eastern desk',
+    tzEast.local_date === '2026-09-21' && tzEast.hour === 18, tzEast);
+  check('and that is inside a Monday 17:00-23:00 desk', tzEast.in_hours === true, tzEast);
+  check('an unusable timezone falls back to the deployment default',
+    tzEast.refused?.timezone === 'US/Eastern', tzEast.refused);
+  check('a bare UTC offset is refused the same way',
+    tzEast.offset_refused === 'US/Eastern', tzEast.offset_refused);
+  check('while the rest of that same save is kept (a refused key is not a rolled-back save)',
+    tzEast.refused?.slaSeconds === 25, tzEast.refused);
+}
+
+const tzManilaRaw = await harness.script(`
+require_once TEST_TMP . '/includes/reporting.php';
+$domain = 'tz-move.example';
+$row = ['call-start-datetime' => '${ONE_INSTANT}'];
+/* The name the Eastern process used, read here before anything is applied: the
+ * two halves of the cache claim, from one domain and one day. */
+$before = basename(cdrDayCacheFile($domain, '2026-09-21'));
+@unlink(domainSettingsFile($domain));
+$saved = saveDomainSettings($domain, ['timezone' => 'Asia/Manila', 'businessHours' => ${HOURS_PHP}]);
+$stored = loadDomainSettings($domain);
+$applied = setReportingTimezone($stored['timezone'] ?? null);
+echo json_encode([
+    'stored' => $saved['timezone'],
+    'loaded' => $stored['timezone'],
+    'applied' => $applied,
+    'day_file_eastern' => $before,
+    'day_file' => basename(cdrDayCacheFile($domain, '2026-09-21')),
+    'name' => reportingTimezoneName(),
+    'window' => easternDayWindow('2026-09-21'),
+    'local_date' => callLocalDate($row),
+    'hour' => (int) parseEasternDateTime('${ONE_INSTANT}')->format('G'),
+    'in_hours' => callWithinBusinessHours($row, $stored),
+    /* A save that does not mention the clock must not move it back. */
+    'omitted' => saveDomainSettings($domain, ['slaSeconds' => 30])['timezone'],
+    'empty' => saveDomainSettings($domain, ['timezone' => ''])['timezone'],
+    'null' => saveDomainSettings($domain, ['timezone' => null])['timezone'],
+    /* And the calendar the zone is expressed in survives beside it. */
+    'hours_kept' => saveDomainSettings($domain, ['timezone' => 'Asia/Manila'])['businessHours']['days'][1]['open'],
+]);
+`);
+const tzManila = parseJson(tzManilaRaw, '{', '}');
+check('the manila block parses', tzManila !== null, tzManilaRaw.slice(0, 400));
+if (tzManila && tzEast) {
+  check('the setting round-trips, and setReportingTimezone reports what it applied',
+    tzManila.stored === 'Asia/Manila' && tzManila.loaded === 'Asia/Manila'
+      && tzManila.applied === 'Asia/Manila' && tzManila.name === 'Asia/Manila', tzManila);
+  check('the day the PBX is asked for follows the desk, not the box',
+    tzManila.window[0] === '2026-09-21T00:00:00Z[Asia/Manila]', tzManila.window);
+  check('the same instant is 06:00 on Tuesday the 22nd for a Manila desk',
+    tzManila.local_date === '2026-09-22' && tzManila.hour === 6, tzManila);
+  check('so the call that was inside Monday in New York is outside Tuesday in Manila',
+    tzManila.in_hours === false && tzEast.in_hours === true, tzManila);
+  /*
+   * Same domain, same day, two zones, two files — and the Manila process read the
+   * Eastern name back first, so the difference is the zone and not the test data.
+   */
+  check('a day is cached per timezone, so switching cannot reuse the other day',
+    tzManila.day_file_eastern === tzEast.day_file
+      && tzManila.day_file !== tzManila.day_file_eastern,
+    { manila: tzManila.day_file, eastern: tzManila.day_file_eastern });
+  check('omitting the key on a later save keeps the zone (the $pick rule)',
+    tzManila.omitted === 'Asia/Manila' && tzManila.empty === 'Asia/Manila'
+      && tzManila.null === 'Asia/Manila', tzManila);
+  check('and the calendar it is stored with survives beside it',
+    tzManila.hours_kept === '17:00', tzManila.hours_kept);
+}
+
+/*
+ * End to end, with the tenant's Settings file holding the zone: one seeded call
+ * at 2026-09-21T22:00Z, asked about on both days. The card, the hour drill and
+ * the zone the payload names have to move together, because they are one setting
+ * read three times — which is what the rest of the app never did.
+ */
+const tzCall = {
+  id: 'tz1',
+  'call-direction': 1,
+  'call-start-datetime': ONE_INSTANT,
+  'call-answer-datetime': '1790028010',
+  'call-disconnect-datetime': '1790028060',
+  'call-talking-duration-seconds': 40,
+  'call-total-duration-seconds': 60,
+  'call-term-user': '6080',
+  'call-through-user': '700',
+  'call-orig-caller-id': '5557000001',
+  'call-orig-from-user': '5557000001'
+};
+await harness.seedPbx('fetchCdrs', [tzCall]);
+const tzRequest = async (day) => await harness.request('report.php', {
+  body: { start: day, end: day, hours: 'all', skipPrevious: true },
+  user: USERS.office_manager
+});
+/* `hours: 'all'` explicitly: an earlier section of this file gave this tenant a
+ * Mon-Fri 08:00-18:00 calendar, which the drill would otherwise default to, and
+ * a call at 18:00 / 06:00 is outside it in either zone. This section is about
+ * the clock, not the calendar. */
+const tzList = async (extra = {}) => await harness.request('calls.php', {
+  body: Object.assign({ start: '2026-09-21', end: '2026-09-22', hours: 'all', size: 50 }, extra),
+  user: USERS.office_manager
+});
+
+await harness.script(`
+require_once TEST_TMP . '/includes/reporting.php';
+saveDomainSettings('test.example', ['timezone' => 'Asia/Manila']);
+`);
+{
+  const on21 = await tzRequest('2026-09-21');
+  const on22 = await tzRequest('2026-09-22');
+  check('a Manila tenant answers with the zone it used',
+    on21.status === 200 && on21.body?.timezone === 'Asia/Manila', on21.body?.timezone ?? on21.log);
+  check('its 21 September has nothing, because the call rang at 06:00 on the 22nd',
+    (on21.body?.summary?.counts?.total ?? -1) === 0, on21.body?.summary?.counts);
+  check('and its 22 September has the call',
+    (on22.body?.summary?.counts?.total ?? -1) === 1, on22.body?.summary?.counts);
+  const hour6 = await tzList({ hour: 6 });
+  const hour18 = await tzList({ hour: 18 });
+  check('the hour drill-down buckets the day in the desk zone too (06:00 Manila)',
+    (hour6.body?.data ?? []).map(r => r.id).join(',') === 'tz1', (hour6.body?.data ?? []).map(r => r.id));
+  check('while 18:00 — the hour the same record shows in New York — is empty',
+    (hour18.body?.data ?? []).length === 0, (hour18.body?.data ?? []).map(r => r.id));
+  const session = await harness.request('session.php', { user: USERS.office_manager });
+  check('session.php carries the clock, so the first "Today" is the desk\'s',
+    session.status === 200 && session.body?.timezone === 'Asia/Manila', session.body ?? session.log);
+}
+
+await harness.script(`
+require_once TEST_TMP . '/includes/reporting.php';
+saveDomainSettings('test.example', ['timezone' => 'US/Eastern']);
+`);
+{
+  const on21 = await tzRequest('2026-09-21');
+  const on22 = await tzRequest('2026-09-22');
+  const hour18 = await tzList({ hour: 18 });
+  check('the same seed and the same request on an Eastern desk put the call on the 21st',
+    (on21.body?.summary?.counts?.total ?? -1) === 1 && (on22.body?.summary?.counts?.total ?? -1) === 0,
+    { d21: on21.body?.summary?.counts, d22: on22.body?.summary?.counts });
+  check('and 18:00 is its hour',
+    (hour18.body?.data ?? []).map(r => r.id).join(',') === 'tz1', (hour18.body?.data ?? []).map(r => r.id));
+  const settings = await harness.request('settings.php', { user: USERS.office_manager });
+  check('settings.php reads the stored zone back to the dialog that edits it',
+    settings.status === 200 && settings.body?.data?.timezone === 'US/Eastern'
+      && settings.body?.timezone === 'US/Eastern', settings.body ?? settings.log);
+}
+
 console.log('');
 if (failures.length) {
   console.log(`FAILED: ${failures.length} check(s)`);

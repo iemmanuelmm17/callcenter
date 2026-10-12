@@ -117,16 +117,70 @@ table), the queue scope, the date range of the screen the number came from, the
 part of an hour a Simultaneous interval covers (`timeFrom`/`timeTo`), and — for a
 row that *is* one call — its `callId`. The same filters drive the CSV export.
 
+What the global bar holds comes along too — outcome, sentiment, wait, callback
+state — because the list behind a card is that card's population, not the whole
+day. A filter the bar owns and no card names is therefore shown in the modal as
+a chip (`Outcome`, `Sentiment`, …), so the rows can be read against the scope
+that produced them; an unknown filter value is no filter on either endpoint
+rather than a silent empty list. Two figures deliberately do **not** narrow with
+the bar: the missed-returned / missed-not-returned worklist and the Transfer
+reasons pairs. They classify interactions over the scoped period — a miss stays
+returned even when the outbound leg is outside the subset you happen to be
+viewing — and the chip above them names the subset the rows are drawn from.
+
 The call-details modal also carries a **Rec** column (plays the recording in a
 tray under the table; resolved on click, never cached in the row) and a **SIP
 flow** column (the cradle-to-grave dialog, shared with Call history). Both are
 booleans on the row — `hasRecordingHint` / `hasFlowHint` — because resolving
 either one is a PBX walk.
 
+## Dates, days and the time zone
+
+A report day is a wall-clock fact, so it belongs to the desk, not to the server
+it happens to run on. **Settings → Service desk → Timezone** stores `timezone`
+per domain, in the same file as the SLA targets and the opening-hours calendar
+(`cache/settings-<sha256>.json`), defaulting to `DEFAULT_TIMEZONE`
+(`includes/config.php`, `US/Eastern`) for a tenant that has never chosen one.
+
+That one value decides:
+
+* which date a call belongs to — `callLocalDate()` and therefore every
+  `filterCallsByLocalDate()`, card and chart;
+* the hour-of-day buckets the hour chart and the drill-down's `hour` filter use;
+* the `[00:00, 23:59:59]` window a day is fetched from the PBX with
+  (`easternDayWindow()` — the name is historical, the window is the desk's);
+* whether a call was inside the opening hours, and so what `hours=business`
+  counts;
+* the day-cache key. `cdrDayCacheFile()` hashes the zone into the filename and
+  the SQLite store keys days on `(domain, tz, day)`, on purpose: **changing the
+  timezone re-fetches the days in the requested range** rather than serving a
+  day cut by the old boundaries. That is the cost, and it is the whole point.
+
+The plumbing is one rule: *whoever resolves a date resolves the zone first.*
+`includes/timezone.php` holds the resolver (`reportingTimezoneName()`,
+`reportingTimezone()`, `setReportingTimezone()`, `normalizeTimezoneName()`);
+`authorizedFilters()` applies the signed-in user's domain setting at the top of
+every reporting endpoint, so no aggregation helper may read `DEFAULT_TIMEZONE`
+directly. `portal.php` writes the same value into a `#app-clock` JSON island
+before the bundle runs and `lib/api.js` re-applies the `timezone` field every
+payload carries, so the browser's "Today", the range the date picker opens with
+and the `datetimeStart`/`datetimeEnd` window sent to the PBX are the desk's — a
+tenant in Manila no longer opens on yesterday. `api/session.php` and
+`api/login.php` answer the zone too, because neither runs through
+`authorizedFilters()`.
+
+Two deliberate edges. A bare UTC offset (`+08:00`) is **refused**: it has no DST
+rules, so a desk stored that way drifts by an hour twice a year — which is the
+bug this setting exists to fix. And `US/Eastern` is kept as the stored default
+rather than renamed to `America/New_York`: the two are the same zone but
+different cache keys, so a rename would have invalidated every day cache on
+every box for a spelling.
+
 ## CDR cache
 
-The raw PBX CDRs are cached per day (domain + timezone + date) so a report does
-not refetch history. Two backends, chosen by `CDR_CACHE_DRIVER`:
+The raw PBX CDRs are cached per day (domain + timezone + date — the timezone is
+the tenant's own setting, see *Dates, days and the time zone* above) so a report
+does not refetch history. Two backends, chosen by `CDR_CACHE_DRIVER`:
 
 | value | storage | when |
 | --- | --- | --- |

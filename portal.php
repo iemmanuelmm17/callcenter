@@ -1,5 +1,16 @@
 <?php declare(strict_types=1);
 require_once __DIR__ . '/includes/bootstrap.php';
+/*
+ * The desk's timezone has to be known before the bundle runs (see the island
+ * near the end of this file), and the setting lives in the domain settings file.
+ * includes/reporting/settings.php is required directly - not through the
+ * includes/reporting.php facade - because this page must not pull the CDR layer,
+ * the PBX client and the report aggregators in just to read one string. Its own
+ * load-time dependency (CACHE_DIR) is satisfied by bootstrap.php above, and
+ * loadDomainSettings() needs nothing else. The resolver this page calls,
+ * setReportingTimezone(), comes from includes/timezone.php via bootstrap.
+ */
+require_once __DIR__ . '/includes/reporting/settings.php';
 
 /*
  * QA-3: every third-party library is served from this origin, listed in
@@ -148,6 +159,26 @@ function vendorTag(array $entry): string
 <?php else: ?>
   <script defer src="<?= $asset('assets/js/app.js') ?>"></script>
 <?php endif; ?>
+<?php
+/*
+ * The desk's clock, before the bundle runs (review, finding C7).
+ *
+ * The front end has to know the tenant's timezone while it is still deciding
+ * what "Today" means - a first paint that asks for the browser's date, or
+ * New York's, gets a different day of numbers than the one the server will
+ * slice its cache by. Same JSON-island pattern as the vendor manifest below:
+ * data the page needs, not a global another script can overwrite.
+ *
+ * Signed out, there is no tenant to ask and the deployment default stands.
+ */
+$bootTimezone = reportingTimezoneName();
+if (!empty($_SESSION['user']['domain'])) {
+    $bootTimezone = setReportingTimezone(
+        loadDomainSettings((string)$_SESSION['user']['domain'])['timezone'] ?? null
+    );
+}
+?>
+  <script type="application/json" id="app-clock"><?= json_encode(['timezone' => $bootTimezone], JSON_UNESCAPED_SLASHES) ?></script>
 <?php if ($vendorManifest !== null): ?>
   <!-- Integrity for the lazily injected Tabulator files, kept in one place
        (the manifest) instead of hard-coded in the bundle. -->

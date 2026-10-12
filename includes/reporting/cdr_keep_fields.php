@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1336 names.
+ * 1337 names.
  */
 return [
     'aa',
@@ -135,6 +135,7 @@ return [
     'ap-search',
     'ap-site',
     'ap-toolbar',
+    'app-clock',
     'application',
     'apps',
     'argv',

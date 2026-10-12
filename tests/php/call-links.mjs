@@ -680,6 +680,172 @@ check('the numeric-id day has two misses, one returned',
     (returned.body?.data ?? []).map(r => r.id));
 }
 
+/* ================================= 8. the card and its list, same population */
+
+console.log('\n== the filters the card applied are the filters the list applies ==');
+
+/*
+ * Findings C1 and C2, on one day of seven rows.
+ *
+ *   p1 answered inbound,  negative (60 % vs 10 %)     p2 answered inbound, positive
+ *   p3 answered inbound,  neutral only (neither)       p4 abandoned at 3 s, RETURNED by p7
+ *   p5 abandoned at 70 s, nobody called back           p6 voicemail, no queue
+ *   p7 the outbound return leg of p4, 20 minutes later
+ *
+ * C1 is the sentiment filter: api/report.php narrowed by it, api/calls.php did
+ * not know the key existed, so the card collapsed to one call and the list
+ * opened with all seven. C2 is the opposite mistake on the same pair: the
+ * report's link layer ran AFTER the narrowing filters, so the outbound return
+ * leg of p4 was no longer in its input and a call the dashboard had counted as
+ * returned became an unreturned one — while the list, which classifies over the
+ * scope, kept saying "returned". The rule both endpoints now share: narrow the
+ * ROWS a count is made of, classify the INTERACTIONS over the scope.
+ */
+await harness.seedPbx('fetchCdrs', [
+  { id: 'p1', 'call-direction': 1, 'call-start-datetime': '2026-08-13T09:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-13T09:00:10Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-orig-caller-id': '5551300001',
+    'call-orig-from-user': '5551300001', 'call-talking-duration-seconds': 30,
+    'call-intelligence-percent-negative': 60, 'call-intelligence-percent-positive': 10,
+    'call-intelligence-percent-neutral': 30 },
+  { id: 'p2', 'call-direction': 1, 'call-start-datetime': '2026-08-13T10:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-13T10:00:20Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-orig-caller-id': '5551300002',
+    'call-orig-from-user': '5551300002', 'call-talking-duration-seconds': 30,
+    'call-intelligence-percent-negative': 5, 'call-intelligence-percent-positive': 70,
+    'call-intelligence-percent-neutral': 25 },
+  { id: 'p3', 'call-direction': 1, 'call-start-datetime': '2026-08-13T11:00:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-13T11:00:30Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-orig-caller-id': '5551300003',
+    'call-orig-from-user': '5551300003', 'call-talking-duration-seconds': 30,
+    'call-intelligence-percent-negative': 0, 'call-intelligence-percent-positive': 0,
+    'call-intelligence-percent-neutral': 100 },
+  { id: 'p4', 'call-direction': 1, 'call-start-datetime': '2026-08-13T13:00:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-13T13:00:03Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-orig-caller-id': '5551300004',
+    'call-orig-from-user': '5551300004' },
+  { id: 'p5', 'call-direction': 1, 'call-start-datetime': '2026-08-13T14:00:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-13T14:01:10Z[US/Eastern]', 'call-term-user': '6080',
+    'call-through-user': '700', 'call-orig-caller-id': '5551300005',
+    'call-orig-from-user': '5551300005' },
+  { id: 'p6', 'call-direction': 1, 'call-start-datetime': '2026-08-13T15:00:00Z[US/Eastern]',
+    'call-disconnect-datetime': '2026-08-13T15:00:08Z[US/Eastern]', 'call-term-user': '6080',
+    'call-orig-caller-id': '5551300006', 'call-orig-from-user': '5551300006',
+    'call-term-to-uri': 'sip:vm6080@pbx.example' },
+  { id: 'p7', 'call-direction': 0, 'call-start-datetime': '2026-08-13T13:20:00Z[US/Eastern]',
+    'call-answer-datetime': '2026-08-13T13:20:05Z[US/Eastern]', 'call-orig-user': '6080',
+    'call-orig-to-user': '5551300004', 'call-talking-duration-seconds': 60 }
+]);
+
+const DAY8 = { start: '2026-08-13', end: '2026-08-13' };
+const report8 = async (extra = {}) => await harness.request('report.php', {
+  body: Object.assign({ skipPrevious: true, hours: 'all' }, DAY8, extra),
+  user: USERS.office_manager,
+});
+const list8 = async (extra = {}) => await harness.request('calls.php', {
+  body: Object.assign({ size: 100 }, DAY8, extra),
+  user: USERS.office_manager,
+});
+
+const bare = await report8();
+check('the C1/C2 day loads', bare.status === 200, bare.log ?? bare.status);
+check('unfiltered: seven rows, three misses',
+  bare.body?.summary?.counts?.total === 7 && bare.body?.summary?.counts?.missed === 3,
+  bare.body?.summary?.counts);
+const bareLinks = bare.body?.links?.callbacks;
+const bareIds = (await list8({ metric: 'total' })).body?.data?.map(r => r.id) ?? [];
+check('unfiltered: the list has the seven rows the summary counted',
+  bareIds.length === 7, bareIds);
+
+/* ------------------------------------------------------------------- C1 */
+console.log('\n-- C1: the sentiment filter reaches the list --');
+
+{
+  const negative = await report8({ sentiment: 'negative' });
+  const negativeList = await list8({ metric: 'total', sentiment: 'negative' });
+  const ids = (negativeList.body?.data ?? []).map(r => r.id);
+  check('a negative-only card counts the one negative call',
+    negative.body?.summary?.counts?.total === 1, negative.body?.summary?.counts);
+  check('and the list behind it is that call, not the whole day',
+    negativeList.status === 200 && ids.join(',') === 'p1', ids);
+  check('the list says it applied the sentiment filter',
+    negativeList.body?.appliedFilters?.sentiment === 'negative', negativeList.body?.appliedFilters);
+  check('both endpoints agree on what they narrowed by',
+    JSON.stringify(negative.body?.appliedFilters) === JSON.stringify(negativeList.body?.appliedFilters),
+    { report: negative.body?.appliedFilters, calls: negativeList.body?.appliedFilters });
+
+  const positive = await report8({ sentiment: 'positive' });
+  const positiveList = await list8({ metric: 'total', sentiment: 'positive' });
+  check('positive-only is the mirror image: one card row, one list row',
+    positive.body?.summary?.counts?.total === 1
+      && (positiveList.body?.data ?? []).map(r => r.id).join(',') === 'p2',
+    (positiveList.body?.data ?? []).map(r => r.id));
+
+  /* The neutral call is not "not negative": with no positive majority it is in
+   * neither bucket, which both endpoints have to agree about. */
+  const missedNegative = await report8({ sentiment: 'negative' });
+  const missedList = await list8({ metric: 'missed', sentiment: 'negative' });
+  check('a negative-only drill of the misses is empty, because none of them has a sentiment',
+    missedNegative.body?.summary?.counts?.missed === 0
+      && (missedList.body?.data ?? []).length === 0,
+    { card: missedNegative.body?.summary?.counts?.missed, rows: (missedList.body?.data ?? []).map(r => r.id) });
+
+  /* A value outside the vocabulary is no filter at all, on both sides. Before
+   * this pair of lines the two endpoints each had their own idea of what to do
+   * with one (the list kept the raw string, the report cleared it). */
+  const junk = await list8({ metric: 'total', sentiment: 'grumpy' });
+  check('an unknown sentiment is ignored, not applied as a filter',
+    (junk.body?.data ?? []).length === 7 && junk.body?.appliedFilters?.sentiment === '',
+    { rows: (junk.body?.data ?? []).length, applied: junk.body?.appliedFilters });
+}
+
+/* ------------------------------------------------------------------- C2 */
+console.log('\n-- C2: the worklist is the scope\'s answer, the counts are the filter\'s --');
+
+{
+  const abandoned = await report8({ outcome: 'abandoned' });
+  check('the outcome filter still narrows the counts',
+    abandoned.body?.summary?.counts?.missed === 2
+      && abandoned.body?.appliedFilters?.outcome === 'abandoned',
+    { counts: abandoned.body?.summary?.counts, applied: abandoned.body?.appliedFilters });
+  /*
+   * The line that fails on the old code: the returned leg (p7) is not an
+   * abandon, so narrowing before computing the links lost p4's return and the
+   * card moved p4 from "returned" to "unreturned". The interactions a call
+   * belongs to do not change because the reader asked for one outcome, so the
+   * block is identical to the unfiltered one.
+   */
+  check('the returned / unreturned split does not move when a row filter moves',
+    JSON.stringify(abandoned.body?.links?.callbacks) === JSON.stringify(bareLinks),
+    { filtered: abandoned.body?.links?.callbacks, unfiltered: bareLinks });
+
+  for (const extra of [{ waitBucket: '0-30' }, { sentiment: 'negative' }, { waitedOver: 60 }]) {
+    const narrowed = await report8(extra);
+    check(`the same holds for ${JSON.stringify(extra)}`,
+      JSON.stringify(narrowed.body?.links?.callbacks) === JSON.stringify(bareLinks),
+      { filtered: narrowed.body?.links?.callbacks, unfiltered: bareLinks });
+  }
+
+  /* And the list agrees, row by row: p4 was returned by a call the outcome
+   * filter excludes, so a "returned + abandoned" drill has to find it (which is
+   * the classification api/calls.php takes from its own pre-narrowing pass). */
+  const returnedAbandons = await list8({ metric: 'missed', outcome: 'abandoned', callbackState: 'returned' });
+  check('the returned abandons are the one miss a return leg exists for',
+    (returnedAbandons.body?.data ?? []).map(r => r.id).join(',') === 'p4',
+    (returnedAbandons.body?.data ?? []).map(r => r.id));
+  const unreturnedAbandons = await list8({ metric: 'missed', outcome: 'abandoned', callbackState: 'unreturned' });
+  check('and the unreturned ones are the miss nobody called back',
+    (unreturnedAbandons.body?.data ?? []).map(r => r.id).join(',') === 'p5',
+    (unreturnedAbandons.body?.data ?? []).map(r => r.id));
+  /* callsRow() flags a row's callback state as a tri-state (true / false / null
+   * for "not a miss"), which is what the modal's badge and the CSV column read. */
+  check('every row the narrowed worklist returns carries the state the card used',
+    (returnedAbandons.body?.data ?? []).every(r => r.callback === true)
+      && (unreturnedAbandons.body?.data ?? []).every(r => r.callback === false),
+    { returned: (returnedAbandons.body?.data ?? []).map(r => r.callback),
+      unreturned: (unreturnedAbandons.body?.data ?? []).map(r => r.callback) });
+}
+
 console.log('');
 if (failures.length) {
   console.log(`FAILED: ${failures.length} check(s)`);

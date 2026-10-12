@@ -87,6 +87,16 @@ function authorizedFilters(array $requested, array $user): array {
      * behaves exactly as it did before this feature existed.
      */
     $settings = loadDomainSettings((string)($user['domain'] ?? ''));
+    /*
+     * The desk's clock, applied for the whole request before any endpoint
+     * computes a day boundary, an hour bucket or a cache filename (finding C7).
+     * authorizedFilters() is the one call every reporting endpoint makes with
+     * the user's domain in hand, so it is the one place that can promise the
+     * zone is set before the rows are read - and the day cache key embeds the
+     * zone name, which is why the ORDER matters: set it here, not in the
+     * aggregation helpers.
+     */
+    $result['timezone'] = setReportingTimezone($settings['timezone'] ?? null);
     $configured = businessHoursConfigured($settings);
     $hours = strtolower(trim((string)($requested['hours'] ?? '')));
     if (!in_array($hours, ['all', 'business', 'after'], true)) {

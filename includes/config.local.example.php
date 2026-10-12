@@ -47,6 +47,10 @@ declare(strict_types=1);
 // define('CDR_STORE_FILE', '/var/lib/callscope/cdrs.sqlite');
 
 /* --- Other tunables (defaults shown) ------------------------------------ */
+/* DEFAULT_TIMEZONE is the FALLBACK only: each tenant's reporting clock is the
+ * `timezone` row in Settings -> Service desk, which is what decides day
+ * boundaries, hour buckets, the business-hours match and the day-cache key.
+ * See includes/timezone.php and README, "Dates, days and the time zone". */
 // define('DEFAULT_TIMEZONE', 'US/Eastern');
 // define('SESSION_IDLE_SECONDS', 1800);
 // define('HISTORICAL_CDR_START_DATE', '2021-01-01');

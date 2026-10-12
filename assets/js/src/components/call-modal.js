@@ -14,7 +14,7 @@ import { formatPhoneNumber } from '../lib/format.js';
 import { formatCallDate, formatCallTime } from '../lib/time.js';
 import { ensureTabulator, h, useEffect, useEscape, useRef, useState } from '../lib/react.js';
 
-function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerNumber,queue,queuesOnly,filters,callTypes,slaSeconds,waitBucket,waitedOver,callbackState,sort,dir,onClose}) {
+function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerNumber,queue,queuesOnly,filters,callTypes,slaSeconds,waitBucket,waitedOver,callbackState,outcome,sentiment,sort,dir,onClose}) {
     /*
      * Metric wording comes from the server catalog (api/filters.php /
      * includes/reporting/metrics.php). Declared before the title uses it —
@@ -101,6 +101,45 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
         setSortDir(dir || 'desc');
     }, [metric, hour, timeFrom, timeTo, agent, callId, phoneNumber, callerNumber, queue, queuesOnly, filters, callTypes, pageSize, sort, dir]);
 
+    /*
+     * THE SCOPE, IN ONE PLACE (review C1)
+     *
+     * Every list-narrowing value below is the drill's own when it was opened
+     * with one, and otherwise whatever the filter bar currently says. That
+     * fallback is the fix: the explicit lines used to send `waitBucket || ''`,
+     * so a card clicked while the bar held a wait bucket re-sent the bucket as
+     * empty and the list quietly widened back to everything the card had just
+     * excluded, while `outcome` and `sentiment` were forwarded but not applied
+     * by api/calls.php at all. The chips and the CSV export read this same
+     * object, so a list, the header above it and the file it exports are one
+     * population by construction.
+     */
+    const f = filters || {};
+    const scope = {
+        ...f,
+        callTypes,
+        metric,
+        hour,
+        timeFrom,
+        timeTo,
+        agent,
+        callId,
+        phoneNumber,
+        callerNumber,
+        queue,
+        queuesOnly: !!queuesOnly,
+        slaSeconds,
+        waitBucket: waitBucket || f.waitBucket || '',
+        waitedOver: (waitedOver === undefined || waitedOver === null || waitedOver === '')
+            ? (f.waitedOver === undefined ? null : f.waitedOver)
+            : waitedOver,
+        callbackState: callbackState || f.callbackState || '',
+        outcome: outcome || f.outcome || '',
+        sentiment: sentiment || f.sentiment || '',
+        sort: sortKey,
+        dir: sortDir
+    };
+
     useEffect(() => {
 
         let cancelled = false;
@@ -114,30 +153,7 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
         }
 
         api('calls', {
-            ...filters,
-            callTypes,
-            metric,
-            hour,
-            timeFrom,
-            timeTo,
-            agent,
-            callId,
-            phoneNumber,
-            callerNumber,
-            queue,
-            queuesOnly: !!queuesOnly,
-            slaSeconds,
-            /*
-             * Sprint A: the drill-down carries the scope it was opened from —
-             * a wait band, a callback state, or a sort order. Without these the
-             * modal would show a different population than the card that was
-             * clicked, which is the drift this sprint is about.
-             */
-            waitBucket: waitBucket || '',
-            waitedOver: waitedOver === undefined ? null : waitedOver,
-            callbackState: callbackState || '',
-            sort: sortKey,
-            dir: sortDir,
+            ...scope,
             page,
             size: pageSize
         })
@@ -169,7 +185,7 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
             }
         };
 
-    }, [metric, hour, timeFrom, timeTo, agent, callId, phoneNumber, callerNumber, queue, queuesOnly, slaSeconds, waitBucket, waitedOver, callbackState, sortKey, sortDir, filters, callTypes, page, pageSize]);
+    }, [metric, hour, timeFrom, timeTo, agent, callId, phoneNumber, callerNumber, queue, queuesOnly, slaSeconds, scope.waitBucket, scope.waitedOver, scope.callbackState, scope.outcome, scope.sentiment, scope.hours, scope.start, scope.end, sortKey, sortDir, filters, callTypes, page, pageSize]);
 
     const startIndex = totalRecords === 0 ? 0 : (page - 1) * pageSize;
     const endIndex = Math.min(startIndex + records.length, totalRecords);
@@ -356,17 +372,7 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
         setExporting(true);
         try {
             await apiDownload('calls', {
-                ...filters,
-                callTypes,
-                metric,
-                hour,
-                agent,
-                callId,
-                phoneNumber,
-                callerNumber,
-                queue,
-                queuesOnly: !!queuesOnly,
-                slaSeconds,
+                ...scope,
                 export: true
             }, 'calls-' + String(metric || 'all') + '.csv');
         } catch (e) {
@@ -400,7 +406,6 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
      */
 
     const filterChips = [];
-    const f = filters || {};
     if (f.start && f.end) {
         filterChips.push({ k: 'Range', v: f.start === f.end ? f.start : (f.start + ' → ' + f.end) });
     } else if (f.start) {
@@ -433,17 +438,28 @@ function CallModal({metric,hour,timeFrom,timeTo,agent,callId,phoneNumber,callerN
     /*
      * The scope chips, so a list that is a subset always says which subset.
      */
-    if (waitBucket) {
-        filterChips.push({ k: 'Waited', v: waitBucket === '120+' ? 'over 120s' : waitBucket.replace('-', '–') + 's' });
+    if (scope.waitBucket) {
+        filterChips.push({ k: 'Waited', v: scope.waitBucket === '120+' ? 'over 120s' : scope.waitBucket.replace('-', '–') + 's' });
     }
-    if (waitedOver) {
-        filterChips.push({ k: 'Waited', v: '≥ ' + waitedOver + 's' });
+    if (scope.waitedOver) {
+        filterChips.push({ k: 'Waited', v: '≥ ' + scope.waitedOver + 's' });
     }
-    if (callbackState === 'returned') {
+    if (scope.callbackState === 'returned') {
         filterChips.push({ k: 'Callbacks', v: 'returned' });
     }
-    if (callbackState === 'unreturned') {
+    if (scope.callbackState === 'unreturned') {
         filterChips.push({ k: 'Callbacks', v: 'not returned' });
+    }
+    /*
+     * The two the filter bar sets and a card does not name: without them a
+     * reader could not tell a scoped list from an unscoped one, which is how
+     * the C1 mismatch stayed invisible for as long as it did.
+     */
+    if (scope.outcome) {
+        filterChips.push({ k: 'Outcome', v: scope.outcome });
+    }
+    if (scope.sentiment) {
+        filterChips.push({ k: 'Sentiment', v: scope.sentiment + ' only' });
     }
     if (sort && sort !== 'newest') {
         filterChips.push({ k: 'Sorted by', v: sort + ' ' + (dir === 'asc' ? 'ascending' : 'descending') });

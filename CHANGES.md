@@ -3093,3 +3093,137 @@ the only thing that makes them worth having.
   returning an element rather than markup (SEC-9).
 - `tests/php/export.mjs` — the export header carries `callback`, every row has a
   cell for every header, and the column is only ever filled on missed calls.
+
+---
+
+# CHANGES — the card and its list, and a clock a manager can set (2026-10-12)
+
+**The ask.** Implement three findings from `REVIEW-2026-10.md`: **C1** (the
+sentiment filter reached the KPIs but not the drill-down behind them), **C2**
+(the Follow-ups card recomputed its own answer under a narrowing filter and
+disagreed with its list) and **C7** — "add option for timezone on settings,
+default in eastern".
+
+## 1. C1 — `sentiment` is a filter, so it is applied where the other filters are applied
+
+`api/calls.php` had zero references to `sentiment` while `filters.js` offered it
+as a global select and the modal forwarded `...filters` to it: with "Negative
+only" active, every card collapsed to the negative calls and the list a card
+opened held the whole day. `calls.php` now validates the key through
+`callSentimentFilterKinds()` (the same helper `report.php` uses) and applies
+`filterCallsBySentiment()` next to `filterCallsByOutcome()`, which puts it in
+front of the paging, the CSV and the per-row shaping — the file, the table and
+the number are one population. An unknown value is no filter, on both sides.
+
+Two things fell out of wiring it. `calls.php` now echoes
+`appliedFilters` in the shape `report.php` already used, so the modal's chips
+and a parity test can read what the server actually applied instead of assuming.
+And the modal's own scope handling was worse than "ignored": `api('calls', {
+...filters, waitBucket: waitBucket || '', ... })` **overwrote** the bar's value
+with an empty string whenever the card had not named one, and `exportCallsCsv`
+sent none of the scope at all — so a "not-returned, waited over 120 s" list
+exported a CSV of the whole day. The dialog builds one `scope` object now
+(the drill's own value, else the bar's), and the request, the chips and the
+export all read it. New chips: `Outcome`, `Sentiment`, and the wait/callback
+ones read the effective value.
+
+## 2. C2 — the worklist is a property of the period, not of the subset on screen
+
+`api/report.php` computed `callLinkReport($calls, …)` **after** the
+outcome/wait/sentiment/callback narrowing, while `api/calls.php` classifies each
+row from `$rowContext`, built **before** narrowing. Narrowing by outcome drops
+the outbound leg that made a miss "returned", so the card reclassified the call
+and the list kept saying what the scope said. `report.php` keeps `$linkScope`
+(the rows after the scope filters, before the list-narrowing ones), computes
+`callLinkReport()` from it, and takes its own `callbackState` narrowing sets from
+it — the mirror of the decision `calls.php` documents.
+
+The KPIs still narrow: under `outcome=abandoned` the counts move and the
+returned/unreturned split does not, which is what a manager can defend out loud
+("who was not called back this week" is a fact about the week). Where a number
+*is* scoped to a subset, the modal now says which subset.
+
+## 3. C7 — the desk's timezone, from a Settings row to the cache key
+
+`timezone` is a per-domain setting in `defaultDomainSettings()`, saved through
+the same `$pick` rule as the thresholds (an omitted key keeps the stored value),
+validated by `normalizeTimezoneName()`. `includes/timezone.php` — a new file,
+deliberately outside both `bootstrap.php` (which the harness replaces with a
+double) and `reporting/support.php` (which the session pages do not load) — holds
+the per-request resolver; `authorizedFilters()` applies the tenant's zone before
+anything resolves a date, and every remaining `DEFAULT_TIMEZONE` read in the
+reporting layer, the hour filter in `calls.php` and `APP_TZ` in the two telephone
+endpoints went through it. `report.php` / `session.php` / `login.php` /
+`settings.php` answer `timezone`; `portal.php` seeds `#app-clock` before the
+bundle and `lib/api.js` re-applies the field from every payload, so `APP_TZ`,
+`today` and `rangeDateTimes()` in `lib/time.js` are the desk's, not the
+browser's. README §Dates, days and the time zone documents the contract.
+
+The `DEFAULT_TIMEZONE` constant stays: it is the deployment-wide **fallback**,
+and the stored default is spelled `US/Eastern` so that no install's existing day
+cache moves on upgrade. Two edges worth keeping in mind: a bare offset like
+`+08:00` is refused (no DST rules — exactly the drift this feature exists to
+avoid), and `US/Eastern`/`America/New_York` are one zone with two cache keys,
+which `tests/js/timezone.mjs` pins as a property instead of leaving as a trap.
+
+## 4. A comment that described a cache key nobody built
+
+`loadRawCdrs()` carried `$tzName = DEFAULT_TIMEZONE;` and
+`$file = cacheFile($user['domain'], $date . '|' . $tzName)` — assigned, **never
+read** — under a comment saying the day cache is keyed by timezone, and
+`cdr_store.php:32` repeats that claim. The SQLite store does key days on
+`(domain, tz, day)`; the JSON driver does not, and did not, so on a
+`pdo_sqlite`-less deployment a tenant that moved zone kept being served the old
+zone's day boundaries. `cdrDayCacheFile()` now hashes
+`reportingTimezoneName()` into the filename (the same trick as its `v7`, which
+exists for exactly this kind of change) and the dead pair of lines is deleted.
+The cost is one re-fetch of the days in the requested range; the alternative is
+a silently wrong day.
+
+## What did not change
+
+Every install that never touches the new setting: `timezone` defaults to
+`US/Eastern`, `DEFAULT_TIMEZONE` still answers on its own, and every cached day
+file keeps its name (the string hashed in is byte-identical to the constant that
+was used before). `callLinkReport()`'s signature, the metric catalog, the CSV
+column set and the export shape are untouched — `calls.php`'s new
+`appliedFilters` is additive. The two telephone endpoints still accept a
+caller-supplied `timezone`; what changed is that their fallback is now the same
+answer the Dashboard used, instead of a compile-time constant.
+
+## Verification
+
+`npm test` — all 30 suites, including the new `desk clock` suite. New checks,
+each one **run against the pre-fix source to confirm it fails** (22 failing
+checks in `call links`, 65 in `report metrics`, 7 in `js smoke`, and the export
+suite red):
+
+- `tests/php/call-links.mjs` §8 — seven hand-built rows on a day nobody else
+  uses. `sentiment=negative` gives one card row and one list row (before: 1 and
+  7); `positive` mirrors it; a neutral-only call is in neither bucket; an
+  unknown value is no filter on either endpoint; both `appliedFilters` blocks are
+  equal. The links block is asserted **invariant** under `outcome=abandoned`,
+  `waitBucket`, `waitedOver` and `sentiment` while `summary.counts.missed` moves
+  3 → 2, and the returned/unreturned drills agree with it row by row.
+- `tests/php/export.mjs` — the CSV respects `sentiment` (one negative row, one
+  positive row, everything on a value outside the vocabulary).
+- `tests/php/report-metrics.mjs` §9 — the setting round-trips; garbage and bare
+  offsets fall back to the deployment default *without* rolling back the rest of
+  the save; an omitted/empty/null key keeps the stored zone and the calendar
+  beside it. Then the arithmetic, by hand: one instant (2026-09-21T22:00Z) is
+  18:00 Monday the 21st in `US/Eastern` and 06:00 Tuesday the 22nd in
+  `Asia/Manila` — asserted through `easternDayWindow()`, `callLocalDate()`,
+  `parseEasternDateTime()`, `callWithinBusinessHours()`, a differing
+  `cdrDayCacheFile()`, and end to end: the same seeded call is on the 21st for
+  one tenant and the 22nd for the other, `hour=18` finds it in New York,
+  `hour=6` finds it in Manila, and `report.php` / `session.php` /
+  `settings.php` all name the zone they used.
+- `tests/js/timezone.mjs` (new) — `applyServerTimezone()` moves `today`, the
+  formatter and the `datetimeStart`/`datetimeEnd` window, with the clock frozen
+  so the "did the default range follow the zone?" check does not depend on the
+  hour the suite runs at; nine unusable zone names are refused without touching
+  the clock (a bad `timeZone` throws inside every `Intl` call downstream).
+- `tests/js/smoke.mjs` — the Settings dialog shows the stored zone in a list of
+  real zones and posts it in the same payload as the thresholds; and a KPI
+  clicked while the bar holds `sentiment=negative&outcome=abandoned` sends both,
+  renders both as chips, and sends both with `export: true`.

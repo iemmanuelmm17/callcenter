@@ -5,9 +5,17 @@ require_once __DIR__ . '/../includes/reporting.php';
 require_once __DIR__ . '/../includes/export.php';
 
 if (!defined('APP_TZ')) {
+    /*
+     * The fallback for a caller that did not name a zone: the DESK's timezone,
+     * i.e. the per-domain `timezone` setting (finding C7) rather than the
+     * deployment constant. Both endpoints also accept a `timezone` from the
+     * request and validate it, so this decides only what "use whatever the
+     * report uses" means - and it has to be the same answer the dashboard
+     * beside it used, or the two charts bucket the same calls by different clocks.
+     */
     define(
         'APP_TZ',
-        defined('DEFAULT_TIMEZONE') ? DEFAULT_TIMEZONE : 'America/New_York'
+        reportingTimezoneName()
     );
 }
 

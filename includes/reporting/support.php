@@ -9,20 +9,28 @@ declare(strict_types=1);
  * The split is deliberately mechanical: same code, same order, same guards.
  */
 
-function reportingTimezone(): DateTimeZone
-{
-    $name = defined('DEFAULT_TIMEZONE') ? DEFAULT_TIMEZONE : 'America/New_York';
-    try {
-        return new DateTimeZone($name);
-    } catch (Throwable $e) {
-        return new DateTimeZone('America/New_York');
-    }
-}
+/*
+ * reportingTimezone() / reportingTimezoneName() live in includes/timezone.php
+ * since finding C7: the zone is a per-domain SETTING, applied once per request,
+ * and the pages that answer about the session have to read it without loading
+ * this file. What stays here is everything that resolves a timestamp THROUGH it
+ * - which is why nothing in this file reads DEFAULT_TIMEZONE any more: doing so
+ * would answer a per-request question with a per-deployment constant.
+ */
 
+/**
+ * The desk's own [00:00, 23:59:59] for a date, in the PBX's request syntax.
+ *
+ * The name is historical (the desk used to be defined only by
+ * DEFAULT_TIMEZONE = US/Eastern); the window is now the day as the TENANT's
+ * zone sees it, which is what the day cache is keyed on. Keep the two in step:
+ * a window computed in one zone under a filename hashed with another is a day
+ * of CDR data filed under the wrong date.
+ */
 function easternDayWindow(string $date): array
 {
     $date = substr(trim($date), 0, 10);
-    $tz = defined('DEFAULT_TIMEZONE') ? DEFAULT_TIMEZONE : 'America/New_York';
+    $tz = reportingTimezoneName();
     return [
         $date . 'T00:00:00Z[' . $tz . ']',
         $date . 'T23:59:59Z[' . $tz . ']',

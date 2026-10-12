@@ -43,6 +43,8 @@ const SUITES = {
     { name: 'aa fields', cmd: ['node', 'tests/js/aa-fields.mjs'] },
     { name: 'aa model', cmd: ['node', 'tests/js/aa-model.mjs'] },
     { name: 'date range', cmd: ['node', 'tests/js/date-range.mjs'] },
+    /* The desk's timezone on the client side (review C7). */
+    { name: 'desk clock', cmd: ['node', 'tests/js/timezone.mjs'] },
     { name: 'pagination', cmd: ['node', 'tests/js/pagination.mjs'] },
     /* Bug #4: the call modal 404'd because the Tabulator URL was hand-built. */
     { name: 'vendor paths', cmd: ['node', 'tests/js/vendor-paths.mjs'] }

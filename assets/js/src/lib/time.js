@@ -6,7 +6,56 @@
 
 import { h } from './react.js';
 
-const APP_TZ = 'America/New_York';
+/*
+ * The desk's timezone, not the browser's (review, finding C7).
+ *
+ * It starts at the deployment default and is re-seated by applyServerTimezone()
+ * as soon as the server says otherwise - from the clock island portal.php renders
+ * (before the first paint, so the default date range is already the right DAY)
+ * and again from every payload that carries `timezone`. It is a `let` and
+ * `today` is recomputed by that setter on purpose: both are exported as live
+ * bindings, so a component reading `today` after a manager changes the setting
+ * gets the desk's new date, not the one the module saw at import time.
+ *
+ * The zone decides WHICH calendar date a call belongs to, so this is not a
+ * label: an off-by-one here is a report about a different day than the one the
+ * server was asked for.
+ */
+let APP_TZ = 'America/New_York';
+
+/*
+ * A zone name the runtime cannot resolve must never reach Intl: an invalid
+ * timeZone option throws inside every formatToParts call downstream, which would
+ * take the whole dashboard down over one bad setting. The shape allowed is an
+ * IANA id - letters, digits, '_', '+', '-' and the '/' between Region and City -
+ * which is also what the server accepts (normalizeTimezoneName() in
+ * includes/timezone.php), including its refusal of a bare offset like '+08:00',
+ * which has no DST rules to follow.
+ */
+const usableTimezone = name => {
+    const clean = typeof name === 'string' ? name.trim() : '';
+    if (!clean || clean.length > 64 || /[^A-Za-z0-9_+/\-]/.test(clean)) return '';
+    try {
+        new Intl.DateTimeFormat('en-US', { timeZone: clean });
+    } catch (e) {
+        return '';
+    }
+    return clean;
+};
+
+/**
+ * Adopt the server's timezone and answer with the one now in effect.
+ * The date helpers below read APP_TZ at CALL time, so an apply mid-session is
+ * enough: nothing has to be re-rendered into place.
+ */
+const applyServerTimezone = name => {
+    const clean = usableTimezone(name);
+    if (!clean || clean === APP_TZ) return APP_TZ;
+    APP_TZ = clean;
+    /* `today` is a function of the zone as much as of the clock. */
+    today = date(new Date());
+    return APP_TZ;
+};
 
 const tzParts = (d, tz) => {
     const parts = new Intl.DateTimeFormat('en-US', {
@@ -37,7 +86,7 @@ const calendarDateInTz = (d, tz = APP_TZ) => {
 
 const date = d => calendarDateInTz(d instanceof Date ? d : new Date(d), APP_TZ);
 
-const today = date(new Date());
+let today = date(new Date());
 
 const easternOffsetMinutes = (year, month, day) => {
     const utc = Date.UTC(year, month - 1, day, 12);
@@ -136,6 +185,8 @@ const callCalendarDate = value => {
   };
 
 const rangeDateTimes = (start, end) => {
+    /* The day boundaries are the desk's, so a range picked in the browser means
+     * the same window the server will slice its cache by (finding C7). */
     const zone = APP_TZ;
     return {
       timezone: zone,
@@ -197,4 +248,4 @@ function histTimeOnly(value) {
   return i >= 0 ? d.slice(i + 1).trim() : d;
 }
 
-export { APP_TZ, date, formatCallDate, formatCallTime, formatHistDate, formatMmss, histDayKey, histDayLabel, histTimeOnly, nsTimestampParts, parseCallInstant, rangeDateTimes, today, tzParts };
+export { APP_TZ, applyServerTimezone, date, formatCallDate, formatCallTime, formatHistDate, formatMmss, histDayKey, histDayLabel, histTimeOnly, nsTimestampParts, parseCallInstant, rangeDateTimes, today, tzParts };
