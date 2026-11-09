@@ -55,8 +55,9 @@ $hours = businessHours($settings);
  * vocabulary (QA-8). Keys are metric ids, values carry label/title.
  */
 jsonResponse([
-    'departments' => array_keys($departments),
-    'sites' => array_keys($sites),
+    /* PHP converts numeric string array keys to integers; expose names as strings. */
+    'departments' => array_map('strval', array_keys($departments)),
+    'sites' => array_map('strval', array_keys($sites)),
     'agents' => array_values($agents),
     'queues' => $queues,
     'metrics' => callMetricCatalog(),

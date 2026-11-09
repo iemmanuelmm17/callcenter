@@ -145,6 +145,15 @@ function CallTypeFilters({callTypes,setCallTypes}) {
     );
 }
 
+/* Older API responses can contain numbers for numeric PHP array keys. */
+function filterOptions(values) {
+  if (!Array.isArray(values)) return [];
+  return values
+    .filter(value => typeof value === 'string' || typeof value === 'number')
+    .map(value => String(value))
+    .sort((a, b) => a.localeCompare(b));
+}
+
 function Filters({filters,setFilters,role,rangeLocked,maxRangeDays}) {
   const [departments,setDepartments] = useState([]);
   const [sites,setSites] = useState([]);
@@ -165,15 +174,11 @@ function Filters({filters,setFilters,role,rangeLocked,maxRangeDays}) {
         if (!active) return;
 
         setDepartments(
-          Array.isArray(r.departments)
-            ? r.departments
-            : []
+          filterOptions(r.departments)
         );
 
         setSites(
-          Array.isArray(r.sites)
-            ? r.sites
-            : []
+          filterOptions(r.sites)
         );
 
         /*
@@ -355,9 +360,6 @@ const fits = start => daysSpan(start, today) <= spanCap;
         ),
 
         ...departments
-          .sort((a,b) =>
-            a.localeCompare(b)
-          )
           .map(department =>
             h(
               'option',
@@ -399,7 +401,6 @@ const fits = start => daysSpan(start, today) <= spanCap;
         },
         h('option', { value: '' }, 'All Sites'),
         ...sites
-          .sort((a,b) => a.localeCompare(b))
           .map(site => h('option', { key: site, value: site }, site))
       ),
 

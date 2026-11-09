@@ -60,7 +60,8 @@ await harness.boot();
 await harness.seedPbx('users', [
   { user: '1000', 'name-first-name': 'Test', 'name-last-name': 'Manager', 'user-scope': 'Office Manager', department: '', site: '', 'login-username': '1000@test.example' },
   { user: '6080', 'name-first-name': 'Ada', 'name-last-name': 'Lovelace', 'user-scope': 'User', department: 'Sales', site: 'HQ', 'login-username': '6080@test.example' },
-  { user: '6081', 'name-first-name': 'Alan', 'name-last-name': 'Turing', 'user-scope': 'User', department: 'Support', site: 'HQ', 'login-username': '6081@test.example' }
+  { user: '6081', 'name-first-name': 'Alan', 'name-last-name': 'Turing', 'user-scope': 'User', department: 'Support', site: 'HQ', 'login-username': '6081@test.example' },
+  { user: '6082', 'name-first-name': 'Numeric', 'name-last-name': 'Location', 'user-scope': 'User', department: '123', site: '456' }
 ]);
 await harness.seedPbx('callqueues', [{ callqueue: '700', description: 'Sales queue', site: 'HQ', 'callqueue-dispatch-type': 'simultaneous', 'active-queued-calls-total-current': 2, 'callqueue-count-agents-available': 4, 'callqueue-count-agents-total': 6 }]);
 await harness.seedPbx('callqueueAgents', [{ user: '6080', name: 'Ada Lovelace' }]);
@@ -118,6 +119,18 @@ for (const entry of MATRIX) {
     const res = await harness.request(endpoint, { method, body, user: USERS.office_manager, query: {} });
     check(`${label} → ${expectStatus.join('/')}`, expectStatus.includes(res.status), { status: res.status, body: res.body });
   }
+}
+
+console.log('\n== numeric filter names ==');
+{
+  const res = await harness.request('filters.php', { method: 'GET', user: USERS.office_manager });
+  check('numeric department names are JSON strings', res.body?.departments?.includes('123'), res.body?.departments);
+  check('numeric site names are JSON strings', res.body?.sites?.includes('456'), res.body?.sites);
+  const restricted = await harness.request('filters.php', {
+    method: 'GET', user: { ...USERS.supervisor, department: '123', site: '456' }
+  });
+  check('restricted numeric filter names are JSON strings',
+    restricted.body?.departments?.includes('123') && restricted.body?.sites?.includes('456'), restricted.body);
 }
 
 /* ---------------------------------------------------------------------------

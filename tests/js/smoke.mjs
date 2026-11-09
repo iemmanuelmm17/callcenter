@@ -20,6 +20,9 @@ const check = (label, condition, extra) => {
   }
 };
 
+// Legacy PHP responses may encode numeric department/site keys as numbers.
+FIXTURES.filters.departments = ['Sales', 123, 'Billing', 0, null, { bad: true }];
+FIXTURES.filters.sites = ['HQ', 456, 'Branch', null, { bad: true }];
 const harness = await createHarness();
 const { window, document, root, flush, click, press, byText, containing, errors, warnings, requested, tables, charts, act, typeInto } = harness;
 
@@ -31,6 +34,37 @@ check('header shows the signed-in user', root().textContent.includes('Test OM'),
 check('session endpoint called', requested.some(r => r.endpoint === 'session'), JSON.stringify(requested.slice(0, 4)));
 check('dashboard fetched report', requested.some(r => r.endpoint === 'report'));
 check('settings fetched', requested.some(r => r.endpoint === 'settings'));
+{
+  const selects = [...document.querySelectorAll('.filters-bar select')];
+  const department = selects.find(s => s.options[0]?.textContent === 'All Departments');
+  const site = selects.find(s => s.options[0]?.textContent === 'All Sites');
+  check('numeric departments render as sorted string options',
+    !!department && [...department.options].map(o => o.value).join('|') === '|0|123|Billing|Sales', department?.innerHTML);
+  check('numeric sites render as sorted string options',
+    !!site && [...site.options].map(o => o.value).join('|') === '|456|Branch|HQ', site?.innerHTML);
+  if (department && site) {
+    await act(async () => {
+      department.value = '123';
+      department.dispatchEvent(new window.Event('change', { bubbles: true }));
+    });
+    await act(async () => {
+      site.value = '456';
+      site.dispatchEvent(new window.Event('change', { bubbles: true }));
+    });
+    await flush(8);
+    check('numeric filter options can be selected', department.value === '123' && site.value === '456');
+    await act(async () => {
+      department.value = '';
+      department.dispatchEvent(new window.Event('change', { bubbles: true }));
+    });
+    await act(async () => {
+      site.value = '';
+      site.dispatchEvent(new window.Event('change', { bubbles: true }));
+    });
+    await flush(8);
+  }
+}
+
 
 console.log('\n== routes ==');
 const goTo = async label => {
