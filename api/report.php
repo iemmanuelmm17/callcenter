@@ -239,10 +239,32 @@ if (
         }
     }
 
+    /*
+     * Extensions with no call in the range (`zeroCallAgents`).
+     *
+     * agentPerformance() builds a row when it meets a call, so an extension
+     * that handled nothing was not a row of zeros - it was no row at all, and
+     * the Agent stats table could not show who had been idle. The Agents screen
+     * now asks for every extension in scope and gets one row each.
+     *
+     * Opt-in, for two reasons. The Dashboard reads these same rows for its Top
+     * Agents card and has no use for a line per idle extension on every load;
+     * and any caller that does not send the flag gets exactly the payload it
+     * got before.
+     *
+     * The scope is the one the calls above were read with - department, site,
+     * agents, and the role rules inside authorizedFilters() - asked of the
+     * directory instead of the CDRs. See agentExtensionsInScope().
+     */
+    $zeroCallAgents = !empty($requested['zeroCallAgents'])
+        ? agentExtensionsInScope($directory, $filters, $user)
+        : [];
+
 	$agentPerformance = agentPerformance(
 		$calls,
 		$directory,
-		$queueIds
+		$queueIds,
+		$zeroCallAgents
 	);
 
 
@@ -458,6 +480,15 @@ $comparison = [
 foreach (
     $agentPerformance as $agent
 ) {
+
+    /*
+     * A top agent took calls. A row that is only there because the extension
+     * was listed (zeroCallAgents, above) is not a candidate. Without that flag
+     * every row has at least one call and this skips nothing.
+     */
+    if ((int)$agent['total'] < 1) {
+        continue;
+    }
 
     $topAgents[] = [
         'extension' =>

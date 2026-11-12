@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1337 names.
+ * 1339 names.
  */
 return [
     'aa',
@@ -135,6 +135,7 @@ return [
     'ap-search',
     'ap-site',
     'ap-toolbar',
+    'ap-zero-btn',
     'app-clock',
     'application',
     'apps',
@@ -284,6 +285,7 @@ return [
     'callqueue-dispatch-type',
     'calls',
     'callscope-agent-cols',
+    'callscope-agent-hide-zero',
     'callscope-sla-seconds',
     'callscope-theme',
     'canvas',

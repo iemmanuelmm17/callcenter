@@ -59,6 +59,8 @@ const SUITES = {
     { name: 'cdr speed', cmd: ['node', 'tests/php/cdr-speed.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'outcome parity', cmd: ['node', 'tests/php/outcomes.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'report metrics', cmd: ['node', 'tests/php/report-metrics.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
+    /* Agent stats lists the extensions with no call: who gets a row, and who is sent whose. */
+    { name: 'zero-call agents', cmd: ['node', 'tests/php/zero-call-agents.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'call links', cmd: ['node', 'tests/php/call-links.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'portal', cmd: ['node', 'tests/php/portal.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } }
   ]

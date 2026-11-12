@@ -153,6 +153,72 @@ function scopedCdrs(array $raw, array $filters, array $directory = []): array {
 }
 
 /**
+ * The directory extensions an agent report lists even when they took no call:
+ * ordinary users (a blank service code - queues, auto attendants and the other
+ * system users are never agents) inside the scope the calls were read with.
+ *
+ * This is scopedCdrs() asked of the directory instead of the calls, so the two
+ * cannot disagree about who belongs in a filtered report: the same department,
+ * site and agent filters, matched against the directory entry because an
+ * extension with no call has no CDR to read a department from.
+ *
+ * `$filters` must be the output of authorizedFilters(). That is what forces a
+ * supervisor's department and an agent's own extension, and it is why this can
+ * be called for any role.
+ *
+ * One rule here is stricter than the calls' and is deliberate: a non-manager
+ * only ever gets extensions whose department is EXACTLY their own, blank
+ * included. scopedCdrs() reads a blank department as "no filter"; for names
+ * that are not attached to any call that would hand a supervisor without a
+ * department the whole directory. api/agents.php - the list these roles
+ * already see - applies the same exact match, so this publishes no name that
+ * endpoint does not.
+ *
+ * @return list<string> extensions, in directory order
+ */
+function agentExtensionsInScope(array $directory, array $filters, array $user): array
+{
+    $manager = (string)($user['role'] ?? '') === 'office_manager';
+    $ownDepartment = trim((string)($user['department'] ?? ''));
+    $department = trim((string)($filters['department'] ?? ''));
+    $site = trim((string)($filters['site'] ?? ''));
+    $only = array_map('strval', (array)($filters['agents'] ?? []));
+
+    $extensions = [];
+
+    foreach ($directory as $key => $entry) {
+        if (!is_array($entry)) {
+            continue;
+        }
+        /* PHP turns a numeric-string array key into an integer, so the key is
+         * cast back: an extension is compared and published as a string. */
+        $extension = trim((string)($entry['extension'] ?? $key));
+        if ($extension === '') {
+            continue;
+        }
+        if (trim((string)($entry['serviceCode'] ?? '')) !== '') {
+            continue;
+        }
+        $entryDepartment = trim((string)($entry['department'] ?? ''));
+        if (!$manager && $entryDepartment !== $ownDepartment) {
+            continue;
+        }
+        if ($department !== '' && $entryDepartment !== $department) {
+            continue;
+        }
+        if ($site !== '' && trim((string)($entry['site'] ?? '')) !== $site) {
+            continue;
+        }
+        if ($only !== [] && !in_array($extension, $only, true)) {
+            continue;
+        }
+        $extensions[] = $extension;
+    }
+
+    return $extensions;
+}
+
+/**
  * FUNC-16 / FUNC-27 FIX: single source of truth for the SLA window across
  * the reporting endpoints (calls, report, queue, cradle).
  *
@@ -875,10 +941,75 @@ function filterCallTypes(
     );
 }
 
+/**
+ * An agent row before any call is counted into it: who it is, zeroed counts and
+ * the `_`-prefixed accumulators agentPerformance() turns into averages.
+ *
+ * One definition on purpose. It is used for an extension's first call and for
+ * an extension that is listed without any, so a busy row and an idle row are
+ * built from the same keys in the same order and cannot drift apart.
+ */
+function blankAgentPerformanceRow(
+    string $extension,
+    string $department,
+    string $site,
+    string $name
+): array {
+
+    return [
+
+        'extension' => $extension,
+
+        'department' => $department,
+
+        'site' => $site,
+
+        'name' => $name,
+
+        /*
+         * Call counts.
+         */
+        'total' => 0,
+        'ib' => 0,
+        'ob' => 0,
+        'mc' => 0,
+        'ab' => 0,
+        'onnet' => 0,
+
+        /*
+         * Inbound accumulators.
+         */
+        '_ibTalk' => 0,
+        '_ibAnswer' => 0,
+        '_ibLongestTalk' => 0,
+        '_ibTotal' => 0,
+
+        /*
+         * Outbound accumulators.
+         */
+        '_obRing' => 0,
+        '_obAnswer' => 0,
+        '_obLongestTalk' => 0,
+        '_obTotal' => 0
+    ];
+}
+
+/**
+ * One row per agent extension - what the Agent stats table, the agent overview,
+ * the compare view and the Dashboard's Top Agents all read.
+ *
+ * `$alsoList` is optional. Without it a row exists only for an extension that
+ * appears in `$calls`, which is what this function has always returned. With it
+ * (a list of extensions, see agentExtensionsInScope()) each of those gets a row
+ * as well, all zeros when it took no call: "this extension handled nothing in
+ * the range" is a finding, and a table that leaves the row out cannot show it.
+ * The same idea as `$knownQueues` in packQueueRows().
+ */
 function agentPerformance(
     array $calls,
     array $directory,
-    array $queueIds = []
+    array $queueIds = [],
+    array $alsoList = []
 ): array {
 
     $agents = [];
@@ -918,57 +1049,27 @@ function agentPerformance(
          */
         if (!isset($agents[$extension])) {
 
-            $agents[$extension] = [
+            $agents[$extension] = blankAgentPerformanceRow(
 
-                'extension' =>
-                    $extension,
+                $extension,
 
-                'department' =>
-                    callDepartment($call)
+                callDepartment($call)
                     ?: (string)(
                         $directoryEntry['department']
                         ?? ''
                     ),
 
-                'site' =>
-                    callSite($call)
+                callSite($call)
                     ?: (string)(
                         $directoryEntry['site']
                         ?? ''
                     ),
 
-                'name' =>
-                    (string)(
-                        $directoryEntry['name']
-                        ?? $extension
-                    ),
-
-                /*
-                 * Call counts.
-                 */
-                'total' => 0,
-                'ib' => 0,
-                'ob' => 0,
-                'mc' => 0,
-                'ab' => 0,
-                'onnet' => 0,
-
-                /*
-                 * Inbound accumulators.
-                 */
-                '_ibTalk' => 0,
-                '_ibAnswer' => 0,
-                '_ibLongestTalk' => 0,
-                '_ibTotal' => 0,
-
-                /*
-                 * Outbound accumulators.
-                 */
-                '_obRing' => 0,
-                '_obAnswer' => 0,
-                '_obLongestTalk' => 0,
-                '_obTotal' => 0
-            ];
+                (string)(
+                    $directoryEntry['name']
+                    ?? $extension
+                )
+            );
         }
 
         /*
@@ -1095,6 +1196,47 @@ function agentPerformance(
 
 
     /*
+     * Extensions that are listed whether or not they took a call.
+     *
+     * Seeded AFTER the calls, so a row the calls already built is never
+     * replaced (it may carry the call's own department and site), and BEFORE
+     * the conversion below, so an idle row goes through the same code as a
+     * busy one and comes out with the same fields.
+     */
+    foreach ($alsoList as $listed) {
+
+        $extension = trim((string)$listed);
+
+        if (
+            $extension === '' ||
+            isset($agents[$extension])
+        ) {
+            continue;
+        }
+
+        $directoryEntry =
+            $directory[$extension] ?? [];
+
+        /*
+         * The same rule as for a call above: a system/service user is not
+         * an agent, whoever asked for it to be listed.
+         */
+        if (
+            ($directoryEntry['serviceCode'] ?? '') !== ''
+        ) {
+            continue;
+        }
+
+        $agents[$extension] = blankAgentPerformanceRow(
+            $extension,
+            (string)($directoryEntry['department'] ?? ''),
+            (string)($directoryEntry['site'] ?? ''),
+            (string)($directoryEntry['name'] ?? $extension)
+        );
+    }
+
+
+    /*
      * Convert accumulated values into
      * the exact fields expected by React.
      */
@@ -1193,7 +1335,8 @@ function agentPerformance(
     /*
      * Sort by total calls descending.
      *
-     * This makes the busiest agents appear first.
+     * This makes the busiest agents appear first, and it is also what puts
+     * the extensions listed without a call last, in name order (the tie rule).
      */
     usort(
         $agents,

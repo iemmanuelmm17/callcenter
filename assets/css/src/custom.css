@@ -2462,6 +2462,22 @@ html[data-theme="light"] .qs-num-btn.is-fail { color: #e41e3f !important; }
   padding: 8px 12px; font-size: 12px; border-radius: 6px; cursor: pointer;
 }
 .ap-cols-btn:hover { border-color: var(--color-cyan-400); color: var(--color-cyan-300); }
+/* The "hide extensions with 0 calls" switch. Same box as the Columns button it
+   sits beside; lit (.is-on) while rows are hidden, so an active filter is never
+   something the reader has to remember. Theme tokens only, for the light theme. */
+.ap-zero-btn {
+  border: 1px solid var(--color-slate-700);
+  background: var(--color-slate-900);
+  color: var(--color-slate-200);
+  padding: 8px 12px; font-size: 12px; border-radius: 6px; cursor: pointer;
+  white-space: nowrap;
+}
+.ap-zero-btn:hover { border-color: var(--color-cyan-400); color: var(--color-cyan-300); }
+.ap-zero-btn.is-on {
+  border-color: var(--color-cyan-400);
+  color: var(--color-cyan-300);
+  background: color-mix(in srgb, var(--color-cyan-400) 12%, transparent);
+}
 .ap-cols-overlay { z-index: 2147483647 !important; }
 .ap-cols-modal { width: min(640px, calc(100vw - 24px)); max-height: min(88vh, 720px); }
 .ap-col-grid {

@@ -70,7 +70,13 @@ function AgentCompare({filters, callTypes, onAgentClick}) {
                 agents: [agent],
                 callTypes,
                 slaSeconds: readSlaSeconds(),
-                skipPrevious: 1
+                skipPrevious: 1,
+                /*
+                 * An agent with no call in the range still gets a row (all
+                 * zeros). Without it two idle agents left this screen saying
+                 * "Select two agents to compare" with both already selected.
+                 */
+                zeroCallAgents: 1
             });
             const [a, b] = await Promise.all([
                 api('report', body(left)),

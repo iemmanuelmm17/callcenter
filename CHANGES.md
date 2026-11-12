@@ -1,3 +1,122 @@
+# CHANGES — Agent stats lists the extensions with 0 calls, and a switch hides them
+
+**What this phase is about.** Agents → Agent stats showed an extension only if
+it had a call in the selected range, so the table could not answer "who took
+nothing?" — an idle extension was not a row of zeros, it was missing. The idle
+extensions are listed now, after the ones that had calls, and one switch in the
+table's toolbar hides or shows them. No published figure moves: every count,
+rate and average on the screen is the same number with the idle rows shown,
+hidden, or — for every other screen — never requested.
+
+## What was happening
+
+`agentPerformance()` (`includes/reporting/rows.php`) created a row when it met a
+call. An extension the range held no call for was never met, so it had no row,
+and nothing downstream could draw one. The table and its CSV read those rows; so
+do the agent Overview, which said "Select an agent in the list." with an idle
+agent selected, and Compare, which said "Select two agents to compare." with two
+idle agents selected.
+
+## The fix: the report lists who is in scope
+
+* **`zeroCallAgents`** — a new, optional request field on `api/report.php`. When
+  it is truthy, `agentPerformance` carries one row for every agent extension in
+  scope: a row of zeros where there was no call. A request without the field is
+  answered exactly as before; the Dashboard reads the same rows for its Top
+  agents card, has no use for a line per idle extension, and does not send it.
+* **Who is in scope** is `agentExtensionsInScope()` (new, `rows.php`) — the
+  question `scopedCdrs()` asks of the calls, asked of the directory. Ordinary
+  users only (a blank service code: a queue or an auto attendant is never an
+  agent), matched against the directory entry on the request's department, site
+  and agents filters, after `authorizedFilters()` has applied the role rules.
+  One rule is deliberately stricter than the calls': a non-manager is only ever
+  sent extensions whose department is exactly their own, blank included. That is
+  the match `api/agents.php` already applies, so the idle rows publish no name
+  the Agents list does not already show that user — and a supervisor without a
+  department is not handed the whole directory.
+* **`agentPerformance()`** takes that list as an optional fourth argument and
+  seeds a row for each extension the calls did not already build. The blank row
+  is one function, `blankAgentPerformanceRow()`, used for an extension's first
+  call and for an extension with none, so an idle row has the same fields in the
+  same order as a busy one. Rows still sort by total calls, then name — which
+  puts the idle extensions last, in name order.
+* **Top agents** skips a row with no calls. Without the field there is no such
+  row, so the Dashboard's card is untouched; with it, an idle extension is not a
+  top agent.
+
+The Agents screen sends the field with its report request (`loadAgentReport()`
+in `app-shell.js`, which feeds Agent stats and Overview) and Compare sends it
+for each side (`agent-compare.js`).
+
+## On screen
+
+* **The switch** sits in the Agent stats toolbar between the site filter and
+  Columns. It reads `Hide 0-call extensions (N)`, and `Show 0-call extensions
+  (N)` — lit — while they are hidden. N is the number of idle rows that match
+  the table's search and site filter, whichever way the switch is set, so the
+  button always says how many rows it is hiding or would hide. Shown is the
+  default. The choice is remembered per browser (`localStorage`,
+  `callscope-agent-hide-zero`), like the column choice: a desk with far more
+  extensions than agents sets it once.
+* **An idle row** reads `0` under Total calls and a dash in every other cell.
+  Total calls is the one count that is never blanked — on a row that exists to
+  say "nothing", a dash would read as data that failed to load.
+* **A table the switch emptied says so**: "No extension had calls for the
+  selected dates and filters. 3 extensions with 0 calls are hidden." "No agent
+  stats." still means there is nobody to list.
+* **The KPI cards** (Total calls, Active agents, Avg handle time, Missed calls)
+  are computed over every row, and an idle row adds nothing to any of them.
+  **The totals row** and **the CSV** follow the rows on screen, as they did: the
+  sums, rates and weighted averages are identical either way, and "N agents"
+  counts the idle rows while they are shown.
+* **"N sites" in the totals row** now counts the different sites. It counted the
+  rows that had a site — the same number only while every agent sat at a site
+  of their own — and a row per idle extension made the difference plain
+  ("7 agents, 6 sites" for a desk with two).
+* **Overview and Compare** show an idle agent as zeros ("No calls in range")
+  instead of asking for a selection that has already been made.
+
+## Evidence
+
+- `npm test` — **30 suites** (was 29; `zero-call agents` added), all PHP suites
+  in strict mode, all green.
+- New `tests/php/zero-call-agents.mjs` (41 checks, real PHP, one synthetic day):
+  the payload without the field has no idle row, and a falsy field is no field;
+  with it every ordinary extension has a row, busy first and idle in name order,
+  an idle row has a busy row's fields and every figure on it is zero; a queue or
+  an auto attendant is never listed, even when the request names it; the summary
+  counts and Top agents are identical with and without the field; the
+  department, site and agents filters; and the role rules — a supervisor gets
+  their own department whatever they ask for, a supervisor without a department
+  gets the extensions without one rather than the directory, an agent gets
+  their own row and nobody else's.
+- New block in `tests/js/smoke.mjs` (18 checks, the real bundle): the Agents
+  screen and both sides of Compare send the field and the Dashboard does not;
+  idle rows are listed by default with `0` under Total calls; the switch hides
+  them, states the count in both positions, follows the site filter, explains an
+  emptied table, is stored, and survives leaving the screen; Active agents and
+  the totals stay put; the totals row counts sites, not rows.
+- Both fail against the previous sources.
+- The answer to a request **without** the field was compared before and after
+  the change, byte for byte: eight requests over the same day (four roles; the
+  department, site and agents filters; with and without the previous period) —
+  identical.
+- By hand, in headless Chrome against the committed bundle: the switch in the
+  dark and the light theme, from the keyboard (Tab, Space, Enter), with the
+  search box, across a reload, at 1600, 1100 and 760 px wide (below roughly
+  790 px the Columns button wraps under the search box), the drill-down from an
+  idle row, and an idle agent in Overview and Compare. No console errors.
+- `dead-code --strict`, `ui-audit --strict`, `css-coverage`, `module-budget`,
+  `cdr-fields` (regenerated — two new literals) and `prod-build`: clean.
+- Built assets re-hashed and committed: `assets/js/app.ff9cb69ffa.js`,
+  `assets/css/app.a96fe527ab.css`.
+
+**Behaviour change to disclose:** the Agent stats table, and its CSV, is longer
+by default — one row per idle extension in scope — until the switch is set; an
+idle agent's Overview and Compare show zeros where they showed a prompt; the
+totals row's "N sites" is a count of sites, so it can read lower than it did;
+and `report.php` gains the optional `zeroCallAgents` request field.
+
 # CHANGES — a 15-day range: what was slow, and the five fixes
 
 **What this phase is about.** "The app takes too long to load/call CDR with 15

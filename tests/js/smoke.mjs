@@ -1616,6 +1616,172 @@ console.log('\n== F2: long-range presets and the warming banner ==');
   FIXTURES.cache_job = cacheFixture;
 }
 
+/*
+ * Agent stats lists the extensions that had no call, and one switch hides them.
+ *
+ * The rows are the server's: report.php sends one per extension in scope when
+ * the request carries `zeroCallAgents` (tests/php/zero-call-agents.mjs proves
+ * that half against real PHP). What this block pins is the client's half - the
+ * Agents screen asks and the Dashboard does not, the idle extensions are on
+ * screen by default, and the switch hides them, says how many, and is
+ * remembered.
+ *
+ * Its own harness, for two reasons: the fixture gains two idle extensions for
+ * this block only (every block above counts "2 agents"), and the switch writes
+ * localStorage, which must not follow the main app around.
+ */
+console.log('\n== agent stats: extensions with 0 calls ==');
+{
+  const idle = (extension, name, department, site) => ({
+    extension, name, department, site,
+    total: 0, ib: 0, ob: 0, mc: 0, ab: 0, onnet: 0,
+    ibAht: 0, ibAat: 0, ibLtt: 0, ibTct: 0, obArt: 0, obAat: 0, obLtt: 0, obTct: 0,
+    offered: 0, mcRate: 0, abRate: 0
+  });
+  const busyRows = FIXTURES.report.agentPerformance;
+  FIXTURES.report.agentPerformance = [
+    ...busyRows,
+    idle('6083', 'Edsger Dijkstra', 'Sales', 'Branch'),
+    idle('6082', 'Grace Hopper', 'Sales', 'HQ')
+  ];
+
+  const app = await createHarness();
+  const doc = app.document;
+  await app.flush(10);
+
+  const reportBodies = () => app.requested
+    .filter(r => r.endpoint === 'report')
+    .map(r => JSON.parse((typeof r.body === 'string' ? r.body : '') || '{}'));
+  const open = async label => {
+    const item = [...doc.querySelectorAll('.nav-item')].find(el => el.textContent.trim() === label);
+    if (item) await app.click(item);
+    await app.flush(10);
+  };
+  const openStats = async () => {
+    await open('Agents');
+    const tab = [...doc.querySelectorAll('.aa-tab')].find(el => el.textContent.trim() === 'Agent stats');
+    if (tab) await app.click(tab);
+    await app.flush(10);
+  };
+  const section = () => [...doc.querySelectorAll('section')].find(s => /Agent stats/.test(s.textContent));
+  const bodyRows = () => [...(section() ? section().querySelectorAll('tbody tr') : [])];
+  const agentRows = () => bodyRows().filter(tr => !tr.classList.contains('grid-totals'));
+  const cells = tr => [...tr.children].map(td => td.textContent.trim());
+  const extensions = () => agentRows().map(tr => cells(tr)[0]);
+  const totalsText = () => {
+    const row = bodyRows().find(tr => tr.classList.contains('grid-totals'));
+    return row ? row.textContent : '';
+  };
+  const zeroBtn = () => doc.querySelector('.ap-zero-btn');
+  const stored = () => app.window.localStorage.getItem('callscope-agent-hide-zero');
+  const pickSite = async value => {
+    const select = doc.querySelector('.ap-site');
+    await app.act(async () => {
+      select.value = value;
+      select.dispatchEvent(new app.window.Event('change', { bubbles: true }));
+    });
+    await app.flush(6);
+  };
+
+  /* The Dashboard reads the same rows for its Top agents card; a line for
+   * every idle extension is no use to it, so it does not ask for them. */
+  const dashboardBodies = reportBodies();
+  check('the Dashboard does not ask the report for 0-call extensions',
+    dashboardBodies.length > 0 && dashboardBodies.every(b => !('zeroCallAgents' in b)),
+    JSON.stringify(dashboardBodies.map(b => b.zeroCallAgents)));
+
+  app.requested.length = 0;
+  await openStats();
+  const paint = reportBodies().find(b => b.skipPrevious);
+  check('the Agents screen asks the report for 0-call extensions',
+    !!paint && Number(paint.zeroCallAgents) === 1 && Array.isArray(paint.agents) && paint.agents.length === 0,
+    JSON.stringify(reportBodies().map(b => [b.zeroCallAgents, b.skipPrevious, b.agents])));
+
+  check('extensions with 0 calls are listed by default, after the ones with calls',
+    extensions().join(',') === '6080,6081,6083,6082', extensions().join(','));
+  const headers = [...(section() ? section().querySelectorAll('thead th') : [])].map(th => th.textContent.trim());
+  const totalCol = headers.findIndex(text => /^Total/.test(text));
+  const inboundCol = headers.findIndex(text => /^Inbound/.test(text));
+  const graceRow = agentRows().find(tr => cells(tr)[0] === '6082');
+  const grace = graceRow ? cells(graceRow) : [];
+  check('a 0-call row states its total as 0, and leaves the other counts as a dash',
+    totalCol > 0 && inboundCol > 0 && grace[totalCol] === '0' && grace[inboundCol] === '—',
+    JSON.stringify({ headers: headers.slice(0, 6), grace: grace.slice(0, 6) }));
+  check('the switch is off by default and says how many rows it would hide',
+    !!zeroBtn() && zeroBtn().textContent.trim() === 'Hide 0-call extensions (2)' && !zeroBtn().classList.contains('is-on'),
+    zeroBtn() && zeroBtn().outerHTML.slice(0, 240));
+  check('the totals row counts the listed extensions and adds nothing for the idle ones',
+    /4 agents/.test(totalsText()) && /430/.test(totalsText()) && /17\.6%/.test(totalsText()),
+    totalsText().slice(0, 200));
+  /* Three of the four sit at HQ and one at Branch: two sites. Counting the
+   * rows that have a site, which this cell used to do, would say four. */
+  check('the totals row counts the sites, not the rows that have one',
+    /All agents2 sites/.test(totalsText()), totalsText().slice(0, 200));
+  const activeCard = [...doc.querySelectorAll('.kpi-card')].find(card => /Active agents/.test(card.textContent));
+  check('an extension with 0 calls is not an active agent (the KPI stays at 2)',
+    !!activeCard && /Active agents\D*2$/.test(activeCard.textContent.trim()),
+    activeCard && activeCard.textContent.trim());
+
+  /* The rest drives the switch. If it is missing, the check above has already
+   * said so, and a click on nothing would throw and bury that failure. */
+  if (zeroBtn()) {
+    await app.click(zeroBtn());
+    check('the switch hides the extensions with 0 calls',
+      extensions().join(',') === '6080,6081', extensions().join(','));
+    check('while hiding, the switch is lit and still says how many rows are hidden',
+      zeroBtn().textContent.trim() === 'Show 0-call extensions (2)' && zeroBtn().classList.contains('is-on'),
+      zeroBtn().outerHTML.slice(0, 240));
+    check('the totals row follows the rows on screen',
+      /2 agents/.test(totalsText()) && /All agents1 site(?!s)/.test(totalsText()) && /430/.test(totalsText()),
+      totalsText().slice(0, 200));
+    check('the choice is stored', stored() === '1', stored());
+
+    /* Only Edsger sits at Branch and he took no call: with the switch on the
+     * table is empty, and it has to say that a filter did that. */
+    await pickSite('Branch');
+    const emptyText = bodyRows().map(tr => tr.textContent.trim()).join(' | ');
+    check('the count on the switch follows the table\'s own site filter',
+      zeroBtn().textContent.trim() === 'Show 0-call extensions (1)', zeroBtn().textContent.trim());
+    check('a table emptied by the switch says so, and how many rows it is hiding',
+      agentRows().length === 1 &&
+        /No matching extension had calls/.test(emptyText) &&
+        /1 extension with 0 calls is hidden/.test(emptyText) &&
+        !/No agent stats/.test(emptyText),
+      emptyText.slice(0, 240));
+    await pickSite('');
+
+    /* Leaving the screen unmounts the table; the choice has to survive that. */
+    await open('Dashboard');
+    await openStats();
+    check('the choice is remembered when the screen is opened again',
+      !!zeroBtn() && zeroBtn().classList.contains('is-on') && extensions().join(',') === '6080,6081',
+      [zeroBtn() && zeroBtn().textContent.trim(), extensions().join(',')].join(' / '));
+
+    await app.click(zeroBtn());
+    check('clicking again shows the extensions with 0 calls',
+      extensions().join(',') === '6080,6081,6083,6082' &&
+        zeroBtn().textContent.trim() === 'Hide 0-call extensions (2)' &&
+        !zeroBtn().classList.contains('is-on') && stored() === '0',
+      [extensions().join(','), zeroBtn().textContent.trim(), stored()].join(' / '));
+  }
+
+  /* Compare loads one report per side, each for a single agent (the stats
+   * report reloads beside them with agents: [], which is not a side). An idle
+   * agent has to come back as a row of zeros there too, or two idle agents
+   * read "Select two agents to compare" with both already selected. */
+  app.requested.length = 0;
+  const compareTab = [...doc.querySelectorAll('.aa-tab')].find(el => el.textContent.trim() === 'Compare');
+  if (compareTab) await app.click(compareTab);
+  await app.flush(12);
+  const sides = reportBodies().filter(b => Array.isArray(b.agents) && b.agents.length === 1);
+  check('each side of Compare asks for its agent even when the agent took no call',
+    sides.length === 2 && sides.every(b => Number(b.zeroCallAgents) === 1),
+    JSON.stringify(reportBodies().map(b => [b.zeroCallAgents, b.agents])));
+
+  check('the 0-call switch threw nothing', app.errors.length === 0, app.errors.slice(0, 3).join(' | '));
+  FIXTURES.report.agentPerformance = busyRows;
+}
+
 console.log('\n== global error budget ==');
 check('no unexpected runtime errors', errors.length === 0, errors.slice(0, 5).join(' | '));
 const uniqueWarnings = [...new Set(warnings)];

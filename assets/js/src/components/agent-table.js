@@ -63,6 +63,27 @@ function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSecon
         try { localStorage.setItem(COLS_KEY, JSON.stringify(next)); } catch (e) {}
     };
 
+    /*
+     * Extensions with no calls in the range are listed (the report sends a row
+     * of zeros for each one in scope), and this is the switch that hides them.
+     * Off by default: a table that leaves out the idle extensions cannot show
+     * who was idle. Remembered like the column choice, because a desk with far
+     * more extensions than agents wants to set it once, not on every visit.
+     */
+    const HIDE_ZERO_KEY = 'callscope-agent-hide-zero';
+    const [hideZero, setHideZero] = useState(() => {
+        try { return localStorage.getItem(HIDE_ZERO_KEY) === '1'; } catch (e) { return false; }
+    });
+    const toggleHideZero = () => {
+        const next = !hideZero;
+        setHideZero(next);
+        try { localStorage.setItem(HIDE_ZERO_KEY, next ? '1' : '0'); } catch (e) {}
+    };
+    /* What "0 calls" is measured against, in the words the switch and the empty
+     * state share: the rows are the report's, so a department, call-type or
+     * sentiment filter narrows them exactly as the date range does. */
+    const ZERO_SCOPE = 'for the selected dates and filters';
+
     const durationFields = ['ibAht','ibAat','ibLtt','ibTct','obArt','obAat','obLtt','obTct'];
     const missLimit = Number(missedPct != null ? missedPct : 20);
     const abLimit = Number(abandonPct != null ? abandonPct : 10);
@@ -133,19 +154,31 @@ function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSecon
         if (field === 'site') return agent.site || '—';
         if (field === 'mcRate') return blank(rateOf(agent, field).toFixed(1) + '%');
         const n = Number(agent[field] || 0);
+        /* Total calls is the one count that is never blanked. A row built from
+         * calls always has at least one, so the only row this changes is an
+         * extension listed with none - and there "0" is the fact the row exists
+         * to state, where a dash would read as data that failed to load. */
+        if (field === 'total') return fmtNum(n);
         return blank(fmtNum(n));
     };
 
     const rows = Array.isArray(data) ? data : [];
     const sites = Array.from(new Set(rows.map(a => String(a.site || '').trim()).filter(Boolean))).sort();
 
+    /* Search and the per-page site filter - everything except the 0-call switch,
+     * so the switch can say how many of the rows these two matched it is
+     * hiding (or would hide). */
+    const matchesFilters = a => {
+        if (siteFilter && String(a.site || '') !== siteFilter) return false;
+        const q = query.trim().toLowerCase();
+        if (!q) return true;
+        return ((a.name || '') + ' ' + (a.extension || '') + ' ' + (a.department || '') + ' ' + (a.site || '')).toLowerCase().includes(q);
+    };
+    const hasCalls = a => Number(a.total || 0) > 0;
+    const zeroCount = rows.filter(a => matchesFilters(a) && !hasCalls(a)).length;
+
     const sorted = useMemo(() => {
-        const copy = rows.filter(a => {
-            if (siteFilter && String(a.site || '') !== siteFilter) return false;
-            const q = query.trim().toLowerCase();
-            if (!q) return true;
-            return ((a.name || '') + ' ' + (a.extension || '') + ' ' + (a.department || '') + ' ' + (a.site || '')).toLowerCase().includes(q);
-        });
+        const copy = rows.filter(a => matchesFilters(a) && (!hideZero || hasCalls(a)));
         const col = columns.find(c => c[0] === sortKey);
         const kind = col ? col[3] : 'num';
         copy.sort((a, b) => {
@@ -162,9 +195,9 @@ function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSecon
             return sortDir === 'asc' ? av - bv : bv - av;
         });
         return copy;
-    }, [rows, sortKey, sortDir, query, siteFilter]);
+    }, [rows, sortKey, sortDir, query, siteFilter, hideZero]);
 
-    useEffect(() => { setPage(1); }, [data, pageSize, sortKey, sortDir, query, siteFilter]);
+    useEffect(() => { setPage(1); }, [data, pageSize, sortKey, sortDir, query, siteFilter, hideZero]);
 
     const totalRows = sorted.length;
     const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
@@ -209,7 +242,11 @@ function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSecon
      */
     const totalsRows = sorted.map(a => Object.assign({}, a, { offered: offeredOf(a) }));
     const totalsAgents = countBy(totalsRows, 'extension');
-    const totalsSiteCount = countBy(totalsRows, 'site');
+    /* How many different sites, not how many rows have one. The two were the
+     * same number only while every agent sat at a site of their own; a row per
+     * idle extension makes the difference plain ("7 agents, 6 sites" for a desk
+     * with two sites). */
+    const totalsSiteCount = new Set(totalsRows.map(a => String(a.site || '').trim()).filter(Boolean)).size;
     const totalsValue = field => {
         switch (field) {
             case 'agent': return 'All agents';
@@ -337,6 +374,19 @@ function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSecon
                 h('option', {value: ''}, 'All sites'),
                 ...sites.map(s => h('option', {key: s, value: s}, s))
             ),
+            /*
+             * The label names what a click does and always carries the count,
+             * so the button says how many rows are hidden while they are - a
+             * filter nobody can see is how a table ends up "missing" people.
+             */
+            h('button', {
+                type: 'button',
+                className: 'ap-zero-btn' + (hideZero ? ' is-on' : ''),
+                title: hideZero
+                    ? 'Extensions with 0 calls ' + ZERO_SCOPE + ' are hidden. Click to show them.'
+                    : 'Hide the extensions with 0 calls ' + ZERO_SCOPE + '.',
+                onClick: toggleHideZero
+            }, (hideZero ? 'Show' : 'Hide') + ' 0-call extensions (' + fmtNum(zeroCount) + ')'),
             h('button', {
                 type: 'button',
                 className: 'ap-cols-btn',
@@ -420,7 +470,15 @@ function AgentPerformanceTable({data,loading,onAgentClick,onMetricClick,slaSecon
                     h('tbody', null,
                         totalsRow,
                         paginatedData.length === 0
-                            ? h('tr', null, h('td', {colSpan: visibleCols.length, className: 'px-4 py-10 text-center text-xs text-slate-500'}, 'No agent stats.'))
+                            ? h('tr', null, h('td', {colSpan: visibleCols.length, className: 'px-4 py-10 text-center text-xs text-slate-500'},
+                                /* Empty because of the switch, not because nobody is
+                                 * in scope: say which, and how many it is hiding.
+                                 * "Matching" when a search or site filter narrowed
+                                 * the table first - the count is of those rows. */
+                                hideZero && zeroCount > 0
+                                    ? (query.trim() || siteFilter ? 'No matching extension' : 'No extension') + ' had calls ' + ZERO_SCOPE + '. ' +
+                                      fmtNum(zeroCount) + (zeroCount === 1 ? ' extension with 0 calls is hidden.' : ' extensions with 0 calls are hidden.')
+                                    : 'No agent stats.'))
                             : paginatedData.map((agent, index) => h('tr', {
                                 key: [agent.extension, agent.department, agent.site, startIndex + index].join('-'),
                                 className: 'border-b border-slate-800 hover:bg-slate-800/60'

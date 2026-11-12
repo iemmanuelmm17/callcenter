@@ -177,7 +177,16 @@ const loadAgentReport = async selected => {
         ...filters,
         agents: Array.isArray(selected) ? selected : [],
         callTypes,
-        slaSeconds
+        slaSeconds,
+        /*
+         * The Agents screen lists every extension in scope, the ones with no
+         * call in the range included: without this the report builds a row
+         * only when it meets a call, so an idle extension was missing from
+         * Agent stats and its Overview read "Select an agent" while it was
+         * selected. The Dashboard reads the same rows for Top agents and does
+         * not ask (api/report.php).
+         */
+        zeroCallAgents: 1
     };
     try {
         /*
