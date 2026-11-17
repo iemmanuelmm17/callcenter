@@ -321,6 +321,7 @@ final class PbxClient
         while ($attempt < self::PAGE_ATTEMPTS) {
 
             $curl = $this->newCurl($server, $path, $query, $method, $body);
+            $sentToken = (string)($_SESSION['token'] ?? $this->token);
             $this->rateLimit($server);
             $raw = curl_exec($curl);
             $parsed = $this->decodeCurl($curl, $raw);
@@ -330,9 +331,9 @@ final class PbxClient
                 $parsed['status'] === 401 &&
                 $attempt === 0 &&
                 function_exists('refreshPbxToken') &&
-                refreshPbxToken()
+                refreshPbxToken($sentToken)
             ) {
-                appLog("PBX {$server} {$path}: HTTP 401 - refreshing token and retrying");
+                appLog("PBX {$server} {$path}: HTTP 401 - refreshed or reused token and retrying");
                 $attempt++;
                 continue;
             }
@@ -383,10 +384,12 @@ final class PbxClient
         }
 
         $handles = [];
+        $sentTokens = [];
         foreach ($jobs as $job) {
             $this->rateLimit($job['server']);
             $curl = $this->newCurl($job['server'], $job['path'], $job['query']);
             $handles[$job['id']] = $curl;
+            $sentTokens[$job['id']] = (string)($_SESSION['token'] ?? $this->token);
             curl_multi_add_handle($mh, $curl);
         }
 
@@ -401,6 +404,9 @@ final class PbxClient
         foreach ($handles as $id => $curl) {
             $raw = curl_multi_getcontent($curl);
             $out[$id] = $this->decodeCurl($curl, $raw);
+            /* Internal only: lets a 401 distinguish an obsolete request from
+             * the current shared-session token. Never log or return this. */
+            $out[$id]['sentToken'] = $sentTokens[$id];
             curl_multi_remove_handle($mh, $curl);
             curl_close($curl);
         }
@@ -418,7 +424,7 @@ final class PbxClient
     private function paged(
         string $server,
         string $path,
-        array $query = [],
+        array $query,
         callable $normalize
     ): array {
 
@@ -588,24 +594,22 @@ final class PbxClient
 
                     $batch = $this->requestMulti($jobs);
                     $retry = [];
+                    $refreshAttempted = false;
+                    $refreshSucceeded = false;
 
                     foreach ($jobs as $job) {
                         $id = $job['id'];
                         $parsed = $batch[$id] ?? ['ok' => false, 'transient' => true, 'status' => 0, 'error' => 'missing', 'data' => null];
 
-                        if (
-                            !$parsed['ok']
-                            && (int)($parsed['status'] ?? 0) === 401
-                            && function_exists('refreshPbxToken')
-                            && refreshPbxToken()
-                        ) {
-                            $retry[] = $job;
+                        if (!$parsed['ok'] && (int)($parsed['status'] ?? 0) === 401) {
+                            if (!$refreshAttempted && function_exists('refreshPbxToken')) {
+                                $refreshAttempted = true;
+                                $refreshSucceeded = refreshPbxToken((string)($parsed['sentToken'] ?? ''));
+                            }
+                            if ($refreshSucceeded) $retry[] = $job;
                             continue;
                         }
-
-                        if (!$parsed['ok'] && !empty($parsed['transient'])) {
-                            $retry[] = $job;
-                        }
+                        if (!$parsed['ok'] && !empty($parsed['transient'])) $retry[] = $job;
                     }
 
                     if ($retry !== []) {
@@ -1171,36 +1175,25 @@ final class PbxClient
                  * short pause. Same policy as request()/the CDR pager.
                  */
                 $retry = [];
-                $refreshed = false;
+                $refreshAttempted = false;
+                $refreshSucceeded = false;
 
                 foreach ($jobs as $job) {
                     $id = $job['id'];
                     $parsed = $batch[$id] ?? [
-                        'ok' => false,
-                        'transient' => true,
-                        'status' => 0,
-                        'error' => 'missing',
-                        'data' => null,
+                        'ok' => false, 'transient' => true, 'status' => 0,
+                        'error' => 'missing', 'data' => null,
                     ];
-
-                    if (!empty($parsed['ok'])) {
+                    if (!empty($parsed['ok'])) continue;
+                    if ((int)($parsed['status'] ?? 0) === 401) {
+                        if (!$refreshAttempted && function_exists('refreshPbxToken')) {
+                            $refreshAttempted = true;
+                            $refreshSucceeded = refreshPbxToken((string)($parsed['sentToken'] ?? ''));
+                        }
+                        if ($refreshSucceeded) $retry[] = $job;
                         continue;
                     }
-
-                    if (
-                        (int)($parsed['status'] ?? 0) === 401
-                        && !$refreshed
-                        && function_exists('refreshPbxToken')
-                        && refreshPbxToken()
-                    ) {
-                        $refreshed = true;
-                        $retry[] = $job;
-                        continue;
-                    }
-
-                    if (!empty($parsed['transient'])) {
-                        $retry[] = $job;
-                    }
+                    if (!empty($parsed['transient'])) $retry[] = $job;
                 }
 
                 if ($retry !== []) {
@@ -1403,15 +1396,21 @@ final class PbxClient
     }
 
     /** Fetch one call-intelligence job from the CDR's PBX server. */
-    public function transcription(string $server, string $domain, string $jobId, string $month, string $callId): array
+    public function transcription(string $server, string $domain, string $jobId, string $month, array $identifiers): array
     {
         if (!isset(PBX_SERVERS[$server]) || !preg_match('/^\d+$/', $jobId)
-            || !preg_match('/^\d{4}(0[1-9]|1[0-2])$/', $month) || $callId === '') {
+            || !preg_match('/^\d{4}(0[1-9]|1[0-2])$/', $month) || $identifiers === []) {
             throw new InvalidArgumentException('Invalid transcription reference');
         }
-        return $this->request($server, '/ns-api/v2/domains/' . rawurlencode($domain) . '/transcriptions', [
-            'id' => $jobId, 'date' => $month, 'callid' => $callId,
-        ]);
+        $query = ['id' => $jobId, 'date' => $month];
+        foreach ($identifiers as $name => $value) {
+            if (!in_array($name, ['callid', 'orig_callid', 'term_callid', 'by_callid'], true)
+                || !is_string($value) || $value === '' || strlen($value) > 512 || preg_match('/[\x00-\x1f\x7f]/', $value)) {
+                throw new InvalidArgumentException('Invalid transcription reference');
+            }
+            $query[$name] = $value;
+        }
+        return $this->request($server, '/ns-api/v2/domains/' . rawurlencode($domain) . '/transcriptions', $query);
     }
 
     /**

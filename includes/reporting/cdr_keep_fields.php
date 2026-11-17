@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1374 names.
+ * 1378 names.
  */
 return [
     'aa',
@@ -196,6 +196,7 @@ return [
     'business',
     'busy',
     'button',
+    'by_callid',
     'bye',
     'bytes',
     'cache-job',
@@ -615,6 +616,7 @@ return [
     'ib_ltt',
     'ib_tct',
     'id',
+    'identifiers',
     'ids',
     'import',
     'inbound',
@@ -884,6 +886,7 @@ return [
     'orange',
     'ordinal-order',
     'orig',
+    'orig_callid',
     'other',
     'out_of_memory',
     'outbound',
@@ -1247,6 +1250,7 @@ return [
     'telephone_numbers_export',
     'tenant',
     'term',
+    'term_callid',
     'text',
     'text-cyan-300',
     'text-emerald-400',

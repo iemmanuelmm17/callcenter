@@ -62,7 +62,7 @@ function intelligenceVerify(string $token, string $domain): array {
     $parts = explode('.', $token);
     if (count($parts) !== 2 || !hash_equals(hash_hmac('sha256', session_id() . '|' . $domain . '|' . $parts[0], intelligenceSigningKey()), $parts[1])) throw new InvalidArgumentException('Invalid call reference.');
     $data = json_decode((string)base64_decode(strtr($parts[0], '-_', '+/'), true), true);
-    if (!is_array($data) || !isset($data['server'], $data['id'], $data['month'], $data['callid'])) throw new InvalidArgumentException('Invalid call reference.');
+    if (!is_array($data) || !isset($data['server'], $data['id'], $data['month'], $data['callid'], $data['identifiers']) || !is_array($data['identifiers'])) throw new InvalidArgumentException('Invalid call reference.');
     return $data;
 }
 function intelligenceMonth(string $start, string $override): string {
@@ -79,28 +79,43 @@ function intelligenceMonth(string $start, string $override): string {
     return $dt->setTimezone($tz)->format('Ym');
 }
 /** Use only query values from the PBX-provided link; never fetch its host. */
-function intelligenceReference(array $call, string $domain, string $override): ?array {
+function intelligenceReference(array $call, string $domain, string $override, ?string &$reason = null): ?array {
     $id = trim((string)($call['call-intelligence-job-id'] ?? ''));
     $server = (string)($call['_server'] ?? '');
-    if (!preg_match('/^\d+$/', $id) || $id === '0' || !isset(PBX_SERVERS[$server])) return null;
-    $callid = trim((string)($call['call-id'] ?? ''));
+    if ($server === '' && defined('INTELLIGENCE_PBX_SERVER')) $server = trim((string)INTELLIGENCE_PBX_SERVER);
+    $reason = null;
+    if (!preg_match('/^\d+$/', $id) || $id === '0') { $reason = 'jobId'; return null; }
+    if (!isset(PBX_SERVERS[$server])) { $reason = 'server'; return null; }
+    $identifiers = [];
     $prefilledMonth = '';
     $link = html_entity_decode((string)($call['prefilled-transcription-api'] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8');
     $parts = parse_url($link);
     if (is_array($parts) && rawurldecode((string)($parts['path'] ?? '')) === '/ns-api/v2/domains/' . $domain . '/transcriptions') {
         parse_str((string)($parts['query'] ?? ''), $query);
-        if (isset($query['id'], $query['callid']) && is_string($query['id']) && $query['id'] === $id && is_string($query['callid'])) {
-            $callid = trim($query['callid']);
-            if (is_string($query['date'] ?? null) && preg_match('/^\d{4}(0[1-9]|1[0-2])$/', $query['date'])) $prefilledMonth = $query['date'];
+        if (is_string($query['id'] ?? null) && $query['id'] === $id) {
+            foreach (['callid', 'orig_callid', 'term_callid', 'by_callid'] as $name) {
+                if (!array_key_exists($name, $query)) continue;
+                if (!is_string($query[$name])) { $reason = 'callId'; return null; }
+                $value = trim($query[$name]);
+                if ($value === '' || strlen($value) > 512 || preg_match('/[\x00-\x1f\x7f]/', $value)) { $reason = 'callId'; return null; }
+                $identifiers[$name] = $value;
+            }
+            if ($identifiers !== [] && is_string($query['date'] ?? null) && preg_match('/^\d{4}(0[1-9]|1[0-2])$/', $query['date'])) $prefilledMonth = $query['date'];
         }
     }
-    if ($callid === '' && defined('INTELLIGENCE_CALL_ID_FIELD')) {
-        $field = (string)INTELLIGENCE_CALL_ID_FIELD;
-        $callid = trim((string)($call[$field] ?? ''));
+    if ($identifiers === []) {
+        $callid = trim((string)($call['call-id'] ?? ''));
+        if ($callid === '' && defined('INTELLIGENCE_CALL_ID_FIELD')) {
+            $field = (string)INTELLIGENCE_CALL_ID_FIELD;
+            $callid = trim((string)($call[$field] ?? ''));
+        }
+        if ($callid === '' || strlen($callid) > 512 || preg_match('/[\x00-\x1f\x7f]/', $callid)) { $reason = 'callId'; return null; }
+        $identifiers['callid'] = $callid;
     }
-    if ($callid === '' || strlen($callid) > 512 || preg_match('/[\x00-\x1f\x7f]/', $callid)) return null;
     $month = $override !== '' ? intelligenceMonth('', $override) : ($prefilledMonth !== '' ? $prefilledMonth : intelligenceMonth((string)($call['call-start-datetime'] ?? ''), ''));
-    return ['id' => $id, 'callid' => $callid, 'server' => $server, 'month' => $month];
+    // Display the PBX's by-call reference when present, without treating it as callid.
+    $displayField = isset($identifiers['by_callid']) ? 'by_callid' : (isset($identifiers['callid']) ? 'callid' : (isset($identifiers['term_callid']) ? 'term_callid' : 'orig_callid'));
+    return ['id' => $id, 'callid' => $identifiers[$displayField], 'displayField' => $displayField, 'identifiers' => $identifiers, 'server' => $server, 'month' => $month];
 }
 
 /** Case-insensitive substring matches, retaining one excerpt per phrase. */
@@ -131,8 +146,11 @@ function intelligenceMatches(array $job, array $watches): array {
     return $matches;
 }
 function intelligenceReadJob(PbxClient $client, string $domain, array $ref, array $watches): array {
-    $job = $client->transcription((string)$ref['server'], $domain, (string)$ref['id'], (string)$ref['month'], (string)$ref['callid']);
-    if ((isset($job['call-intelligence-job-id']) && (string)$job['call-intelligence-job-id'] !== (string)$ref['id']) || (isset($job['call-id']) && (string)$job['call-id'] !== (string)$ref['callid'])) throw new RuntimeException('Transcription identity mismatch');
+    $identifiers = $ref['identifiers'];
+    $job = $client->transcription((string)$ref['server'], $domain, (string)$ref['id'], (string)$ref['month'], $identifiers);
+    if (isset($job['call-intelligence-job-id']) && (string)$job['call-intelligence-job-id'] !== (string)$ref['id']) throw new RuntimeException('Transcription identity mismatch');
+    // Only a direct callid lookup gives us a call-id response value to compare.
+    if (count($identifiers) === 1 && isset($identifiers['callid'], $job['call-id']) && (string)$job['call-id'] !== (string)$identifiers['callid']) throw new RuntimeException('Transcription identity mismatch');
     $status = strtolower((string)($job['call-intelligence-processing-status'] ?? ''));
     if ($status !== 'finished') return ['status' => 'pending', 'detail' => $status ?: 'unknown'];
     $topics = $job['call-intelligence-topics-all'] ?? $job['call-intelligence-topics-top'] ?? [];

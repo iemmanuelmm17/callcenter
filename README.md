@@ -271,9 +271,12 @@ population. No automatic email or background monitoring is performed.
 
 The report retrieves one transcription per job using the authenticated PBX
 session. It takes the call ID and month from a valid CDR
-`prefilled-transcription-api` when present (the URL's host is never fetched), or
-uses `call-id` and the configured `INTELLIGENCE_MONTH_TIMEZONE`. A different
-CDR call-ID field can be selected using `INTELLIGENCE_CALL_ID_FIELD`. A manual
+`prefilled-transcription-api` when present (including its `orig_callid`,
+`term_callid` and `by_callid` when supplied; the URL's host is never fetched),
+or uses `call-id` and the configured `INTELLIGENCE_MONTH_TIMEZONE`. A different
+CDR call-ID field can be selected using `INTELLIGENCE_CALL_ID_FIELD`. For CDRs
+without a recorded PBX source, `INTELLIGENCE_PBX_SERVER` can explicitly select
+a key from `PBX_SERVERS`. A manual
 YYYYMM override takes precedence. The PBX's exact month basis has not been
 confirmed: verify it against real records before configuring the timezone.
 Offset-less CDR timestamps are interpreted in the desk timezone before conversion.

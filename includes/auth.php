@@ -171,20 +171,47 @@ function ensurePbxToken(): bool
     return refreshPbxToken();
 }
 
-function refreshPbxToken(): bool
+function refreshPbxToken(?string $rejectedToken = null): bool
 {
-    $refresh = trim((string)($_SESSION['refresh_token'] ?? ''));
-    if ($refresh === '') {
-        return false;
-    }
-
     static $busy = false;
     if ($busy) {
         return !empty($_SESSION['token']);
     }
     $busy = true;
+    $reopened = false;
+    $previousToken = (string)($_SESSION['token'] ?? '');
+    $previousUser = $_SESSION['user'] ?? null;
 
     try {
+        /* currentUser() releases the session lock before slow PBX requests.
+         * Reacquire it before a refresh, so rotated credentials are persisted
+         * and concurrent requests do not spend the same refresh token twice. */
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            if (session_id() === '' || !@session_start()) {
+                appLog('PBX token refresh failed: session unavailable');
+                return false;
+            }
+            $reopened = true;
+            $user = $_SESSION['user'] ?? null;
+            if (!is_array($user) || !is_array($previousUser)
+                || ($user['username'] ?? null) !== ($previousUser['username'] ?? null)
+                || ($user['domain'] ?? null) !== ($previousUser['domain'] ?? null)
+                || empty($_SESSION['last_activity'])
+                || time() - (int)$_SESSION['last_activity'] > SESSION_IDLE_SECONDS) {
+                appLog('PBX token refresh skipped: session ended or changed');
+                return false;
+            }
+        }
+        $currentToken = (string)($_SESSION['token'] ?? '');
+        $knownToken = $rejectedToken ?? $previousToken;
+        if ($knownToken !== '' && $currentToken !== '' && $currentToken !== $knownToken
+            && (int)($_SESSION['token_expires_at'] ?? 0) - time() > pbxTokenSkewSeconds()) {
+            /* Another request already refreshed the token we were about to use. */
+            return true;
+        }
+        $refresh = trim((string)($_SESSION['refresh_token'] ?? ''));
+        if ($refresh === '') return false;
+
         $clientId = trim((string)(
             $_SESSION['pbx_client_id']
             ?? (defined('PBX_CLIENT_ID') ? PBX_CLIENT_ID : '')
@@ -237,6 +264,7 @@ function refreshPbxToken(): bool
         storePbxToken($token, $clientId);
         return true;
     } finally {
+        if ($reopened && session_status() === PHP_SESSION_ACTIVE) session_write_close();
         $busy = false;
     }
 }

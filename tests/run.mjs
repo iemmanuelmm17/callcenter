@@ -51,6 +51,8 @@ const SUITES = {
     { name: 'vendor paths', cmd: ['node', 'tests/js/vendor-paths.mjs'] }
   ],
   php: [
+    { name: 'PBX auth retry', cmd: ['node', 'tests/php/pbx-auth-retry.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
+    { name: 'token refresh', cmd: ['node', 'tests/php/token-refresh.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'intelligence', cmd: ['node', 'tests/php/intelligence.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'api matrix', cmd: ['node', 'tests/php/endpoints.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'url policy', cmd: ['node', 'tests/php/security.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },

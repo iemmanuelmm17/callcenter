@@ -65,6 +65,9 @@ declare(strict_types=1);
 /* Optional CDR field for the transcription call ID if no validated prefilled
  * link or call-id field is present. Confirm the field with your PBX vendor. */
 // define('INTELLIGENCE_CALL_ID_FIELD', 'call-orig-call-id');
+/* Only needed when CDRs have no recorded source server (for example, old
+ * imported JSONL). Set to a key in PBX_SERVERS after confirming the source. */
+// define('INTELLIGENCE_PBX_SERVER', 'nms1');
 
 /* Authenticated SMTP with mandatory STARTTLS and certificate verification.
  * Store these only on the server, never in the repository. */

@@ -8,6 +8,7 @@ function IntelligenceDashboard({ filters }) {
     const [refresh, setRefresh] = useState(0);
     const [rows, setRows] = useState([]);
     const [missing, setMissing] = useState(0);
+    const [missingReasons, setMissingReasons] = useState({});
     const [cacheIncomplete, setCacheIncomplete] = useState(false);
     const [progress, setProgress] = useState('');
     const [error, setError] = useState('');
@@ -25,13 +26,14 @@ function IntelligenceDashboard({ filters }) {
     }, []);
     useEffect(() => {
         let active = true;
-        setRows([]); setSelected([]); setTopic(''); setMissing(0); setCacheIncomplete(false); setError('');
+        setRows([]); setSelected([]); setTopic(''); setMissing(0); setMissingReasons({}); setCacheIncomplete(false); setError('');
         setProgress('Loading calls…');
         (async () => {
             try {
                 const list = await api('intelligence', { ...filters, action: 'list', month: appliedMonth });
                 if (!active) return;
                 setMissing(list.missing);
+                setMissingReasons(list.missingReasons || {});
                 setCacheIncomplete(!list.cacheStatus?.complete);
                 const items = list.calls.map(c => ({ ...c, status: 'waiting' }));
                 setRows(items.slice());
@@ -81,6 +83,7 @@ function IntelligenceDashboard({ filters }) {
             h('label', null, 'Override month (YYYYMM; blank uses PBX link or server configuration) ', h('input', { value: month, onChange: e => setMonth(e.target.value), placeholder: 'YYYYMM', maxLength: 6, className: 'intelligence-input' })), ' ',
             h('button', { type: 'button', className: 'rep-btn', onClick: () => { setAppliedMonth(month.trim()); setRefresh(x => x + 1); } }, 'Load report'),
             h('p', { className: 'rep-note' }, progress || ('Checked ' + rows.length + ' jobs; ' + failures + ' unavailable or incomplete; ' + missing + ' CDR rows lack a usable job, call ID, server, or lookup month; configure the month timezone if needed. Older CDR caches may need refreshing.')),
+            missing > 0 && Object.keys(missingReasons).length ? h('p', { className: 'rep-note' }, 'Missing: job ID ' + (missingReasons.jobId || 0) + ', PBX server ' + (missingReasons.server || 0) + ', call ID ' + (missingReasons.callId || 0) + ', lookup month ' + (missingReasons.month || 0) + '. Each row is counted at its first missing field.') : null,
             cacheIncomplete ? h('p', { role: 'alert', className: 'rep-error' }, 'The CDR date range is not fully loaded; this report is incomplete.') : null,
             error ? h('p', { role: 'alert', className: 'rep-error' }, error) : null,
             message ? h('p', { role: 'status' }, message) : null),
@@ -95,10 +98,10 @@ function IntelligenceDashboard({ filters }) {
             h('label', null, 'Recipients ', h('input', { value: recipients, onChange: e => setRecipients(e.target.value), placeholder: 'name@example.com', className: 'intelligence-input', style: { width: '20em', maxWidth: '100%' } })), ' ',
             h('button', { type: 'button', className: 'rep-btn', disabled: busy || !selected.length || !!progress, onClick: send }, 'Email selected (' + selected.length + ')'),
             h('table', { className: 'rep-table' },
-                h('thead', null, h('tr', null, ...['Select', 'Call / time', 'Topics', 'Summary', 'Watch tags / status'].map(x => h('th', { key: x, className: 'rep-th' }, x)))),
+                h('thead', null, h('tr', null, ...['Select', 'PBX reference / time', 'Topics', 'Summary', 'Watch tags / status'].map(x => h('th', { key: x, className: 'rep-th' }, x)))),
                 h('tbody', null, ...visible.map(row => h('tr', { key: row.reference },
                     h('td', { className: 'rep-td' }, row.status === 'finished' && row.matches?.length ? h('input', { type: 'checkbox', 'aria-label': 'Select call ' + row.callId, checked: selected.includes(row.reference), disabled: !selected.includes(row.reference) && selected.length >= 10, onChange: e => setSelected(s => e.target.checked ? [...s, row.reference] : s.filter(x => x !== row.reference)) }) : null),
-                    h('td', { className: 'rep-td' }, row.callId, h('br'), row.startedAt, h('br'), 'Lookup month: ' + row.month),
+                    h('td', { className: 'rep-td' }, row.callIdField ? row.callIdField + ': ' : '', row.callId, h('br'), row.startedAt, h('br'), 'Lookup month: ' + row.month),
                     h('td', { className: 'rep-td' }, (row.topics || []).join(', ') || '—'),
                     h('td', { className: 'rep-td' }, row.summary || '—'),
                     h('td', { className: 'rep-td' }, (row.matches || []).map(m => m.keyword).join(', ') + (row.status === 'finished' ? ((row.matches || []).length ? '' : 'No match') : ' ' + row.status + (row.detail ? ': ' + row.detail : '')), (row.matches || []).length ? h('details', null, h('summary', null, 'Matching excerpts'), ...row.matches.map(m => h('p', { key: m.keyword }, m.keyword + ' (' + m.source + '): ' + m.excerpt))) : null)))))));

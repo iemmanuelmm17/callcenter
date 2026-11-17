@@ -5,7 +5,7 @@ const operations = [];
 FIXTURES.intelligence = body => {
   operations.push(body);
   if (body.action === 'watches') return { watches: ['reboot'] };
-  if (body.action === 'list') return { calls: [{reference: 'signed', callId: 'call-1', startedAt: '2026-11-16', month: '202611'}], missing: 2, cacheStatus: {complete: true} };
+  if (body.action === 'list') return { calls: [{reference: 'signed', callId: 'call-1', startedAt: '2026-11-16', month: '202611'}], missing: 2, missingReasons: { jobId: 1, server: 0, callId: 0, month: 1 }, cacheStatus: {complete: true} };
   if (body.action === 'lookup') return { status: 'finished', summary: 'A reboot request', topics: ['device'], matches: [{ keyword: 'reboot', source: 'Summary', excerpt: 'reboot request' }] };
   if (body.action === 'send') return { sent: true };
   if (body.action === 'save_watches') return { watches: body.watches };
@@ -18,6 +18,7 @@ await flush(20);
 assert.match(root().textContent, /A reboot request/);
 assert.match(root().textContent, /device \(1\)/);
 assert.match(root().textContent, /2 CDR rows/);
+assert.match(root().textContent, /Missing: job ID 1, PBX server 0, call ID 0, lookup month 1/);
 const box = document.querySelector('input[type="checkbox"][aria-label="Select call call-1"]');
 assert.ok(box);
 await click(box);

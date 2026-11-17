@@ -27,17 +27,19 @@ try {
         $directory = userDirectory($user);
         $calls = filterCallsByLocalDate(reportingCdrRows($user, $filters, $directory), $filters['start'], $filters['end']);
         $rows = []; $missing = 0; $seen = [];
+        $missingReasons = ['jobId' => 0, 'server' => 0, 'callId' => 0, 'month' => 0];
         foreach ($calls as $call) {
-            try { $ref = intelligenceReference($call, $domain, $month); }
-            catch (InvalidArgumentException $e) { $missing++; continue; }
-            if (!$ref) { $missing++; continue; }
+            $reason = null;
+            try { $ref = intelligenceReference($call, $domain, $month, $reason); }
+            catch (InvalidArgumentException $e) { $missing++; $missingReasons['month']++; continue; }
+            if (!$ref) { $missing++; $missingReasons[$reason]++; continue; }
             $key = $ref['id'] . '|' . $ref['callid'];
             if (isset($seen[$key])) continue;
             $seen[$key] = true;
-            $rows[] = ['reference' => intelligenceSign($ref, $domain), 'callId' => $ref['callid'], 'startedAt' => (string)($call['call-start-datetime'] ?? ''), 'month' => $ref['month']];
+            $rows[] = ['reference' => intelligenceSign($ref, $domain), 'callId' => $ref['callid'], 'callIdField' => $ref['displayField'], 'startedAt' => (string)($call['call-start-datetime'] ?? ''), 'month' => $ref['month']];
         }
         auditView($user, ['start' => $filters['start'], 'end' => $filters['end']], 'intelligence-report');
-        jsonResponse(['calls' => $rows, 'missing' => $missing, 'hours' => $filters['hours'], 'cacheStatus' => cdrRangeCacheStatus($user, $filters['start'], $filters['end']), 'timezone' => reportingTimezoneName()]);
+        jsonResponse(['calls' => $rows, 'missing' => $missing, 'missingReasons' => $missingReasons, 'hours' => $filters['hours'], 'cacheStatus' => cdrRangeCacheStatus($user, $filters['start'], $filters['end']), 'timezone' => reportingTimezoneName()]);
     }
     if ($action === 'lookup') {
         $ref = intelligenceVerify((string)($input['reference'] ?? ''), $domain);
@@ -65,7 +67,7 @@ try {
             $ref = intelligenceVerify($token, $domain);
             $job = intelligenceReadJob($client, $domain, $ref, $watches);
             if (($job['status'] ?? '') !== 'finished' || empty($job['matches'])) throw new InvalidArgumentException('A selected call no longer matches or is not available. Refresh the report.');
-            $body .= 'Call: ' . $ref['callid'] . "\nJob: " . $ref['id'] . "\n";
+            $body .= 'Call (' . $ref['displayField'] . '): ' . $ref['callid'] . "\nJob: " . $ref['id'] . "\n";
             foreach ($job['matches'] as $match) $body .= $match['keyword'] . ' (' . $match['source'] . '): ' . $match['excerpt'] . "\n";
             $body .= "\n";
         }

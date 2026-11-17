@@ -142,7 +142,10 @@ final class PbxClient
     }
     public function cradle(string $origCallId, string $termCallId, string $start10, string $end10): array { return (array)$this->canned('cradle', []); }
     public function recording(string $domain, string $ext, string $callId): array { return (array)$this->canned('recording', []); }
-    public function transcription(string $server, string $domain, string $jobId, string $month, string $callId): array { return (array)$this->canned('transcription', []); }
+    public function transcription(string $server, string $domain, string $jobId, string $month, array $identifiers): array {
+        $this->record('transcription-args:' . json_encode(['server'=>$server, 'domain'=>$domain, 'id'=>$jobId, 'month'=>$month, 'identifiers'=>$identifiers]));
+        return (array)$this->canned('transcription', []);
+    }
 
     public function fetchCdrs(
         string $domain,
