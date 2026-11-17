@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1400 names.
+ * 1407 names.
  */
 return [
     'aa',
@@ -125,6 +125,7 @@ return [
     'alert',
     'alerts',
     'all',
+    'alphabetical',
     'answer',
     'answer_rate',
     'answered',
@@ -142,6 +143,7 @@ return [
     'argv',
     'aria-busy',
     'aria-checked',
+    'aria-controls',
     'aria-expanded',
     'aria-hidden',
     'aria-label',
@@ -631,6 +633,7 @@ return [
     'instant',
     'integrity',
     'intel-actions',
+    'intel-active-filter',
     'intel-email',
     'intel-empty',
     'intel-head',
@@ -647,12 +650,16 @@ return [
     'intel-table-heading',
     'intel-table-wrap',
     'intel-topic',
+    'intel-topic-controls',
     'intel-topic-list',
+    'intel-topic-search',
+    'intel-topic-sort',
     'intel-topics',
     'intelligence',
     'intelligence-email',
     'intelligence-input',
     'intelligence-report',
+    'intelligence-topic-list',
     'intelligence-watch-settings',
     'interval',
     'intervals',

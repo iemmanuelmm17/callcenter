@@ -21,7 +21,7 @@ FIXTURES.intelligence = body => {
     const n = Number(body.reference.slice(4));
     activeLookups++; maxLookups = Math.max(maxLookups, activeLookups);
     const result = n >= 113 ? { status: 'error', detail: 'unavailable' }
-      : { status: 'finished', summary: 'Summary ' + n, topics: n < 110 ? ['device'] : [], matches: n === 0 || n === 85 ? [{ keyword: 'reboot', source: 'Summary', excerpt: 'reboot request' }] : [] };
+      : { status: 'finished', summary: 'Summary ' + n, topics: n < 110 ? ['device', 'topic ' + String(n).padStart(3, '0')] : [], matches: n === 0 || n === 85 ? [{ keyword: 'reboot', source: 'Summary', excerpt: 'reboot request' }] : [] };
     return Promise.resolve(result).finally(() => { activeLookups--; });
   }
   if (body.action === 'send') return { sent: true };
@@ -92,6 +92,43 @@ assert.match(root().textContent, /Page 2 of 2/);
 await click(byText('button', 'device (111)'));
 assert.match(root().textContent, /Calls: device/);
 assert.match(root().textContent, /Page 1 of 2/);
+assert.match(root().textContent, /Selected topic: device/);
+await click(byText('button', 'Clear filter'));
+assert.match(root().textContent, /Calls with topics/);
+const topicList = () => document.querySelector('#intelligence-topic-list');
+const topicButtons = () => [...topicList().querySelectorAll('button')];
+assert.equal(topicButtons().length, 10, 'default topic view is bounded');
+assert.match(root().textContent, /Showing top 10 of 111 topics by call count/);
+assert.equal(topicButtons()[0].textContent, 'device (111)');
+const search = document.querySelector('[aria-label="Search topics"]');
+const sortTopics = document.querySelector('[aria-label="Sort topics"]');
+await act(async () => { Simulate.change(search, { target: { value: 'TOPIC 109' } }); });
+assert.match(root().textContent, /Found 1 of 111 topics/);
+assert.deepEqual(topicButtons().map(b => b.textContent), ['topic 109 (1)']);
+await click(topicButtons()[0]);
+assert.match(root().textContent, /Selected topic: topic 109/);
+assert.equal(table().querySelectorAll('tr').length, 1);
+assert.match(table().textContent, /call-109/);
+await act(async () => { Simulate.change(search, { target: { value: '' } }); });
+assert.equal(topicButtons().length, 10);
+assert.match(root().textContent, /Selected topic: topic 109/, 'selected topic remains visible outside the collapsed list');
+await click(byText('button', 'Clear filter'));
+assert.match(root().textContent, /Showing 1–100 of 111/);
+await act(async () => { Simulate.change(search, { target: { value: 'not found' } }); });
+assert.match(root().textContent, /No topics match your search/);
+await act(async () => { Simulate.change(search, { target: { value: '' } }); });
+const expand = byText('button', 'Show all topics');
+assert.equal(expand.getAttribute('aria-expanded'), 'false');
+await click(expand);
+assert.equal(byText('button', 'Show top topics').getAttribute('aria-expanded'), 'true');
+assert.equal(topicButtons().length, 111);
+assert.equal(topicButtons()[0].textContent, 'device (111)');
+await act(async () => { Simulate.change(sortTopics, { target: { value: 'alphabetical' } }); });
+assert.equal(topicButtons()[1].textContent, 'topic 000 (1)');
+assert.equal(topicButtons().at(-1).textContent, 'topic 109 (1)');
+await click(byText('button', 'Show top topics'));
+assert.equal(topicButtons().length, 10);
+assert.equal(topicButtons()[0].textContent, 'device (111)', 'collapsed topics remain sorted by popularity');
 
 // An unfinished cache must be reported, and partial days get bounded retries.
 let warmAttempts = 0;

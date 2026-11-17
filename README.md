@@ -267,7 +267,9 @@ The report defaults to the current desk-calendar month through today and has its
 own month selector for past months. Department, site, agent and hours scopes
 still apply; hours default to all on this report. The call table shows only
 calls with topics, offers 30/50/100 rows per page and highlights keyword matches
-red. CDR topics are used while lookups are pending or unavailable, with those
+red. The topic browser shows the ten most common topics by default; search all
+topics or expand the list and sort by call count or name. CDR topics are used
+while lookups are pending or unavailable, with those
 rows marked incomplete; they cannot be emailed until a successful lookup.
 Phrase matching is case-insensitive substring matching across topics, summaries
 and transcript segments. Tags are recalculated against the current watch list;

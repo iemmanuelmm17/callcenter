@@ -21,6 +21,9 @@ function IntelligenceDashboard({ filters }) {
     const [error, setError] = useState('');
     const [message, setMessage] = useState('');
     const [topic, setTopic] = useState('');
+    const [topicSearch, setTopicSearch] = useState('');
+    const [showAllTopics, setShowAllTopics] = useState(false);
+    const [topicSort, setTopicSort] = useState('count');
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(30);
     const [selected, setSelected] = useState([]);
@@ -122,6 +125,11 @@ function IntelligenceDashboard({ filters }) {
     const counts = new Map();
     rows.forEach(row => (row.topics || []).forEach(t => counts.set(t, (counts.get(t) || 0) + 1)));
     const topics = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    const query = topicSearch.trim().toLocaleLowerCase();
+    const filteredTopics = query ? topics.filter(([name]) => name.toLocaleLowerCase().includes(query)) : topics;
+    // The collapsed, unsearched view is always the most common ten topics.
+    const displayedTopics = (showAllTopics || query ? filteredTopics : topics.slice(0, 10)).slice();
+    if ((showAllTopics || query) && topicSort === 'alphabetical') displayedTopics.sort((a, b) => a[0].localeCompare(b[0]));
     /* CDR topics remain visible when a transcription is pending or unavailable. */
     const visible = rows.filter(r => (r.topics || []).length > 0 && (!topic || r.topics.includes(topic)));
     const failures = rows.filter(r => ['error', 'pending', 'partial', 'unavailable'].includes(r.status)).length;
@@ -162,10 +170,23 @@ function IntelligenceDashboard({ filters }) {
         h('section', { className: 'rep-sec' },
             h('h2', { className: 'rep-sec-title' }, 'Topics'),
             h('p', { className: 'rep-note' }, 'Counts include CDR topics and are provisional while jobs are being checked. Select a topic to filter the calls below.'),
-            h('div', { className: 'intel-topics' },
-                h('button', { type: 'button', className: 'rep-btn', 'aria-pressed': topic === '', onClick: () => changeTopic('') }, 'All topics'),
-                ...topics.map(([name, count]) => h('button', { key: name, type: 'button', className: 'rep-btn', 'aria-pressed': topic === name, onClick: () => changeTopic(name) }, name + ' (' + count + ')')))),
+            h('div', { className: 'intel-topic-controls' },
+                h('label', { className: 'intel-topic-search' }, 'Search topics',
+                    h('input', { type: 'search', className: 'intelligence-input', value: topicSearch, onChange: e => setTopicSearch(e.target.value), placeholder: 'Search all topics', 'aria-label': 'Search topics' })),
+                h('label', { className: 'intel-topic-sort' }, 'Sort all topics',
+                    h('select', { className: 'intelligence-input', value: topicSort, onChange: e => setTopicSort(e.target.value), 'aria-label': 'Sort topics' },
+                        h('option', { value: 'count' }, 'Most calls'), h('option', { value: 'alphabetical' }, 'Alphabetical'))),
+                h('button', { type: 'button', className: 'rep-btn', 'aria-expanded': showAllTopics, 'aria-controls': 'intelligence-topic-list', onClick: () => setShowAllTopics(value => !value) }, showAllTopics ? 'Show top topics' : 'Show all topics')),
+            h('p', { className: 'rep-note', 'aria-live': 'polite' }, query
+                ? 'Found ' + filteredTopics.length + ' of ' + topics.length + ' topics.'
+                : showAllTopics ? 'Showing all ' + topics.length + ' topics.' : 'Showing top ' + displayedTopics.length + ' of ' + topics.length + ' topics by call count.'),
+            h('div', { className: 'intel-topics', id: 'intelligence-topic-list', 'aria-label': 'Topic choices' },
+                ...displayedTopics.map(([name, count]) => h('button', { key: name, type: 'button', className: 'rep-btn', 'aria-pressed': topic === name, onClick: () => changeTopic(name) }, name + ' (' + count + ')'))),
+            !displayedTopics.length ? h('p', { className: 'rep-note' }, query ? 'No topics match your search.' : (progress ? 'Checking calls for topics…' : 'No topics found for this month.')) : null),
         h('section', { className: 'rep-sec' },
+            topic ? h('div', { className: 'intel-active-filter' },
+                h('span', null, 'Selected topic: ', h('strong', null, topic)),
+                h('button', { type: 'button', className: 'rep-btn', onClick: () => changeTopic('') }, 'Clear filter')) : null,
             h('div', { className: 'intel-table-heading' }, h('div', null,
                 h('h2', { className: 'rep-sec-title' }, topic ? 'Calls: ' + topic : 'Calls with topics'),
                 h('p', { className: 'rep-note' }, 'Select up to 10 matching calls across pages. Email excerpts may contain sensitive information.')),
