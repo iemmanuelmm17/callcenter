@@ -109,6 +109,7 @@ const navItems = [
     { id: 'attendants', label: 'Auto-Attendants', icon: 'attendants' },
     { id: 'call_history', label: 'Call History', icon: 'history' },
     { id: 'reports', label: 'Reports', icon: 'download' },
+    { id: 'intelligence', label: 'Topics & summaries', icon: 'download' },
 ];
 
 function flowFaIcon(classes) {

@@ -498,6 +498,7 @@ export async function createHarness(options = {}) {
       return jsonResponse({ error: 'harness: no fixture for ' + name }, 404);
     }
     if (name === 'session') return jsonResponse({ ...FIXTURES.session, user });
+    if (typeof fixture === 'function') return jsonResponse(await fixture(JSON.parse(init.body || '{}')));
 
     /* Export requests are answered the way the real endpoint answers them:
      * a CSV attachment, not JSON. */

@@ -257,3 +257,45 @@ npm run lint:php     # syntax + banned-construct scan over every .php file
   one synthetic day of CDRs through every report endpoint and asserts that the
   missed and abandoned totals reconcile across the Dashboard, Agents, Queues,
   Telephone Numbers, Auto Attendants, Call history and Alerts.
+
+## Topics, summaries and keyword watch
+
+Office managers can open **Topics & summaries**, review topic counts and call
+summaries, manage domain-wide watched phrases, and manually email selected tagged
+calls. `api/intelligence.php` enforces the manager role on every operation.
+Phrase matching is case-insensitive substring matching across topics, summaries
+and transcript segments. Tags are recalculated against the current watch list;
+removing a phrase removes its tag on the next scan. Topic counts cover the
+successfully retrieved jobs (partial jobs are flagged), not the full CDR
+population. No automatic email or background monitoring is performed.
+
+The report retrieves one transcription per job using the authenticated PBX
+session. It takes the call ID and month from a valid CDR
+`prefilled-transcription-api` when present (the URL's host is never fetched), or
+uses `call-id` and the configured `INTELLIGENCE_MONTH_TIMEZONE`. A different
+CDR call-ID field can be selected using `INTELLIGENCE_CALL_ID_FIELD`. A manual
+YYYYMM override takes precedence. The PBX's exact month basis has not been
+confirmed: verify it against real records before configuring the timezone.
+Offset-less CDR timestamps are interpreted in the desk timezone before conversion.
+Missing IDs, lookup errors, unfinished jobs and incomplete intelligence responses
+are identified rather than counted as successful searches.
+
+Set the `INTELLIGENCE_SMTP_*` constants in `includes/config.local.php` as shown
+in `includes/config.local.example.php` to enable authenticated STARTTLS mail.
+Certificate verification is mandatory. The manager enters recipients and selects
+up to ten matching calls per email; the server re-fetches and rechecks them before
+sending excerpts. An accepted email means the SMTP server accepted it, not that it
+was delivered. Excerpts may contain sensitive data: verify recipients and use a
+mail server appropriate for that data. The application stores domain watch lists
+and a server-only call-reference signing key under `CACHE_DIR` (not transcript
+text); keep this directory persistent and shared between application workers, and
+configure the web server to deny HTTP
+access to cache and logs, or place them outside the web root.
+
+CDR caches created before this version may not contain the job ID or the
+prefilled transcription URL, because older versions trimmed these fields. They
+can therefore appear as missing even if the PBX has intelligence data. Refresh
+or expire those CDR cache days (and any imported node JSONL source) before relying
+on historical coverage; the default closed-day cache lifetime is one year. The
+report also flags an incomplete date cache. A large range may require many PBX
+requests; lookups run sequentially and display progress.

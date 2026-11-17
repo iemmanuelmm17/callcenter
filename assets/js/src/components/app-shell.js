@@ -17,6 +17,7 @@ import { AlertsBell } from './login.js';
 import { OverviewDashboard } from './overview.js';
 import { QueueDashboard } from './queue.js';
 import { ReportsDashboard } from './reports.js';
+import { IntelligenceDashboard } from './intelligence.js';
 import { SettingsModal } from './settings.js';
 import { TelephoneNumbers } from './telephone-numbers.js';
 import { ErrorState, NavIcon, ThemeToggle, ToastHost, navItems, useToasts } from './ui.js';
@@ -773,6 +774,8 @@ if (route === 'agents') {
     });
 } else if (route === 'call_history') {
     main = h(CallHistoryDashboard, { filters, callTypes });
+} else if (route === 'intelligence') {
+    main = h(IntelligenceDashboard, { filters });
 } else if (route === 'reports') {
     /* The month-end pack fetches its own payload (the pack + the comparison +
      * the 4-week baseline), so it does not ride on the dashboard's request. */

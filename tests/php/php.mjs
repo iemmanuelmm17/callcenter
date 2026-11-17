@@ -142,6 +142,7 @@ final class PbxClient
     }
     public function cradle(string $origCallId, string $termCallId, string $start10, string $end10): array { return (array)$this->canned('cradle', []); }
     public function recording(string $domain, string $ext, string $callId): array { return (array)$this->canned('recording', []); }
+    public function transcription(string $server, string $domain, string $jobId, string $month, string $callId): array { return (array)$this->canned('transcription', []); }
 
     public function fetchCdrs(
         string $domain,
@@ -416,6 +417,7 @@ define('PBX_SERVERS', ['nms1' => 'https://pbx.example']);
       "$_GET = $cfg['query'] ?? [];",
       "$_REQUEST = $_GET;",
       "$_POST = [];",
+      "session_id('test-session-123');",
       "$_SESSION = [];",
       "if ($cfg['user']) {",
       "    $_SESSION['user'] = $cfg['user'];",

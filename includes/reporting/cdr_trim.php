@@ -68,6 +68,7 @@ function cdrKeepFieldPatterns(): array
 {
     return [
         '/disconnect|release|hangup/i',
+        ...(defined('INTELLIGENCE_CALL_ID_FIELD') && (string)INTELLIGENCE_CALL_ID_FIELD !== '' ? ['/^' . preg_quote((string)INTELLIGENCE_CALL_ID_FIELD, '/') . '$/'] : []),
     ];
 }
 

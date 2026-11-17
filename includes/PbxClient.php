@@ -1402,6 +1402,18 @@ final class PbxClient
         return [];
     }
 
+    /** Fetch one call-intelligence job from the CDR's PBX server. */
+    public function transcription(string $server, string $domain, string $jobId, string $month, string $callId): array
+    {
+        if (!isset(PBX_SERVERS[$server]) || !preg_match('/^\d+$/', $jobId)
+            || !preg_match('/^\d{4}(0[1-9]|1[0-2])$/', $month) || $callId === '') {
+            throw new InvalidArgumentException('Invalid transcription reference');
+        }
+        return $this->request($server, '/ns-api/v2/domains/' . rawurlencode($domain) . '/transcriptions', [
+            'id' => $jobId, 'date' => $month, 'callid' => $callId,
+        ]);
+    }
+
     /**
      * GET that returns [] on 404 instead of throwing.
      */

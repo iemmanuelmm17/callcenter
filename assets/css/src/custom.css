@@ -3587,3 +3587,7 @@ html[data-theme="light"] .grid-totals td {
 .tn-repeats-time.is-missed { border-color: var(--color-rose-500, #f43f5e); color: var(--color-rose-300, #fda4af); }
 .tn-repeats-more { background: none; border: 0; padding: 1px 4px; font-size: 10px; color: var(--color-cyan-400, #22d3ee); cursor: pointer; }
 .tn-repeats-more:hover { text-decoration: underline; }
+
+/* Topics and summaries: readable controls in both themes. */
+.intelligence-input { background: var(--color-slate-800); color: var(--color-slate-100); border: 1px solid var(--color-slate-600); border-radius: 6px; padding: 6px; }
+.rep-btn:disabled { opacity: .5; cursor: not-allowed; }

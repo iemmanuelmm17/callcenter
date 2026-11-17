@@ -39,6 +39,7 @@ const SUITES = {
     { name: 'deploy check', cmd: ['node', 'tests/js/deploy-check.mjs'] }
   ],
   js: [
+    { name: 'intelligence UI', cmd: ['node', 'tests/js/intelligence.mjs'] },
     { name: 'js smoke', cmd: ['node', 'tests/js/smoke.mjs'] },
     { name: 'aa fields', cmd: ['node', 'tests/js/aa-fields.mjs'] },
     { name: 'aa model', cmd: ['node', 'tests/js/aa-model.mjs'] },
@@ -50,6 +51,7 @@ const SUITES = {
     { name: 'vendor paths', cmd: ['node', 'tests/js/vendor-paths.mjs'] }
   ],
   php: [
+    { name: 'intelligence', cmd: ['node', 'tests/php/intelligence.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'api matrix', cmd: ['node', 'tests/php/endpoints.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'url policy', cmd: ['node', 'tests/php/security.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'csv exports', cmd: ['node', 'tests/php/export.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },

@@ -54,3 +54,22 @@ declare(strict_types=1);
 // define('DEFAULT_TIMEZONE', 'US/Eastern');
 // define('SESSION_IDLE_SECONDS', 1800);
 // define('HISTORICAL_CDR_START_DATE', '2021-01-01');
+
+/* --- Topics and summaries ----------------------------------------------- */
+/* The PBX's prefilled-transcription-api, when present and valid, supplies its
+ * own month. Otherwise convert the CDR start instant to this IANA timezone.
+ * Leave unset until the PBX month basis has been confirmed; the manager can
+ * enter a YYYYMM override on the report instead. Offset-less CDR timestamps
+ * are interpreted in the desk timezone before conversion. */
+// define('INTELLIGENCE_MONTH_TIMEZONE', 'America/New_York');
+/* Optional CDR field for the transcription call ID if no validated prefilled
+ * link or call-id field is present. Confirm the field with your PBX vendor. */
+// define('INTELLIGENCE_CALL_ID_FIELD', 'call-orig-call-id');
+
+/* Authenticated SMTP with mandatory STARTTLS and certificate verification.
+ * Store these only on the server, never in the repository. */
+// define('INTELLIGENCE_SMTP_HOST', 'smtp.example.com');
+// define('INTELLIGENCE_SMTP_PORT', 587);
+// define('INTELLIGENCE_SMTP_USERNAME', 'user@example.com');
+// define('INTELLIGENCE_SMTP_PASSWORD', 'set-on-server');
+// define('INTELLIGENCE_SMTP_FROM', 'callscope@example.com');
