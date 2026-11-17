@@ -21,6 +21,7 @@
     "acorn": "^8.19.0",
     "chart.js": "4.4.7",
     "esbuild": "^0.25.10",
+    "fflate": "^0.8.3",
     "jsdom": "^27.0.0",
     "php-parser": "^3.2.5",
     "php-wasm": "^0.2.0",

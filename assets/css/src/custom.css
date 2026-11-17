@@ -3606,9 +3606,9 @@ html[data-theme="light"] .grid-totals td {
 .intel-topics .rep-btn[aria-pressed="true"] { border-color: var(--color-cyan-400); color: var(--color-cyan-300); }
 .intel-email { margin: 10px 0; font-size: 12px; color: var(--color-slate-300); }
 .intel-email input { width: 20em; max-width: 100%; }
-.intel-table-wrap { width: 100%; overflow-x: auto; border: 1px solid var(--color-slate-700); border-radius: 8px; }
+.intel-table-wrap { width: 100%; max-height: min(65vh, 720px); overflow: auto; border: 1px solid var(--color-slate-700); border-radius: 8px; }
 .intel-table { width: 100%; min-width: 800px; border-collapse: collapse; font-size: 12px; text-align: left; }
-.intel-table th { background: var(--color-slate-800); color: var(--color-slate-300); padding: 10px 12px; font-weight: 600; border-bottom: 1px solid var(--color-slate-700); }
+.intel-table th { position: sticky; top: 0; z-index: 1; background: var(--color-slate-800); color: var(--color-slate-300); padding: 10px 12px; font-weight: 600; border-bottom: 1px solid var(--color-slate-700); }
 .intel-table td { padding: 12px; vertical-align: top; color: var(--color-slate-200); border-bottom: 1px solid var(--color-slate-800); overflow-wrap: anywhere; }
 .intel-table tr:last-child td { border-bottom: 0; }
 .intel-table tr.is-matched { background: rgba(239, 68, 68, .17); }
@@ -3635,3 +3635,6 @@ html[data-theme="light"] .intel-table tr.is-matched { background: #ffe3e3; }
 .intel-topics .rep-btn { white-space: normal; text-align: left; overflow-wrap: anywhere; }
 .intel-active-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; font-size: 12px; color: var(--color-slate-300); }
 .intel-active-filter strong { color: var(--color-slate-100); overflow-wrap: anywhere; }
+
+/* Call filters stay outside the scroll area; headings stay visible inside it. */
+.intel-call-filters { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0; color: var(--color-slate-300); font-size: 12px; }

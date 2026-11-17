@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1407 names.
+ * 1413 names.
  */
 return [
     'aa',
@@ -488,6 +488,7 @@ return [
     'fb-bell-reason',
     'fb-bell-wrap',
     'fetched_at',
+    'fflate',
     'field',
     'fields',
     'file',
@@ -624,6 +625,7 @@ return [
     'import',
     'inbound',
     'incoming',
+    'incomplete',
     'inconclusive',
     'index',
     'index_pct',
@@ -634,6 +636,7 @@ return [
     'integrity',
     'intel-actions',
     'intel-active-filter',
+    'intel-call-filters',
     'intel-email',
     'intel-empty',
     'intel-head',
@@ -722,6 +725,7 @@ return [
     'lt5',
     'm4a',
     'main',
+    'matched',
     'matches',
     'max',
     'max_ring',
@@ -1041,6 +1045,7 @@ return [
     'reference',
     'references',
     'refresh_token',
+    'region',
     'remaining',
     'rep',
     'rep-actions',
@@ -1381,6 +1386,7 @@ return [
     'undefined',
     'unknown',
     'unlimited',
+    'unmatched',
     'unreturned',
     'up',
     'url',

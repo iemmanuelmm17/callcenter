@@ -1,7 +1,8 @@
 import { api } from '../lib/api.js';
+import { downloadIntelligenceWorkbook } from '../lib/intelligence-export.js';
 import { intelligenceMonthRange } from '../lib/intelligence-month.js';
 import { recordRangeLabel } from '../lib/pagination.js';
-import { date, formatCallDate, formatCallTime, parseCallInstant } from '../lib/time.js';
+import { APP_TZ, date, formatCallDate, formatCallTime, parseCallInstant } from '../lib/time.js';
 import { h, useEffect, useState } from '../lib/react.js';
 
 const LOOKUP_CONCURRENCY = 4;
@@ -9,6 +10,9 @@ const LOOKUP_CONCURRENCY = 4;
 function IntelligenceDashboard({ filters }) {
     const reportToday = date(new Date());
     const [watches, setWatches] = useState('');
+    const [savedWatches, setSavedWatches] = useState([]);
+    const [matchFilter, setMatchFilter] = useState('all');
+    const [keywordFilter, setKeywordFilter] = useState('');
     const [selectedMonth, setSelectedMonth] = useState(() => reportToday.slice(0, 7));
     const [overrideMonth, setOverrideMonth] = useState('');
     const [appliedOverride, setAppliedOverride] = useState('');
@@ -34,7 +38,7 @@ function IntelligenceDashboard({ filters }) {
 
     useEffect(() => {
         let active = true;
-        api('intelligence', { action: 'watches' }).then(r => { if (active) setWatches(r.watches.join('\n')); }).catch(e => { if (active) setError(e.message); });
+        api('intelligence', { action: 'watches' }).then(r => { if (active) { setWatches(r.watches.join('\n')); setSavedWatches(r.watches); } }).catch(e => { if (active) setError(e.message); });
         return () => { active = false; };
     }, []);
 
@@ -112,7 +116,7 @@ function IntelligenceDashboard({ filters }) {
         setBusy(true); setError(''); setMessage('');
         try {
             const r = await api('intelligence', { action: 'save_watches', watches: watches.split(/\r?\n/) });
-            setWatches(r.watches.join('\n')); setMessage('Watched phrases saved. Rechecking calls.'); setRefresh(x => x + 1);
+            setWatches(r.watches.join('\n')); setSavedWatches(r.watches); setKeywordFilter(''); setMessage('Watched phrases saved. Rechecking calls.'); setRefresh(x => x + 1);
         } catch (e) { setError(e.message); } finally { setBusy(false); }
     };
     const send = async () => {
@@ -131,7 +135,13 @@ function IntelligenceDashboard({ filters }) {
     const displayedTopics = (showAllTopics || query ? filteredTopics : topics.slice(0, 10)).slice();
     if ((showAllTopics || query) && topicSort === 'alphabetical') displayedTopics.sort((a, b) => a[0].localeCompare(b[0]));
     /* CDR topics remain visible when a transcription is pending or unavailable. */
-    const visible = rows.filter(r => (r.topics || []).length > 0 && (!topic || r.topics.includes(topic)));
+    const visible = rows.filter(r => {
+        if (!(r.topics || []).length || (topic && !r.topics.includes(topic))) return false;
+        if (matchFilter === 'matched' && !(r.matches || []).length) return false;
+        if (matchFilter === 'unmatched' && (r.status !== 'finished' || (r.matches || []).length)) return false;
+        if (matchFilter === 'incomplete' && r.status === 'finished') return false;
+        return !keywordFilter || (r.matches || []).some(m => m.keyword === keywordFilter);
+    });
     const failures = rows.filter(r => ['error', 'pending', 'partial', 'unavailable'].includes(r.status)).length;
     const jobs = rows.filter(r => r.reference).length;
     const noTopics = rows.filter(r => r.status === 'finished' && !(r.topics || []).length).length;
@@ -141,6 +151,20 @@ function IntelligenceDashboard({ filters }) {
     const pageRows = visible.slice(startIndex, startIndex + pageSize);
     const changeTopic = value => { setTopic(value); setPage(1); };
     const paginationButton = (label, target, disabled) => h('button', { type: 'button', className: 'rep-btn', disabled, onClick: () => setPage(target), key: label }, label);
+    const exportCalls = () => {
+        try {
+            setError('');
+            downloadIntelligenceWorkbook(visible, [
+                ['Report month', selectedMonth], ['Period', monthRange.start + ' – ' + monthRange.end], ['Timezone', APP_TZ],
+                ['Department', filters.department || 'All'], ['Site', filters.site || 'All'], ['Agents', (filters.agents || []).join(', ') || 'All'],
+                ['Hours', filters.hours || 'all'], ['Topic', topic || 'All'], ['Match filter', matchFilter], ['Watched keyword', keywordFilter || 'All'],
+                ['Exported calls', String(visible.length)], ['CDR cache', cacheIncomplete ? 'Incomplete' : 'Complete'],
+                ['Unavailable or incomplete checks', String(failures)], ['CDR rows without usable lookup', String(missing)],
+                ['Generated (UTC)', new Date().toISOString()],
+                ['Privacy', 'Contains summaries and matching excerpts. Handle as sensitive information.']
+            ], selectedMonth);
+        } catch (e) { setError('Excel export failed: ' + e.message); }
+    };
 
     return h('div', { className: 'rep intelligence-report' },
         h('div', { className: 'intel-head' },
@@ -189,12 +213,19 @@ function IntelligenceDashboard({ filters }) {
                 h('button', { type: 'button', className: 'rep-btn', onClick: () => changeTopic('') }, 'Clear filter')) : null,
             h('div', { className: 'intel-table-heading' }, h('div', null,
                 h('h2', { className: 'rep-sec-title' }, topic ? 'Calls: ' + topic : 'Calls with topics'),
-                h('p', { className: 'rep-note' }, 'Select up to 10 matching calls across pages. Email excerpts may contain sensitive information.')),
+                h('p', { className: 'rep-note' }, 'Select up to 10 matching calls across pages and filters. Email excerpts may contain sensitive information.')),
                 h('label', { className: 'intel-page-size' }, 'Rows per page ', h('select', { value: pageSize, className: 'intelligence-input', 'aria-label': 'Rows per page', onChange: e => { setPageSize(Number(e.target.value)); setPage(1); } }, ...[30, 50, 100].map(n => h('option', { key: n, value: n }, n))))),
+            h('div', { className: 'intel-call-filters' },
+                h('label', null, 'Match status ', h('select', { className: 'intelligence-input', value: matchFilter, 'aria-label': 'Match status', onChange: e => { setMatchFilter(e.target.value); setPage(1); } },
+                    h('option', { value: 'all' }, 'All calls'), h('option', { value: 'matched' }, 'Matched'), h('option', { value: 'unmatched' }, 'No match (checked)'), h('option', { value: 'incomplete' }, 'Incomplete / not checked'))),
+                h('label', null, 'Watched keyword ', h('select', { className: 'intelligence-input', value: keywordFilter, 'aria-label': 'Watched keyword', onChange: e => { setKeywordFilter(e.target.value); setPage(1); } },
+                    h('option', { value: '' }, 'All keywords'), ...savedWatches.map(w => h('option', { key: w, value: w }, w)))),
+                h('button', { type: 'button', className: 'rep-btn', disabled: !!progress || !visible.length, onClick: exportCalls }, 'Export filtered calls to Excel')),
+            h('p', { className: 'rep-note' }, 'Matched includes known matches from incomplete checks; No match includes only fully checked calls. Filters combine. Excel exports all filtered pages, including sensitive summaries and matching excerpts.'),
             h('div', { className: 'intel-email' },
                 h('label', null, 'Recipients ', h('input', { value: recipients, onChange: e => setRecipients(e.target.value), placeholder: 'name@example.com', className: 'intelligence-input' })),
                 h('button', { type: 'button', className: 'rep-btn', disabled: busy || !selected.length || !!progress, onClick: send }, 'Email selected (' + selected.length + ')')),
-            h('div', { className: 'intel-table-wrap' },
+            h('div', { className: 'intel-table-wrap', role: 'region', 'aria-label': 'Scrollable calls table', tabIndex: 0 },
                 h('table', { className: 'intel-table' },
                     h('thead', null, h('tr', null, ...['Select', 'When / PBX reference', 'Topics', 'Summary', 'Watch matches'].map(x => h('th', { key: x, scope: 'col' }, x)))),
                     h('tbody', null, ...pageRows.map(row => h('tr', { key: row.reference || row.rowKey, className: row.matches?.length ? 'is-matched' : '' },
@@ -205,7 +236,7 @@ function IntelligenceDashboard({ filters }) {
                         h('td', null, row.matches?.length ? h('span', { className: 'intel-match-label' }, 'Matched: ' + row.matches.map(m => m.keyword).join(', ')) : (row.status === 'finished' ? 'No match' : 'Not fully checked'),
                             row.status !== 'finished' ? h('div', { className: 'intel-muted' }, 'Incomplete check · ' + row.status + (row.detail ? ': ' + row.detail : '')) : null,
                             row.matches?.length ? h('details', null, h('summary', null, 'Matching excerpts'), ...row.matches.map(m => h('p', { key: m.keyword }, m.keyword + ' (' + m.source + '): ' + m.excerpt))) : null)))))),
-            !pageRows.length ? h('p', { className: 'intel-empty' }, progress ? 'Checking calls for topics…' : (topic ? 'No calls with this topic.' : 'No calls with topics in this month.')) : null,
+            !pageRows.length ? h('p', { className: 'intel-empty' }, progress ? 'Checking calls for topics…' : (topic || matchFilter !== 'all' || keywordFilter ? 'No calls match the current filters.' : 'No calls with topics in this month.')) : null,
             h('div', { className: 'intel-pagination', 'aria-label': 'Call table pagination' },
                 h('span', null, recordRangeLabel(visible.length, startIndex, Math.min(startIndex + pageSize, visible.length))),
                 h('div', { className: 'intel-page-buttons' },

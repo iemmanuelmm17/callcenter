@@ -40,6 +40,7 @@ const SUITES = {
   ],
   js: [
     { name: 'intelligence UI', cmd: ['node', 'tests/js/intelligence.mjs'] },
+    { name: 'intelligence XLSX', cmd: ['node', 'tests/js/intelligence-export.mjs'] },
     { name: 'js smoke', cmd: ['node', 'tests/js/smoke.mjs'] },
     { name: 'aa fields', cmd: ['node', 'tests/js/aa-fields.mjs'] },
     { name: 'aa model', cmd: ['node', 'tests/js/aa-model.mjs'] },

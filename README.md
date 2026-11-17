@@ -274,7 +274,15 @@ rows marked incomplete; they cannot be emailed until a successful lookup.
 Phrase matching is case-insensitive substring matching across topics, summaries
 and transcript segments. Tags are recalculated against the current watch list;
 removing a phrase removes its tag on the next scan. Topic counts include CDR topics and retrieved jobs; they are provisional
-while loading and may be incomplete (partial jobs are flagged). No automatic email or background monitoring is performed.
+while loading and may be incomplete (partial jobs are flagged). Filter calls by
+match status and optionally a saved keyword. A known match on a partially checked
+call can appear in both Matched and Incomplete; No match includes only fully
+checked calls. The scrollable table retains pagination and a sticky header.
+Export filtered calls to Excel creates an XLSX in the browser containing all
+filtered pages, summaries and matching excerpts, plus report scope and coverage
+metadata. Exports wait until lookups finish; unavailable checks and incomplete
+cache coverage are identified but may still make the export incomplete. Treat
+these files as sensitive. No automatic email or background monitoring is performed.
 
 The report retrieves one transcription per job using the authenticated PBX
 session. It takes the call ID and month from a valid CDR
