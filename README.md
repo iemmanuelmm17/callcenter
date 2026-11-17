@@ -263,11 +263,16 @@ npm run lint:php     # syntax + banned-construct scan over every .php file
 Office managers can open **Topics & summaries**, review topic counts and call
 summaries, manage domain-wide watched phrases, and manually email selected tagged
 calls. `api/intelligence.php` enforces the manager role on every operation.
+The report defaults to the current desk-calendar month through today and has its
+own month selector for past months. Department, site, agent and hours scopes
+still apply; hours default to all on this report. The call table shows only
+calls with topics, offers 30/50/100 rows per page and highlights keyword matches
+red. CDR topics are used while lookups are pending or unavailable, with those
+rows marked incomplete; they cannot be emailed until a successful lookup.
 Phrase matching is case-insensitive substring matching across topics, summaries
 and transcript segments. Tags are recalculated against the current watch list;
-removing a phrase removes its tag on the next scan. Topic counts cover the
-successfully retrieved jobs (partial jobs are flagged), not the full CDR
-population. No automatic email or background monitoring is performed.
+removing a phrase removes its tag on the next scan. Topic counts include CDR topics and retrieved jobs; they are provisional
+while loading and may be incomplete (partial jobs are flagged). No automatic email or background monitoring is performed.
 
 The report retrieves one transcription per job using the authenticated PBX
 session. It takes the call ID and month from a valid CDR
@@ -301,4 +306,6 @@ can therefore appear as missing even if the PBX has intelligence data. Refresh
 or expire those CDR cache days (and any imported node JSONL source) before relying
 on historical coverage; the default closed-day cache lifetime is one year. The
 report also flags an incomplete date cache. A large range may require many PBX
-requests; lookups run sequentially and display progress.
+requests. The selected month is warmed in batches and lookups run with at most
+four concurrent requests. Progress and partial results are displayed; counts
+and pages may change until checking finishes.

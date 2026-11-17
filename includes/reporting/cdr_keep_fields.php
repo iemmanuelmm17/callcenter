@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1378 names.
+ * 1400 names.
  */
 return [
     'aa',
@@ -335,6 +335,7 @@ return [
     'cmp-select-search',
     'cmp-swap',
     'code',
+    'col',
     'column',
     'comment',
     'compare',
@@ -629,6 +630,25 @@ return [
     'insight',
     'instant',
     'integrity',
+    'intel-actions',
+    'intel-email',
+    'intel-empty',
+    'intel-head',
+    'intel-match-label',
+    'intel-month',
+    'intel-muted',
+    'intel-page-buttons',
+    'intel-page-size',
+    'intel-pagination',
+    'intel-reference',
+    'intel-status',
+    'intel-summary',
+    'intel-table',
+    'intel-table-heading',
+    'intel-table-wrap',
+    'intel-topic',
+    'intel-topic-list',
+    'intel-topics',
     'intelligence',
     'intelligence-email',
     'intelligence-input',
@@ -645,6 +665,7 @@ return [
     'is-down',
     'is-flat',
     'is-good',
+    'is-matched',
     'is-no',
     'is-on',
     'is-onnet',
@@ -1222,6 +1243,7 @@ return [
     'str',
     'stream',
     'string',
+    'strong',
     'structure',
     'structures',
     'strval',

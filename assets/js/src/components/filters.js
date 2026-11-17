@@ -6,7 +6,7 @@
 
 import { DateRangePicker } from './date-range-picker.js';
 import { api } from '../lib/api.js';
-import { h, useEffect, useState } from '../lib/react.js';
+import { Fragment, h, useEffect, useState } from '../lib/react.js';
 import { today } from '../lib/time.js';
 import {
   MAX_RANGE_DAYS,
@@ -154,7 +154,7 @@ function filterOptions(values) {
     .sort((a, b) => a.localeCompare(b));
 }
 
-function Filters({filters,setFilters,role,rangeLocked,maxRangeDays}) {
+function Filters({filters,setFilters,role,rangeLocked,maxRangeDays,intelligenceMode = false}) {
   const [departments,setDepartments] = useState([]);
   const [sites,setSites] = useState([]);
   const [hoursConfigured,setHoursConfigured] = useState(false);
@@ -266,6 +266,7 @@ const fits = start => daysSpan(start, today) <= spanCap;
         'filters-bar flex flex-wrap items-center gap-2 border-b border-slate-700 bg-slate-900 px-3 py-2'
     },
 
+    !intelligenceMode && h(Fragment, null,
     h(
       'span',
       {
@@ -331,7 +332,7 @@ const fits = start => daysSpan(start, today) <= spanCap;
 
     fits(qtdStart) && range('Quarter to date', qtdStart, today),
 
-    fits(ytdStart) && range('Year to date', ytdStart, today),
+    fits(ytdStart) && range('Year to date', ytdStart, today)),
 
     role === 'office_manager' &&
       h(
@@ -414,7 +415,7 @@ const fits = start => daysSpan(start, today) <= spanCap;
       h(
         'select',
         {
-          value: filters.hours || 'business',
+          value: filters.hours || (intelligenceMode ? 'all' : 'business'),
           onChange: e =>
             setFilters({
               ...filters,
@@ -435,7 +436,7 @@ const fits = start => daysSpan(start, today) <= spanCap;
      * of a period. Negative means the call's negative share beats its positive
      * share and the call was scored at all - see callIsNegative().
      */
-    h(
+    !intelligenceMode && h(
       'select',
       {
         value: filters.sentiment || '',
@@ -457,7 +458,7 @@ const fits = start => daysSpan(start, today) <= spanCap;
      * OUTCOME (Sprint A): the canonical vocabulary, so "show me only the
      * abandons" does not require reading a column and guessing.
      */
-    h(
+    !intelligenceMode && h(
       'select',
       {
         value: filters.outcome || '',

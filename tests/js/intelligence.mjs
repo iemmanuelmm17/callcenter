@@ -1,34 +1,123 @@
 import assert from 'node:assert/strict';
 import { Simulate } from 'react-dom/test-utils';
 import { createHarness, FIXTURES } from './harness.mjs';
+import { intelligenceMonthRange } from '../../assets/js/src/lib/intelligence-month.js';
+assert.deepEqual(intelligenceMonthRange('2024-02', '2026-11-17'), { start: '2024-02-01', end: '2024-02-29' });
+assert.deepEqual(intelligenceMonthRange('2026-11', '2026-11-17'), { start: '2026-11-01', end: '2026-11-17' });
+assert.equal(intelligenceMonthRange('2026-12', '2026-11-17'), null);
+assert.equal(intelligenceMonthRange('2026-13', '2026-11-17'), null);
 const operations = [];
+let activeLookups = 0, maxLookups = 0;
+const calls = Array.from({ length: 115 }, (_, i) => ({ reference: 'ref-' + String(i).padStart(3, '0'), callId: 'call-' + String(i).padStart(3, '0'), startedAt: '2024-02-29T12:00:00Z', month: '202402' }));
+calls.push({ rowKey: 'cdr-unavailable', reference: null, callId: 'call-unavailable', startedAt: '2024-02-29T12:00:00Z', status: 'unavailable', detail: 'missing job ID', topicsHint: ['device'], matchesHint: [{ keyword: 'reboot', source: 'Topic', excerpt: 'reboot request' }] });
+FIXTURES.cache_job = body => body.action === 'warm'
+  ? { complete: true, ready: 29, total: 29, batch: { warmed: 29, stopped: 'complete' } }
+  : { complete: false, ready: 0, total: 29 };
 FIXTURES.intelligence = body => {
   operations.push(body);
   if (body.action === 'watches') return { watches: ['reboot'] };
-  if (body.action === 'list') return { calls: [{reference: 'signed', callId: 'call-1', startedAt: '2026-11-16', month: '202611'}], missing: 2, missingReasons: { jobId: 1, server: 0, callId: 0, month: 1 }, cacheStatus: {complete: true} };
-  if (body.action === 'lookup') return { status: 'finished', summary: 'A reboot request', topics: ['device'], matches: [{ keyword: 'reboot', source: 'Summary', excerpt: 'reboot request' }] };
+  if (body.action === 'list') return { calls, missing: 2, missingReasons: { jobId: 1, server: 0, callId: 0, month: 1 }, cacheStatus: {complete: true} };
+  if (body.action === 'lookup') {
+    const n = Number(body.reference.slice(4));
+    activeLookups++; maxLookups = Math.max(maxLookups, activeLookups);
+    const result = n >= 113 ? { status: 'error', detail: 'unavailable' }
+      : { status: 'finished', summary: 'Summary ' + n, topics: n < 110 ? ['device'] : [], matches: n === 0 || n === 85 ? [{ keyword: 'reboot', source: 'Summary', excerpt: 'reboot request' }] : [] };
+    return Promise.resolve(result).finally(() => { activeLookups--; });
+  }
   if (body.action === 'send') return { sent: true };
   if (body.action === 'save_watches') return { watches: body.watches };
   return {};
 };
-const { document, root, flush, click, typeInto, byText, errors, act, window } = await createHarness();
+const { document, root, flush, click, byText, errors, act, requested } = await createHarness({ search: 'start=2025-01-01&end=2025-01-01' });
 await flush(10);
 await click(byText('.nav-item', 'Topics & summaries'));
-await flush(20);
-assert.match(root().textContent, /A reboot request/);
-assert.match(root().textContent, /device \(1\)/);
-assert.match(root().textContent, /2 CDR rows/);
+await flush(1200);
+const firstList = operations.find(x => x.action === 'list');
+assert.equal(firstList.start.slice(-3), '-01');
+assert.equal(firstList.start.slice(0, 7), firstList.end.slice(0, 7));
+assert.notEqual(firstList.start, '2025-01-01', 'global date range must not override report month');
+assert.equal(firstList.hours, 'all');
+assert.ok(maxLookups > 1 && maxLookups <= 4, 'lookups use bounded parallelism');
+assert.ok(requested.some(r => r.endpoint === 'cache_job' && JSON.parse(r.body).action === 'warm'), 'cold month is warmed in batches');
+assert.equal(byText('button', 'Today'), undefined, 'global date presets are hidden on this report');
+assert.match(root().textContent, /device \(111\)/);
+assert.match(root().textContent, /3 unavailable or incomplete; 3 finished without topics/);
 assert.match(root().textContent, /Missing: job ID 1, PBX server 0, call ID 0, lookup month 1/);
-const box = document.querySelector('input[type="checkbox"][aria-label="Select call call-1"]');
-assert.ok(box);
-await click(box);
+const table = () => document.querySelector('.intel-table tbody');
+assert.equal(table().querySelectorAll('tr').length, 30);
+const unavailableRow = [...table().querySelectorAll('tr')].find(r => r.textContent.includes('call-unavailable'));
+assert.ok(unavailableRow.classList.contains('is-matched'));
+assert.ok(!unavailableRow.querySelector('input[type=checkbox]'), 'unavailable call cannot be emailed');
+assert.match(unavailableRow.textContent, /Incomplete check/);
+assert.ok([...table().querySelectorAll('tr.is-matched')].some(r => r.textContent.includes('call-000')));
+assert.match(root().textContent, /Showing 1–30 of 111/);
+assert.ok(byText('button', 'First').disabled && byText('button', 'Previous').disabled);
+await click(byText('button', 'Last'));
+assert.match(root().textContent, /Page 4 of 4/);
+assert.match(root().textContent, /Showing 91–111 of 111/);
+assert.equal(table().querySelectorAll('tr').length, 21);
+assert.ok(!table().textContent.includes('call-110'), 'calls without topics are never shown');
+assert.ok(byText('button', 'Last').disabled && byText('button', 'Next').disabled);
+await click(byText('button', 'Previous'));
+assert.match(root().textContent, /Page 3 of 4/);
+assert.ok(table().querySelector('tr.is-matched').textContent.includes('call-085'));
+await click(table().querySelector('input[type="checkbox"]'));
+await click(byText('button', 'First'));
+await click(table().querySelector('input[type="checkbox"]'));
+const size = document.querySelector('[aria-label="Rows per page"]');
+await act(async () => { Simulate.change(size, { target: { value: '50' } }); });
+assert.match(root().textContent, /Showing 1–50 of 111/);
+await click(byText('button', 'Last'));
+assert.match(root().textContent, /Showing 101–111 of 111/);
+await act(async () => { Simulate.change(size, { target: { value: '100' } }); });
+assert.match(root().textContent, /Showing 1–100 of 111/);
 const address = document.querySelector('input[placeholder="name@example.com"]');
 await act(async () => { Simulate.change(address, { target: { value: 'manager@example.com' } }); });
-await click(byText('button', 'Email selected (1)'));
+await click(byText('button', 'Email selected (2)'));
 await flush(8);
 const send = operations.find(x => x.action === 'send');
-assert.deepEqual(send.references, ['signed']);
+assert.deepEqual(send.references.sort(), ['ref-000', 'ref-085']);
 assert.deepEqual(send.recipients, ['manager@example.com']);
 assert.match(root().textContent, /Email accepted/);
+const month = document.querySelector('[aria-label="Report month"]');
+await act(async () => { Simulate.change(month, { target: { value: '2024-02' } }); });
+await flush(1200);
+const lastList = operations.filter(x => x.action === 'list').at(-1);
+assert.equal(lastList.start, '2024-02-01');
+assert.equal(lastList.end, '2024-02-29');
+assert.ok(requested.some(r => r.endpoint === 'cache_job' && JSON.parse(r.body).action === 'warm' && JSON.parse(r.body).start === '2024-02-01'), 'warmup follows the chosen month');
+assert.match(root().textContent, /Report period: 2024-02-01 – 2024-02-29/);
+await click(byText('button', 'Last'));
+assert.match(root().textContent, /Page 2 of 2/);
+await click(byText('button', 'device (111)'));
+assert.match(root().textContent, /Calls: device/);
+assert.match(root().textContent, /Page 1 of 2/);
+
+// An unfinished cache must be reported, and partial days get bounded retries.
+let warmAttempts = 0;
+FIXTURES.cache_job = body => {
+  if (body.action === 'warm') warmAttempts++;
+  return { complete: false, ready: 0, total: 29, batch: { warmed: 0, stopped: 'partial' } };
+};
+FIXTURES.intelligence = body => {
+  if (body.action === 'list') return { calls: [{ reference: 'fail', callId: 'pending-call', startedAt: '2024-02-29T12:00:00Z', topicsHint: ['reboot device'], matchesHint: [{ keyword: 'reboot', source: 'Topic', excerpt: 'reboot device' }] }], missing: 0, cacheStatus: { complete: false } };
+  if (body.action === 'lookup') return { status: 'pending', detail: 'processing' };
+  return { watches: ['reboot'] };
+};
+await click(byText('button', 'Reload'));
+await flush(30);
+assert.equal(warmAttempts, 3);
+assert.match(root().textContent, /CDR month is not fully loaded/);
+assert.match(table().textContent, /pending-call/);
+assert.match(table().textContent, /Incomplete check/);
+assert.ok(table().querySelector('tr.is-matched'));
+assert.ok(!table().querySelector('input[type=checkbox]'));
+
+// A failed cache preparation still attempts the list and makes the failure visible.
+FIXTURES.cache_job = () => { throw new Error('network unavailable'); };
+await click(byText('button', 'Reload'));
+await flush(30);
+assert.match(root().textContent, /Could not fully prepare call history: network unavailable/);
+assert.match(table().textContent, /pending-call/);
 assert.equal(errors.length, 0, errors.join('\n'));
-console.log('INTELLIGENCE UI OK — report, match selection and email');
+console.log('INTELLIGENCE UI OK — month scope, warmup, topic filtering, pagination, matches and email');

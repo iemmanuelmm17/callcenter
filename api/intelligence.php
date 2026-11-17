@@ -28,15 +28,36 @@ try {
         $calls = filterCallsByLocalDate(reportingCdrRows($user, $filters, $directory), $filters['start'], $filters['end']);
         $rows = []; $missing = 0; $seen = [];
         $missingReasons = ['jobId' => 0, 'server' => 0, 'callId' => 0, 'month' => 0];
-        foreach ($calls as $call) {
+        $watches = intelligenceWatches($domain);
+        foreach ($calls as $index => $call) {
+            $topicsHint = intelligenceCdrTopics($call);
+            $matchesHint = $topicsHint ? intelligenceMatches(['call-intelligence-topics-top' => $topicsHint], $watches) : [];
             $reason = null;
             try { $ref = intelligenceReference($call, $domain, $month, $reason); }
-            catch (InvalidArgumentException $e) { $missing++; $missingReasons['month']++; continue; }
-            if (!$ref) { $missing++; $missingReasons[$reason]++; continue; }
+            catch (InvalidArgumentException $e) { $ref = null; $reason = 'month'; }
+            if (!$ref) {
+                $missing++; $missingReasons[$reason]++;
+                // CDR topics are still useful even if the transcription cannot
+                // be looked up. Keep the incomplete state explicit and never
+                // make this row eligible for email.
+                if ($topicsHint !== []) {
+                    $field = 'id';
+                    $display = trim((string)($call['id'] ?? ''));
+                    foreach (['call-orig-call-id', 'call-term-call-id'] as $candidate) {
+                        if (trim((string)($call[$candidate] ?? '')) !== '') { $field = $candidate; $display = trim((string)$call[$candidate]); break; }
+                    }
+                    if ($display === '') $display = 'CDR ' . ($index + 1);
+                    $rows[] = ['rowKey' => 'cdr-' . hash('sha256', cdrCacheKey($call, $index)), 'reference' => null,
+                        'callId' => $display, 'callIdField' => $field, 'startedAt' => (string)($call['call-start-datetime'] ?? ''),
+                        'topicsHint' => $topicsHint, 'matchesHint' => $matchesHint, 'status' => 'unavailable', 'detail' => 'Transcription lookup unavailable (' . $reason . ')'];
+                }
+                continue;
+            }
             $key = $ref['id'] . '|' . $ref['callid'];
             if (isset($seen[$key])) continue;
             $seen[$key] = true;
-            $rows[] = ['reference' => intelligenceSign($ref, $domain), 'callId' => $ref['callid'], 'callIdField' => $ref['displayField'], 'startedAt' => (string)($call['call-start-datetime'] ?? ''), 'month' => $ref['month']];
+            $rows[] = ['reference' => intelligenceSign($ref, $domain), 'callId' => $ref['callid'], 'callIdField' => $ref['displayField'],
+                'startedAt' => (string)($call['call-start-datetime'] ?? ''), 'month' => $ref['month'], 'topicsHint' => $topicsHint, 'matchesHint' => $matchesHint];
         }
         auditView($user, ['start' => $filters['start'], 'end' => $filters['end']], 'intelligence-report');
         jsonResponse(['calls' => $rows, 'missing' => $missing, 'missingReasons' => $missingReasons, 'hours' => $filters['hours'], 'cacheStatus' => cdrRangeCacheStatus($user, $filters['start'], $filters['end']), 'timezone' => reportingTimezoneName()]);

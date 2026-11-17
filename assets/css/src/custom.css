@@ -3591,3 +3591,38 @@ html[data-theme="light"] .grid-totals td {
 /* Topics and summaries: readable controls in both themes. */
 .intelligence-input { background: var(--color-slate-800); color: var(--color-slate-100); border: 1px solid var(--color-slate-600); border-radius: 6px; padding: 6px; }
 .rep-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Topics & summaries: a readable, paged call table. */
+.intelligence-report { max-width: 1500px; }
+.intel-head, .intel-table-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.intel-month, .intel-page-size { display: flex; align-items: center; gap: 8px; color: var(--color-slate-300); font-size: 12px; font-weight: 600; }
+.intel-settings { border: 1px solid var(--color-slate-700); border-radius: 8px; padding: 12px; background: var(--color-slate-900); }
+.intel-watch-input { width: 100%; max-width: 700px; display: block; resize: vertical; }
+.intel-actions, .intel-email, .intel-topics, .intel-topic-list, .intel-page-buttons { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.intel-actions { margin-top: 8px; align-items: flex-start; }
+.intel-actions details, .intel-table details { font-size: 11px; color: var(--color-slate-300); }
+.intel-actions summary, .intel-table summary { cursor: pointer; }
+.intel-status { margin-top: 12px; }
+.intel-topics .rep-btn[aria-pressed="true"] { border-color: var(--color-cyan-400); color: var(--color-cyan-300); }
+.intel-email { margin: 10px 0; font-size: 12px; color: var(--color-slate-300); }
+.intel-email input { width: 20em; max-width: 100%; }
+.intel-table-wrap { width: 100%; overflow-x: auto; border: 1px solid var(--color-slate-700); border-radius: 8px; }
+.intel-table { width: 100%; min-width: 800px; border-collapse: collapse; font-size: 12px; text-align: left; }
+.intel-table th { background: var(--color-slate-800); color: var(--color-slate-300); padding: 10px 12px; font-weight: 600; border-bottom: 1px solid var(--color-slate-700); }
+.intel-table td { padding: 12px; vertical-align: top; color: var(--color-slate-200); border-bottom: 1px solid var(--color-slate-800); overflow-wrap: anywhere; }
+.intel-table tr:last-child td { border-bottom: 0; }
+.intel-table tr.is-matched { background: rgba(239, 68, 68, .17); }
+.intel-table tr.is-matched td:first-child { box-shadow: inset 4px 0 0 #ef4444; }
+html[data-theme="light"] .intel-table tr.is-matched { background: #ffe3e3; }
+.intel-table th:first-child { width: 65px; }
+.intel-table th:nth-child(2) { width: 22%; }
+.intel-table th:nth-child(3) { width: 19%; }
+.intel-table th:nth-child(4) { width: 33%; }
+.intel-summary { line-height: 1.5; }
+.intel-muted, .intel-reference { color: var(--color-slate-400); font-size: 11px; margin-top: 3px; }
+.intel-reference { overflow-wrap: anywhere; }
+.intel-topic-list { align-items: flex-start; gap: 5px; }
+.intel-topic { display: inline-block; background: var(--color-slate-800); color: var(--color-slate-200); border-radius: 12px; padding: 3px 7px; font-size: 11px; }
+.intel-match-label { color: var(--color-rose-300); font-weight: 700; }
+.intel-empty { padding: 24px; text-align: center; color: var(--color-slate-400); font-size: 12px; }
+.intel-pagination { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 0; font-size: 12px; color: var(--color-slate-300); }

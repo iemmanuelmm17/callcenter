@@ -231,7 +231,7 @@ useEffect(() => {
     const key = String(filters.start || '') + '|' + String(filters.end || '');
     let active = true;
     const days = rangeDayCount;
-    if (days < 7) {
+    if (route === 'intelligence' || days < 7) {
         setCacheJob(null);
         return;
     }
@@ -305,7 +305,7 @@ useEffect(() => {
         }
     })();
     return () => { active = false; };
-}, [filters.start, filters.end]);
+}, [filters.start, filters.end, route]);
 
 const agentPerformanceTable = h(AgentPerformanceTable, {
     data: agentPerformance,
@@ -954,6 +954,7 @@ return h('div', { className: 'min-h-screen' },
                 filters,
                 setFilters,
                 role: user.role,
+                intelligenceMode: route === 'intelligence',
                 rangeLocked: !!cacheJob,
                 /*
                  * F2: the span cap this role may pick. The server enforces the

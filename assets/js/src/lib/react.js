@@ -7,6 +7,7 @@
 const {useEffect,useMemo,useRef,useState,useCallback} = React;
 
 const h = React.createElement;
+const Fragment = React.Fragment;
 
 const keyActivate = handler => event => {
     if (!handler) return;
@@ -100,4 +101,4 @@ const useEscape = (open, onClose) => {
     }, [open]);
   };
 
-export { ensureTabulator, h, keyActivate, useCallback, useEffect, useEscape, useMemo, useRef, useState };
+export { ensureTabulator, Fragment, h, keyActivate, useCallback, useEffect, useEscape, useMemo, useRef, useState };

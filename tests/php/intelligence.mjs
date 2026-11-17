@@ -20,15 +20,19 @@ await h.seedPbx('fetchCdrs', [{
 },
 { id: 'cdr2', _server: 'nms1', 'call-start-datetime': '2026-11-16T10:01:00Z[US/Eastern]' },
 { id: 'cdr3', 'call-intelligence-job-id': 33, 'call-start-datetime': '2026-11-16T10:02:00Z[US/Eastern]' },
-{ id: 'cdr4', _server: 'nms1', 'call-intelligence-job-id': 44, 'call-start-datetime': '2026-11-16T10:03:00Z[US/Eastern]' },
+{ id: 'cdr4', _server: 'nms1', 'call-intelligence-job-id': 44, 'call-intelligence-topics-top': 'account number, billing', 'call-start-datetime': '2026-11-16T10:03:00Z[US/Eastern]' },
 { id: 'cdr5', _server: 'nms1', 'call-intelligence-job-id': 55, 'call-id': 'other', 'call-start-datetime': '2026-11-16T10:04:00Z[US/Eastern]' },
 { id: 'cdr6', _server: 'nms1', 'call-intelligence-job-id': 330696339, 'call-start-datetime': '2026-11-16T14:27:13+00:00',
   'prefilled-transcription-api': '/ns-api/v2/domains/test.example/transcriptions?id=330696339&amp;date=202611&amp;orig_callid=orig%40pbx&amp;term_callid=term%40pbx&amp;by_callid=through%40pbx&amp;ignored=unsafe' }]);
 const listing = await req('list', { start: '2026-11-16', end: '2026-11-16', hours: 'all' });
 assert.equal(listing.status, 200, JSON.stringify(listing));
-assert.equal(listing.body.calls.length, 2, JSON.stringify(listing.body));
-assert.equal(listing.body.calls[1].callId, 'through@pbx');
-assert.equal(listing.body.calls[1].callIdField, 'by_callid');
+assert.equal(listing.body.calls.length, 3, JSON.stringify(listing.body));
+const unavailable = listing.body.calls.find(x => x.status === 'unavailable');
+assert.equal(unavailable.reference, null);
+assert.deepEqual(unavailable.topicsHint, ['account number', 'billing']);
+assert.deepEqual(unavailable.matchesHint.map(m => m.keyword), ['ACCOUNT']);
+const threeIdCall = listing.body.calls.find(x => x.callId === 'through@pbx');
+assert.equal(threeIdCall.callIdField, 'by_callid');
 assert.deepEqual(listing.body.missingReasons, { jobId: 1, server: 1, callId: 1, month: 1 });
 assert.equal(listing.body.calls[0].callId, 'abc@pbx');
 assert.equal(listing.body.calls[0].month, '202611');
@@ -47,10 +51,11 @@ assert.deepEqual(lookup.body.matches.map(m => m.keyword), ['reboot', 'ACCOUNT'])
 await h.seedPbx('transcription', {
   'call-intelligence-job-id': 330696339, 'call-id': 'orig@pbx', 'call-intelligence-processing-status': 'finished',
   'call-intelligence-summary-status': 'success', 'call-intelligence-summary': 'A billing issue',
-  'call-intelligence-topics-all': ['billing issue'], 'call-intelligence-segments': [{ comment: 'Account number' }]
+  'call-intelligence-topics-all': ['billing issue'], 'call-intelligence-topics-top': ['other topic'], 'call-intelligence-segments': [{ comment: 'Account number' }]
 });
-const threeIds = await req('lookup', { reference: listing.body.calls[1].reference });
+const threeIds = await req('lookup', { reference: threeIdCall.reference });
 assert.equal(threeIds.body.status, 'finished', JSON.stringify(threeIds));
+assert.deepEqual(threeIds.body.topics, ['billing issue', 'other topic']);
 const recorded = threeIds.pbxCalls.find(x => typeof x === 'string' && x.startsWith('transcription-args:'));
 assert.deepEqual(JSON.parse(recorded.slice('transcription-args:'.length)).identifiers,
   { orig_callid: 'orig@pbx', term_callid: 'term@pbx', by_callid: 'through@pbx' });

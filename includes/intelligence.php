@@ -118,6 +118,14 @@ function intelligenceReference(array $call, string $domain, string $override, ?s
     return ['id' => $id, 'callid' => $identifiers[$displayField], 'displayField' => $displayField, 'identifiers' => $identifiers, 'server' => $server, 'month' => $month];
 }
 
+/** Topics already present on a CDR, before a transcription is retrieved. */
+function intelligenceCdrTopics(array $call): array {
+    $topics = $call['call-intelligence-topics-top'] ?? [];
+    if (is_string($topics)) $topics = explode(',', $topics);
+    if (!is_array($topics)) return [];
+    return array_values(array_unique(array_filter(array_map('trim', array_filter($topics, 'is_string')), static fn(string $topic): bool => $topic !== '')));
+}
+
 /** Case-insensitive substring matches, retaining one excerpt per phrase. */
 function intelligenceMatches(array $job, array $watches): array {
     $texts = [];
@@ -153,9 +161,14 @@ function intelligenceReadJob(PbxClient $client, string $domain, array $ref, arra
     if (count($identifiers) === 1 && isset($identifiers['callid'], $job['call-id']) && (string)$job['call-id'] !== (string)$identifiers['callid']) throw new RuntimeException('Transcription identity mismatch');
     $status = strtolower((string)($job['call-intelligence-processing-status'] ?? ''));
     if ($status !== 'finished') return ['status' => 'pending', 'detail' => $status ?: 'unknown'];
-    $topics = $job['call-intelligence-topics-all'] ?? $job['call-intelligence-topics-top'] ?? [];
-    if (is_string($topics)) $topics = explode(',', $topics);
-    $topics = array_values(array_filter(array_map('trim', array_filter((array)$topics, 'is_string'))));
+    $topics = [];
+    foreach (['call-intelligence-topics-all', 'call-intelligence-topics-top'] as $field) {
+        $entries = $job[$field] ?? [];
+        if (is_string($entries)) $entries = explode(',', $entries);
+        if (!is_array($entries)) continue;
+        foreach ($entries as $entry) if (is_string($entry) && trim($entry) !== '') $topics[] = trim($entry);
+    }
+    $topics = array_values(array_unique($topics));
     $incomplete = !empty($job['errors']) || !is_array($job['call-intelligence-segments'] ?? null)
         || !is_string($job['call-intelligence-summary'] ?? null) || (($job['call-intelligence-summary-status'] ?? '') !== 'success')
         || (!is_array($job['call-intelligence-topics-all'] ?? null) && !is_string($job['call-intelligence-topics-all'] ?? null)
