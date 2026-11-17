@@ -279,8 +279,9 @@ call can appear in both Matched and Incomplete; No match includes only fully
 checked calls. The scrollable table retains pagination and a sticky header.
 Export filtered calls to Excel creates an XLSX in the browser containing all
 filtered pages, summaries and matching excerpts, plus report scope and coverage
-metadata. Exports wait until lookups finish; unavailable checks and incomplete
-cache coverage are identified but may still make the export incomplete. Treat
+metadata. Exports are available during checking when filtered rows are available;
+the file name and report information identify partial results. Unavailable checks
+and incomplete cache coverage are also flagged. Treat
 these files as sensitive. No automatic email or background monitoring is performed.
 
 The report retrieves one transcription per job using the authenticated PBX

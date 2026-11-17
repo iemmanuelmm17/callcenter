@@ -49,12 +49,12 @@ const intelligenceWorkbook = (rows, metadata) => {
     return zipSync(Object.fromEntries(Object.entries(files).map(([name, text]) => [name, strToU8(text)])), { level: 1 });
 };
 
-const downloadIntelligenceWorkbook = (rows, metadata, month) => {
+const downloadIntelligenceWorkbook = (rows, metadata, month, partial = false) => {
     const blob = new Blob([intelligenceWorkbook(rows, metadata)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'topics-and-summaries-' + month + '.xlsx';
+    link.download = 'topics-and-summaries-' + month + (partial ? '-partial' : '') + '.xlsx';
     document.body.appendChild(link);
     link.click();
     link.remove();
