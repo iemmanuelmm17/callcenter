@@ -33,6 +33,7 @@ function IntelligenceDashboard({ filters }) {
     const [selected, setSelected] = useState([]);
     const [recipients, setRecipients] = useState('');
     const [busy, setBusy] = useState(false);
+    const [emailProgress, setEmailProgress] = useState('');
     const scopeKey = JSON.stringify({ department: filters.department || '', site: filters.site || '', agents: filters.agents || [], hours: filters.hours || 'all' });
     const monthRange = intelligenceMonthRange(selectedMonth, reportToday);
 
@@ -120,11 +121,29 @@ function IntelligenceDashboard({ filters }) {
         } catch (e) { setError(e.message); } finally { setBusy(false); }
     };
     const send = async () => {
+        const recipientsList = recipients.split(/[,;\s]+/).filter(Boolean);
+        if (!recipientsList.length) { setError('Enter at least one recipient email address.'); return; }
+        const selectedSet = new Set(selected);
+        const toSend = rows.filter(row => selectedSet.has(row.reference || row.rowKey));
+        if (toSend.length !== selected.length || toSend.some(row => !row.emailReference)) {
+            setError('A selected call is no longer available for email. Reload the report and select it again.'); return;
+        }
+        const totalBatches = Math.ceil(toSend.length / 10);
+        let sent = 0;
         setBusy(true); setError(''); setMessage('');
         try {
-            await api('intelligence', { action: 'send', references: selected, recipients: recipients.split(/[,;\s]+/).filter(Boolean) });
-            setMessage('Email accepted by the SMTP server.'); setSelected([]);
-        } catch (e) { setError(e.message); } finally { setBusy(false); }
+            for (let i = 0; i < toSend.length; i += 10) {
+                const batch = toSend.slice(i, i + 10);
+                setEmailProgress('Sending email ' + (Math.floor(i / 10) + 1) + ' of ' + totalBatches + '…');
+                await api('intelligence', { action: 'send', references: batch.map(row => row.emailReference), recipients: recipientsList });
+                sent += batch.length;
+                const sentKeys = new Set(batch.map(row => row.reference || row.rowKey));
+                setSelected(current => current.filter(key => !sentKeys.has(key)));
+            }
+            setMessage('SMTP accepted ' + totalBatches + ' email' + (totalBatches === 1 ? '' : 's') + ' for ' + sent + ' calls.');
+        } catch (e) {
+            setError('Email stopped after ' + sent + ' of ' + toSend.length + ' calls were accepted. The failed batch may have been delivered; verify before retrying. ' + e.message);
+        } finally { setEmailProgress(''); setBusy(false); }
     };
     const counts = new Map();
     rows.forEach(row => (row.topics || []).forEach(t => counts.set(t, (counts.get(t) || 0) + 1)));
@@ -150,6 +169,11 @@ function IntelligenceDashboard({ filters }) {
     const startIndex = (currentPage - 1) * pageSize;
     const pageRows = visible.slice(startIndex, startIndex + pageSize);
     const changeTopic = value => { setTopic(value); setPage(1); };
+    const visibleKeys = visible.map(row => row.reference || row.rowKey);
+    const selectedKeys = new Set(selected);
+    const visibleSelected = visibleKeys.filter(key => selectedKeys.has(key)).length;
+    const selectAllFiltered = () => setSelected(current => [...new Set([...current, ...visibleKeys])]);
+    const unselectFiltered = () => { const keys = new Set(visibleKeys); setSelected(current => current.filter(key => !keys.has(key))); };
     const paginationButton = (label, target, disabled) => h('button', { type: 'button', className: 'rep-btn', disabled, onClick: () => setPage(target), key: label }, label);
     const exportCalls = () => {
         try {
@@ -213,7 +237,7 @@ function IntelligenceDashboard({ filters }) {
                 h('button', { type: 'button', className: 'rep-btn', onClick: () => changeTopic('') }, 'Clear filter')) : null,
             h('div', { className: 'intel-table-heading' }, h('div', null,
                 h('h2', { className: 'rep-sec-title' }, topic ? 'Calls: ' + topic : 'Calls with topics'),
-                h('p', { className: 'rep-note' }, 'Select up to 10 matching calls across pages and filters. Email excerpts may contain sensitive information.')),
+                h('p', { className: 'rep-note' }, 'Select any calls across pages and filters. Emails are sent in batches of up to 10 calls and may contain sensitive information.')),
                 h('label', { className: 'intel-page-size' }, 'Rows per page ', h('select', { value: pageSize, className: 'intelligence-input', 'aria-label': 'Rows per page', onChange: e => { setPageSize(Number(e.target.value)); setPage(1); } }, ...[30, 50, 100].map(n => h('option', { key: n, value: n }, n))))),
             h('div', { className: 'intel-call-filters' },
                 h('label', null, 'Match status ', h('select', { className: 'intelligence-input', value: matchFilter, 'aria-label': 'Match status', onChange: e => { setMatchFilter(e.target.value); setPage(1); } },
@@ -222,14 +246,22 @@ function IntelligenceDashboard({ filters }) {
                     h('option', { value: '' }, 'All keywords'), ...savedWatches.map(w => h('option', { key: w, value: w }, w)))),
                 h('button', { type: 'button', className: 'rep-btn', disabled: !!progress || !visible.length, onClick: exportCalls }, 'Export filtered calls to Excel')),
             h('p', { className: 'rep-note' }, 'Matched includes known matches from incomplete checks; No match includes only fully checked calls. Filters combine. Excel exports all filtered pages, including sensitive summaries and matching excerpts.'),
+            progress ? h('p', { className: 'rep-note', role: 'status' }, 'Excel export becomes available after all transcription jobs have been checked. ' + progress) :
+                (!visible.length ? h('p', { className: 'rep-note' }, 'Excel export is unavailable because there are no calls matching the current filters.') : null),
+            h('div', { className: 'intel-call-filters' },
+                h('button', { type: 'button', className: 'rep-btn', disabled: busy || !visible.length || visibleSelected === visibleKeys.length, onClick: selectAllFiltered }, 'Select all filtered calls'),
+                h('button', { type: 'button', className: 'rep-btn', disabled: busy || !visibleSelected, onClick: unselectFiltered }, 'Unselect filtered calls'),
+                h('button', { type: 'button', className: 'rep-btn', disabled: busy || !selected.length, onClick: () => setSelected([]) }, 'Clear all selections'),
+                h('span', null, selected.length + ' selected total; ' + visibleSelected + ' in the current filter' + (progress ? ' (currently loaded calls only)' : '') + '.')),
             h('div', { className: 'intel-email' },
                 h('label', null, 'Recipients ', h('input', { value: recipients, onChange: e => setRecipients(e.target.value), placeholder: 'name@example.com', className: 'intelligence-input' })),
-                h('button', { type: 'button', className: 'rep-btn', disabled: busy || !selected.length || !!progress, onClick: send }, 'Email selected (' + selected.length + ')')),
+                h('button', { type: 'button', className: 'rep-btn', disabled: busy || !selected.length, onClick: send }, 'Email selected (' + selected.length + ')')),
+            emailProgress ? h('p', { className: 'rep-note', role: 'status' }, emailProgress) : (!selected.length ? h('p', { className: 'rep-note' }, 'Select calls to enable email.') : null),
             h('div', { className: 'intel-table-wrap', role: 'region', 'aria-label': 'Scrollable calls table', tabIndex: 0 },
                 h('table', { className: 'intel-table' },
                     h('thead', null, h('tr', null, ...['Select', 'When / PBX reference', 'Topics', 'Summary', 'Watch matches'].map(x => h('th', { key: x, scope: 'col' }, x)))),
                     h('tbody', null, ...pageRows.map(row => h('tr', { key: row.reference || row.rowKey, className: row.matches?.length ? 'is-matched' : '' },
-                        h('td', null, row.status === 'finished' && row.matches?.length ? h('input', { type: 'checkbox', 'aria-label': 'Select call ' + row.callId, checked: selected.includes(row.reference), disabled: !selected.includes(row.reference) && selected.length >= 10, onChange: e => setSelected(s => e.target.checked ? [...s, row.reference] : s.filter(x => x !== row.reference)) }) : null),
+                        h('td', null, h('input', { type: 'checkbox', 'aria-label': 'Select call ' + row.callId, checked: selectedKeys.has(row.reference || row.rowKey), disabled: busy, onChange: e => { const key = row.reference || row.rowKey; const checked = e.target.checked; setSelected(s => checked ? [...new Set([...s, key])] : s.filter(x => x !== key)); } })),
                         h('td', null, h('strong', null, formatCallDate(row.startedAt) || row.startedAt), h('div', { className: 'intel-muted' }, formatCallTime(row.startedAt)), h('div', { className: 'intel-reference' }, (row.callIdField ? row.callIdField + ': ' : '') + row.callId)),
                         h('td', null, h('div', { className: 'intel-topic-list' }, ...(row.topics || []).map(t => h('span', { key: t, className: 'intel-topic' }, t)))),
                         h('td', { className: 'intel-summary' }, row.summary || 'Summary unavailable'),

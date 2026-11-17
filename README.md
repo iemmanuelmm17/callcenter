@@ -269,8 +269,7 @@ still apply; hours default to all on this report. The call table shows only
 calls with topics, offers 30/50/100 rows per page and highlights keyword matches
 red. The topic browser shows the ten most common topics by default; search all
 topics or expand the list and sort by call count or name. CDR topics are used
-while lookups are pending or unavailable, with those
-rows marked incomplete; they cannot be emailed until a successful lookup.
+while lookups are pending or unavailable, with those rows marked incomplete.
 Phrase matching is case-insensitive substring matching across topics, summaries
 and transcript segments. Tags are recalculated against the current watch list;
 removing a phrase removes its tag on the next scan. Topic counts include CDR topics and retrieved jobs; they are provisional
@@ -300,9 +299,15 @@ are identified rather than counted as successful searches.
 
 Set the `INTELLIGENCE_SMTP_*` constants in `includes/config.local.php` as shown
 in `includes/config.local.example.php` to enable authenticated STARTTLS mail.
-Certificate verification is mandatory. The manager enters recipients and selects
-up to ten matching calls per email; the server re-fetches and rechecks them before
-sending excerpts. An accepted email means the SMTP server accepted it, not that it
+Certificate verification is mandatory. The manager enters recipients and selects calls, including unmatched and
+incomplete calls. Select/unselect filtered calls applies across all currently
+loaded filtered pages; selections outside the filter remain selected until
+cleared. The application sends batches of up to ten calls per email, re-fetching
+available transcription jobs and labeling incomplete or unavailable ones. CDR-only
+calls include their available signed CDR topics, without a transcription summary;
+the server rechecks matches against the current watch list. Successful batches are
+removed from the selection; on failure the rest remain selected. Verify the failed
+batch before retrying because its delivery may be uncertain. An accepted email means the SMTP server accepted it, not that it
 was delivered. Excerpts may contain sensitive data: verify recipients and use a
 mail server appropriate for that data. The application stores domain watch lists
 and a server-only call-reference signing key under `CACHE_DIR` (not transcript

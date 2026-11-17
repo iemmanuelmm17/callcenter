@@ -29,6 +29,7 @@ assert.equal(listing.status, 200, JSON.stringify(listing));
 assert.equal(listing.body.calls.length, 3, JSON.stringify(listing.body));
 const unavailable = listing.body.calls.find(x => x.status === 'unavailable');
 assert.equal(unavailable.reference, null);
+assert.ok(unavailable.emailReference);
 assert.deepEqual(unavailable.topicsHint, ['account number', 'billing']);
 assert.deepEqual(unavailable.matchesHint.map(m => m.keyword), ['ACCOUNT']);
 const threeIdCall = listing.body.calls.find(x => x.callId === 'through@pbx');
@@ -63,7 +64,13 @@ assert.deepEqual(JSON.parse(recorded.slice('transcription-args:'.length)).identi
 assert.equal((await req('lookup', { reference: reference + 'bad' })).status, 422);
 assert.equal((await req('lookup', { reference }, other)).status, 422);
 assert.equal((await req('send', { references: [reference], recipients: ['bad\naddress'] })).status, 422);
-assert.equal((await req('send', { references: [reference], recipients: ['manager@example.com'] })).status, 503);
+assert.equal((await req('send', { references: [reference], recipients: ['manager@example.com'] })).status, 422, 'lookup references cannot be used as email snapshots');
+assert.equal((await req('send', { references: [listing.body.calls[0].emailReference, unavailable.emailReference], recipients: ['manager@example.com'] })).status, 503);
+assert.equal((await req('send', { references: [unavailable.emailReference + 'bad'], recipients: ['manager@example.com'] })).status, 422);
+assert.equal((await req('send', { references: [unavailable.emailReference], recipients: ['manager@example.com'] }, other)).status, 422);
+assert.equal((await req('lookup', { reference: unavailable.emailReference })).status, 422);
+assert.equal((await req('send', { references: Array(11).fill(unavailable.emailReference), recipients: ['manager@example.com'] })).status, 422);
+
 const override = await req('list', { start: '2026-11-16', end: '2026-11-16', month: '202610' });
 assert.equal(override.body.calls[0].month, '202610');
 assert.equal((await req('list', { start: '2026-11-16', end: '2026-11-16', month: '202613' })).status, 422);
@@ -71,6 +78,25 @@ const unicode = await h.script(`require_once TEST_TMP . '/includes/intelligence.
 assert.equal(JSON.parse(unicode.trim())[0].keyword, 'été');
 const fallback = await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; define('INTELLIGENCE_PBX_SERVER', 'nms1'); $reason = null; echo json_encode(intelligenceReference(['call-intelligence-job-id'=>7, 'prefilled-transcription-api'=>'/ns-api/v2/domains/test.example/transcriptions?id=7&date=202611&by_callid=example%40pbx'], 'test.example', '', $reason));`);
 assert.equal(JSON.parse(fallback.trim()).server, 'nms1');
+const emailBody = async (tokens) => JSON.parse((await h.script(`session_id('test-session-123'); require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; $tokens = json_decode(base64_decode('${Buffer.from(JSON.stringify(tokens)).toString('base64')}'), true); $calls = array_map(fn($token) => intelligenceVerifyEmail($token, 'test.example'), $tokens); echo json_encode(intelligenceEmailBody($calls, new PbxClient(), 'test.example', intelligenceWatches('test.example')));`)).trim());
+await h.seedPbx('transcription', { 'call-intelligence-job-id': 78920299, 'call-id': 'abc@pbx', 'call-intelligence-processing-status': 'finished', 'call-intelligence-summary-status': 'success', 'call-intelligence-summary': 'No match', 'call-intelligence-topics-top': ['billing'], 'call-intelligence-segments': [] });
+const unmatchedBody = await emailBody([listing.body.calls[0].emailReference, unavailable.emailReference]);
+assert.match(unmatchedBody, /Status: finished/);
+assert.match(unmatchedBody, /Summary: No match/);
+assert.match(unmatchedBody, /No keyword matches/);
+assert.match(unmatchedBody, /Status: unavailable/);
+assert.match(unmatchedBody, /Topics: account number, billing/);
+assert.match(unmatchedBody, /ACCOUNT \(Topic\): account number/);
+await h.seedPbx('transcription', { 'call-intelligence-job-id': 78920299, 'call-id': 'abc@pbx', 'call-intelligence-processing-status': 'processing' });
+const pendingBody = await emailBody([listing.body.calls[0].emailReference]);
+assert.match(pendingBody, /Status: pending \(check incomplete\)/);
+assert.match(pendingBody, /No confirmed keyword match; check incomplete/);
+await h.seedPbx('transcription', { 'call-intelligence-job-id': 999, 'call-id': 'abc@pbx' });
+const errorBody = await emailBody([listing.body.calls[0].emailReference]);
+assert.match(errorBody, /Status: unavailable/);
+const largeSnapshot = await h.script(`session_id('test-session-123'); require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; $token = intelligenceEmailReference(null, 'abc', 'id', '', [str_repeat('x', 4000)], 'jobId', 'test.example'); $call = intelligenceVerifyEmail($token, 'test.example'); echo json_encode(intelligenceEmailBody([$call], new PbxClient(), 'test.example', []));`);
+assert.match(JSON.parse(largeSnapshot.trim()), /Some CDR topics were omitted/);
+
 await h.seedPbx('transcription', { 'call-intelligence-job-id': 78920299, 'call-id': 'abc@pbx', 'call-intelligence-processing-status': 'finished' });
 assert.equal((await req('lookup', { reference })).body.status, 'partial');
 console.log('INTELLIGENCE OK — role, tenant, references, watch matching and partial jobs');

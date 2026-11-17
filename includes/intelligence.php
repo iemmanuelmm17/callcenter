@@ -54,15 +54,47 @@ function intelligenceSigningKey(): string {
 /** References are scoped to the authenticated browser session and domain. */
 function intelligenceSign(array $data, string $domain): string {
     if (session_id() === '') throw new RuntimeException('Missing session');
-    $encoded = rtrim(strtr(base64_encode(json_encode($data, JSON_THROW_ON_ERROR)), '+/', '-_'), '=');
+    $encoded = rtrim(strtr(base64_encode(json_encode($data, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_UNICODE)), '+/', '-_'), '=');
     return $encoded . '.' . hash_hmac('sha256', session_id() . '|' . $domain . '|' . $encoded, intelligenceSigningKey());
 }
-function intelligenceVerify(string $token, string $domain): array {
-    if (strlen($token) > 4096 || session_id() === '') throw new InvalidArgumentException('Invalid call reference.');
+function intelligenceVerifySigned(string $token, string $domain, int $maxLength = 4096): array {
+    if (strlen($token) > $maxLength || session_id() === '') throw new InvalidArgumentException('Invalid call reference.');
     $parts = explode('.', $token);
     if (count($parts) !== 2 || !hash_equals(hash_hmac('sha256', session_id() . '|' . $domain . '|' . $parts[0], intelligenceSigningKey()), $parts[1])) throw new InvalidArgumentException('Invalid call reference.');
     $data = json_decode((string)base64_decode(strtr($parts[0], '-_', '+/'), true), true);
-    if (!is_array($data) || !isset($data['server'], $data['id'], $data['month'], $data['callid'], $data['identifiers']) || !is_array($data['identifiers'])) throw new InvalidArgumentException('Invalid call reference.');
+    if (!is_array($data)) throw new InvalidArgumentException('Invalid call reference.');
+    return $data;
+}
+function intelligenceVerify(string $token, string $domain): array {
+    $data = intelligenceVerifySigned($token, $domain);
+    if (!isset($data['server'], $data['id'], $data['month'], $data['callid'], $data['identifiers']) || !is_array($data['identifiers'])) throw new InvalidArgumentException('Invalid call reference.');
+    return $data;
+}
+/** Signed email snapshots are session/domain scoped. PBX jobs are re-read at send
+ * time; CDR-only rows have no lookup, so carry their original topics with an
+ * explicit unavailable status. Bound the snapshot and disclose truncation. */
+function intelligenceEmailReference(?array $ref, string $callId, string $field, string $startedAt, array $topics, string $reason, string $domain): string {
+    $kept = []; $bytes = 0; $truncated = false;
+    foreach ($topics as $topic) {
+        if (!is_string($topic)) continue;
+        $encodedTopic = json_encode($topic, JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_UNICODE);
+        $size = strlen((string)$encodedTopic) + 1;
+        if (count($kept) >= 128 || $bytes + $size > 3000) { $truncated = true; break; }
+        $kept[] = $topic; $bytes += $size;
+    }
+    $data = ['kind' => 'email', 'ref' => $ref, 'callid' => substr($callId, 0, 512), 'field' => substr($field, 0, 64),
+        'startedAt' => substr($startedAt, 0, 128), 'topics' => $kept, 'topicsTruncated' => $truncated, 'reason' => $reason];
+    $token = intelligenceSign($data, $domain);
+    if (strlen($token) > 16384) throw new RuntimeException('Call reference is too large.');
+    return $token;
+}
+function intelligenceVerifyEmail(string $token, string $domain): array {
+    $data = intelligenceVerifySigned($token, $domain, 16384);
+    if (($data['kind'] ?? '') !== 'email' || !is_string($data['callid'] ?? null) || !is_string($data['field'] ?? null)
+        || !is_string($data['startedAt'] ?? null) || !is_string($data['reason'] ?? null) || !is_array($data['topics'] ?? null)
+        || count(array_filter($data['topics'], 'is_string')) !== count($data['topics'])) throw new InvalidArgumentException('Invalid call reference.');
+    $ref = $data['ref'] ?? null;
+    if ($ref !== null && (!is_array($ref) || !isset($ref['server'], $ref['id'], $ref['month'], $ref['callid'], $ref['identifiers']) || !is_array($ref['identifiers']))) throw new InvalidArgumentException('Invalid call reference.');
     return $data;
 }
 function intelligenceMonth(string $start, string $override): string {
@@ -175,6 +207,45 @@ function intelligenceReadJob(PbxClient $client, string $domain, array $ref, arra
             && !is_array($job['call-intelligence-topics-top'] ?? null) && !is_string($job['call-intelligence-topics-top'] ?? null));
     return ['status' => $incomplete ? 'partial' : 'finished', 'detail' => $incomplete ? 'Some intelligence text is unavailable; matches may be incomplete' : '', 'topics' => array_values(array_unique($topics)), 'summary' => (string)($job['call-intelligence-summary'] ?? ''), 'matches' => intelligenceMatches($job, $watches), 'summaryStatus' => (string)($job['call-intelligence-summary-status'] ?? '')];
 }
+/** Build a message from signed snapshots and fresh PBX results. Never accept
+ * arbitrary client-provided summaries or excerpts as email content. */
+function intelligenceEmailBody(array $calls, PbxClient $client, string $domain, array $watches): string {
+    $body = "CallScope selected calls\n\n";
+    foreach ($calls as $call) {
+        $body .= 'Call (' . $call['field'] . '): ' . $call['callid'] . "\n";
+        if ($call['startedAt'] !== '') $body .= 'Started: ' . $call['startedAt'] . "\n";
+        $topics = $call['topics'];
+        $usingCdrTopics = true;
+        $job = null;
+        if (is_array($call['ref'])) {
+            $body .= 'Job: ' . $call['ref']['id'] . "\n";
+            try { $job = intelligenceReadJob($client, $domain, $call['ref'], $watches); }
+            catch (Throwable $e) { appExceptionLog('Intelligence email lookup', $e); }
+        }
+        if ($job === null) {
+            $body .= 'Status: unavailable (transcription could not be checked' . ($call['reason'] !== '' ? ': ' . $call['reason'] : '') . ")\n";
+            $matches = intelligenceMatches(['call-intelligence-topics-top' => $topics], $watches);
+        } else {
+            $status = (string)($job['status'] ?? 'unknown');
+            $body .= 'Status: ' . $status . ($status !== 'finished' ? ' (check incomplete)' : '') . "\n";
+            if (!empty($job['detail'])) $body .= 'Detail: ' . $job['detail'] . "\n";
+            if (!empty($job['topics'])) { $topics = $job['topics']; $usingCdrTopics = false; }
+            if (!empty($job['summary'])) $body .= 'Summary: ' . $job['summary'] . "\n";
+            $matches = $job['matches'] ?? [];
+            if ($status !== 'finished' || $usingCdrTopics) {
+                foreach (intelligenceMatches(['call-intelligence-topics-top' => $call['topics']], $watches) as $hint) {
+                    if (!in_array($hint['keyword'], array_column($matches, 'keyword'), true)) $matches[] = $hint;
+                }
+            }
+        }
+        if ($topics) $body .= 'Topics: ' . implode(', ', $topics) . "\n";
+        if ($usingCdrTopics && !empty($call['topicsTruncated'])) $body .= "Some CDR topics were omitted from this email.\n";
+        if ($matches) foreach ($matches as $match) $body .= $match['keyword'] . ' (' . $match['source'] . '): ' . $match['excerpt'] . "\n";
+        else $body .= ($job !== null && ($job['status'] ?? '') === 'finished') ? "No keyword matches.\n" : "No confirmed keyword match; check incomplete.\n";
+        $body .= "\n";
+    }
+    return $body;
+}
 function intelligenceSmtpConfigured(): bool {
     $host = defined('INTELLIGENCE_SMTP_HOST') ? (string)INTELLIGENCE_SMTP_HOST : '';
     $port = defined('INTELLIGENCE_SMTP_PORT') ? (int)INTELLIGENCE_SMTP_PORT : 0;
@@ -191,7 +262,7 @@ function intelligenceSendMail(array $recipients, string $body): void {
     $password = defined('INTELLIGENCE_SMTP_PASSWORD') ? (string)INTELLIGENCE_SMTP_PASSWORD : '';
     $from = defined('INTELLIGENCE_SMTP_FROM') ? (string)INTELLIGENCE_SMTP_FROM : '';
     if (!intelligenceSmtpConfigured()) throw new RuntimeException('SMTP is not configured.');
-    $payload = 'From: ' . $from . "\r\nTo: " . implode(', ', $recipients) . "\r\nSubject: CallScope keyword matches\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($body), 76, "\r\n");
+    $payload = 'From: ' . $from . "\r\nTo: " . implode(', ', $recipients) . "\r\nSubject: CallScope selected calls\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($body), 76, "\r\n");
     $stream = fopen('php://temp', 'w+');
     if (!$stream) throw new RuntimeException('Unable to prepare email.');
     fwrite($stream, $payload); rewind($stream);

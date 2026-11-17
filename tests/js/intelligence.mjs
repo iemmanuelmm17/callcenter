@@ -8,9 +8,9 @@ assert.deepEqual(intelligenceMonthRange('2026-11', '2026-11-17'), { start: '2026
 assert.equal(intelligenceMonthRange('2026-12', '2026-11-17'), null);
 assert.equal(intelligenceMonthRange('2026-13', '2026-11-17'), null);
 const operations = [];
-let activeLookups = 0, maxLookups = 0;
-const calls = Array.from({ length: 115 }, (_, i) => ({ reference: 'ref-' + String(i).padStart(3, '0'), callId: 'call-' + String(i).padStart(3, '0'), startedAt: '2024-02-29T12:00:00Z', month: '202402' }));
-calls.push({ rowKey: 'cdr-unavailable', reference: null, callId: 'call-unavailable', startedAt: '2024-02-29T12:00:00Z', status: 'unavailable', detail: 'missing job ID', topicsHint: ['device'], matchesHint: [{ keyword: 'reboot', source: 'Topic', excerpt: 'reboot request' }] });
+let activeLookups = 0, maxLookups = 0, sendAttempts = 0, failSendAt = 0;
+const calls = Array.from({ length: 115 }, (_, i) => ({ reference: 'ref-' + String(i).padStart(3, '0'), emailReference: 'email-' + String(i).padStart(3, '0'), callId: 'call-' + String(i).padStart(3, '0'), startedAt: '2024-02-29T12:00:00Z', month: '202402' }));
+calls.push({ rowKey: 'cdr-unavailable', reference: null, emailReference: 'email-unavailable', callId: 'call-unavailable', startedAt: '2024-02-29T12:00:00Z', status: 'unavailable', detail: 'missing job ID', topicsHint: ['device'], matchesHint: [{ keyword: 'reboot', source: 'Topic', excerpt: 'reboot request' }] });
 FIXTURES.cache_job = body => body.action === 'warm'
   ? { complete: true, ready: 29, total: 29, batch: { warmed: 29, stopped: 'complete' } }
   : { complete: false, ready: 0, total: 29 };
@@ -25,7 +25,7 @@ FIXTURES.intelligence = body => {
       : { status: 'finished', summary: n === 85 ? '=SUM(1,1) & <safe>' : 'Summary ' + n, topics: n < 110 ? ['device', 'topic ' + String(n).padStart(3, '0')] : [], matches: n === 0 ? [{ keyword: 'reboot', source: 'Summary', excerpt: 'reboot request' }] : n === 85 ? [{ keyword: 'billing', source: 'Transcript', excerpt: '=danger & <sample>' }] : [] };
     return Promise.resolve(result).finally(() => { activeLookups--; });
   }
-  if (body.action === 'send') return { sent: true };
+  if (body.action === 'send') { sendAttempts++; if (sendAttempts === failSendAt) throw new Error('mail failure'); return { sent: true }; }
   if (body.action === 'save_watches') return { watches: body.watches };
   return {};
 };
@@ -48,7 +48,7 @@ const table = () => document.querySelector('.intel-table tbody');
 assert.equal(table().querySelectorAll('tr').length, 30);
 const unavailableRow = [...table().querySelectorAll('tr')].find(r => r.textContent.includes('call-unavailable'));
 assert.ok(unavailableRow.classList.contains('is-matched'));
-assert.ok(!unavailableRow.querySelector('input[type=checkbox]'), 'unavailable call cannot be emailed');
+assert.ok(unavailableRow.querySelector('input[type=checkbox]'), 'unavailable calls are selectable');
 assert.match(unavailableRow.textContent, /Incomplete check/);
 assert.ok([...table().querySelectorAll('tr.is-matched')].some(r => r.textContent.includes('call-000')));
 assert.match(root().textContent, /Showing 1–30 of 111/);
@@ -104,9 +104,9 @@ assert.ok(byText('button', 'Last').disabled && byText('button', 'Next').disabled
 await click(byText('button', 'Previous'));
 assert.match(root().textContent, /Page 3 of 4/);
 assert.ok(table().querySelector('tr.is-matched').textContent.includes('call-085'));
-await click(table().querySelector('input[type="checkbox"]'));
+await click(table().querySelector('[aria-label="Select call call-085"]'));
 await click(byText('button', 'First'));
-await click(table().querySelector('input[type="checkbox"]'));
+await click(table().querySelector('[aria-label="Select call call-000"]'));
 const size = document.querySelector('[aria-label="Rows per page"]');
 await act(async () => { Simulate.change(size, { target: { value: '50' } }); });
 assert.match(root().textContent, /Showing 1–50 of 111/);
@@ -119,9 +119,9 @@ await act(async () => { Simulate.change(address, { target: { value: 'manager@exa
 await click(byText('button', 'Email selected (2)'));
 await flush(8);
 const send = operations.find(x => x.action === 'send');
-assert.deepEqual(send.references.sort(), ['ref-000', 'ref-085']);
+assert.deepEqual(send.references.sort(), ['email-000', 'email-085']);
 assert.deepEqual(send.recipients, ['manager@example.com']);
-assert.match(root().textContent, /Email accepted/);
+assert.match(root().textContent, /SMTP accepted 1 email for 2 calls/);
 const month = document.querySelector('[aria-label="Report month"]');
 await act(async () => { Simulate.change(month, { target: { value: '2024-02' } }); });
 await flush(1200);
@@ -178,6 +178,38 @@ await click(byText('button', 'Show top topics'));
 assert.equal(topicButtons().length, 10);
 assert.equal(topicButtons()[0].textContent, 'device (111)', 'collapsed topics remain sorted by popularity');
 
+// Bulk selection covers every filtered page and includes unmatched/incomplete rows.
+await click(byText('button', 'Select all filtered calls'));
+assert.match(root().textContent, /111 selected total; 111 in the current filter/);
+assert.equal(table().querySelectorAll('input[type=checkbox]:checked').length, 100);
+await act(async () => { Simulate.change(matchStatus, { target: { value: 'matched' } }); });
+assert.match(root().textContent, /111 selected total; 3 in the current filter/);
+await click(byText('button', 'Unselect filtered calls'));
+assert.match(root().textContent, /108 selected total; 0 in the current filter/);
+await click(byText('button', 'Select all filtered calls'));
+assert.match(root().textContent, /111 selected total; 3 in the current filter/);
+await act(async () => { Simulate.change(matchStatus, { target: { value: 'all' } }); });
+
+// On a later-batch failure, successful calls are removed and the remainder stay selected.
+const beforeFailure = sendAttempts;
+failSendAt = beforeFailure + 2;
+await click(byText('button', 'Email selected (111)'));
+await flush(80);
+assert.match(root().textContent, /Email stopped after 10 of 111 calls were accepted/);
+assert.match(root().textContent, /101 selected total/);
+assert.equal(sendAttempts, beforeFailure + 2);
+failSendAt = 0;
+const beforeRetry = sendAttempts;
+await click(byText('button', 'Email selected (101)'));
+await flush(100);
+assert.equal(sendAttempts - beforeRetry, 11, 'remaining calls are sent in batches of at most 10');
+assert.match(root().textContent, /SMTP accepted 11 emails for 101 calls/);
+assert.match(root().textContent, /0 selected total/);
+assert.ok(operations.filter(x => x.action === 'send').every(x => x.references.length <= 10));
+await click(byText('button', 'Select all filtered calls'));
+await click(byText('button', 'Unselect filtered calls'));
+assert.match(root().textContent, /0 selected total/);
+
 // An unfinished cache must be reported, and partial days get bounded retries.
 let warmAttempts = 0;
 FIXTURES.cache_job = body => {
@@ -185,7 +217,7 @@ FIXTURES.cache_job = body => {
   return { complete: false, ready: 0, total: 29, batch: { warmed: 0, stopped: 'partial' } };
 };
 FIXTURES.intelligence = body => {
-  if (body.action === 'list') return { calls: [{ reference: 'fail', callId: 'pending-call', startedAt: '2024-02-29T12:00:00Z', topicsHint: ['reboot device'], matchesHint: [{ keyword: 'reboot', source: 'Topic', excerpt: 'reboot device' }] }], missing: 0, cacheStatus: { complete: false } };
+  if (body.action === 'list') return { calls: [{ reference: 'fail', emailReference: 'email-fail', callId: 'pending-call', startedAt: '2024-02-29T12:00:00Z', topicsHint: ['reboot device'], matchesHint: [{ keyword: 'reboot', source: 'Topic', excerpt: 'reboot device' }] }], missing: 0, cacheStatus: { complete: false } };
   if (body.action === 'lookup') return { status: 'pending', detail: 'processing' };
   return { watches: ['reboot'] };
 };
@@ -196,7 +228,7 @@ assert.match(root().textContent, /CDR month is not fully loaded/);
 assert.match(table().textContent, /pending-call/);
 assert.match(table().textContent, /Incomplete check/);
 assert.ok(table().querySelector('tr.is-matched'));
-assert.ok(!table().querySelector('input[type=checkbox]'));
+assert.ok(table().querySelector('input[type=checkbox]'), 'pending calls are selectable');
 
 // A failed cache preparation still attempts the list and makes the failure visible.
 FIXTURES.cache_job = () => { throw new Error('network unavailable'); };
@@ -204,5 +236,24 @@ await click(byText('button', 'Reload'));
 await flush(30);
 assert.match(root().textContent, /Could not fully prepare call history: network unavailable/);
 assert.match(table().textContent, /pending-call/);
+
+// Lookup progress explains disabled export, but rows can already be selected and emailed.
+let finishLookup;
+FIXTURES.cache_job = () => ({ complete: true, ready: 29, total: 29 });
+FIXTURES.intelligence = body => {
+  if (body.action === 'list') return { calls: [{ reference: 'slow', emailReference: 'email-slow', callId: 'slow-call', startedAt: '2024-02-29T12:00:00Z', topicsHint: ['device'], matchesHint: [] }], missing: 0, cacheStatus: { complete: true } };
+  if (body.action === 'lookup') return new Promise(resolve => { finishLookup = resolve; });
+  if (body.action === 'send') return { sent: true };
+  return { watches: ['reboot'] };
+};
+await click(byText('button', 'Reload'));
+await flush(20);
+assert.ok(byText('button', 'Export filtered calls to Excel').disabled);
+assert.match(root().textContent, /Excel export becomes available after all transcription jobs have been checked/);
+await click(byText('button', 'Select all filtered calls'));
+assert.ok(!byText('button', 'Email selected (1)').disabled, 'email can send a selected pending call');
+await act(async () => { finishLookup({ status: 'finished', topics: ['device'], summary: 'ready', matches: [] }); });
+await flush(20);
+assert.ok(!byText('button', 'Export filtered calls to Excel').disabled);
 assert.equal(errors.length, 0, errors.join('\n'));
 console.log('INTELLIGENCE UI OK — month scope, warmup, topic filtering, pagination, matches and email');

@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1413 names.
+ * 1415 names.
  */
 return [
     'aa',
@@ -446,6 +446,7 @@ return [
     'durationchange',
     'ellipsis-left',
     'ellipsis-right',
+    'email',
     'embed',
     'emerald',
     'emptied',
@@ -1042,6 +1043,7 @@ return [
     'recording',
     'records',
     'rect',
+    'ref',
     'reference',
     'references',
     'refresh_token',

@@ -47,7 +47,8 @@ try {
                         if (trim((string)($call[$candidate] ?? '')) !== '') { $field = $candidate; $display = trim((string)$call[$candidate]); break; }
                     }
                     if ($display === '') $display = 'CDR ' . ($index + 1);
-                    $rows[] = ['rowKey' => 'cdr-' . hash('sha256', cdrCacheKey($call, $index)), 'reference' => null,
+                    $emailRef = intelligenceEmailReference(null, $display, $field, (string)($call['call-start-datetime'] ?? ''), $topicsHint, (string)$reason, $domain);
+                    $rows[] = ['rowKey' => 'cdr-' . hash('sha256', cdrCacheKey($call, $index)), 'reference' => null, 'emailReference' => $emailRef,
                         'callId' => $display, 'callIdField' => $field, 'startedAt' => (string)($call['call-start-datetime'] ?? ''),
                         'topicsHint' => $topicsHint, 'matchesHint' => $matchesHint, 'status' => 'unavailable', 'detail' => 'Transcription lookup unavailable (' . $reason . ')'];
                 }
@@ -56,7 +57,8 @@ try {
             $key = $ref['id'] . '|' . $ref['callid'];
             if (isset($seen[$key])) continue;
             $seen[$key] = true;
-            $rows[] = ['reference' => intelligenceSign($ref, $domain), 'callId' => $ref['callid'], 'callIdField' => $ref['displayField'],
+            $emailRef = intelligenceEmailReference($ref, $ref['callid'], $ref['displayField'], (string)($call['call-start-datetime'] ?? ''), $topicsHint, '', $domain);
+            $rows[] = ['reference' => intelligenceSign($ref, $domain), 'emailReference' => $emailRef, 'callId' => $ref['callid'], 'callIdField' => $ref['displayField'],
                 'startedAt' => (string)($call['call-start-datetime'] ?? ''), 'month' => $ref['month'], 'topicsHint' => $topicsHint, 'matchesHint' => $matchesHint];
         }
         auditView($user, ['start' => $filters['start'], 'end' => $filters['end']], 'intelligence-report');
@@ -76,24 +78,19 @@ try {
             if (!is_string($address) || strlen($address) > 254 || !filter_var($address, FILTER_VALIDATE_EMAIL) || preg_match('/[\r\n]/', $address)) throw new InvalidArgumentException('Invalid recipient email address.');
             $addresses[$address] = true;
         }
-        if (!is_array($refs) || count($refs) < 1 || count($refs) > 10) throw new InvalidArgumentException('Select 1–10 matching calls per email.');
+        if (!is_array($refs) || count($refs) < 1 || count($refs) > 10) throw new InvalidArgumentException('Select 1–10 calls per email batch.');
         foreach ($refs as $token) if (!is_string($token)) throw new InvalidArgumentException('Invalid call reference.');
+        $calls = [];
+        foreach (array_unique($refs) as $token) {
+            $calls[] = intelligenceVerifyEmail($token, $domain);
+        }
         if (!intelligenceSmtpConfigured()) jsonResponse(['error' => 'Email is unavailable: SMTP is not configured on the server.'], 503);
         if (function_exists('set_time_limit')) set_time_limit(360);
         $watches = intelligenceWatches($domain);
         $client = new PbxClient((string)($_SESSION['token'] ?? ''));
-        $body = "CallScope watched keyword matches\n\n";
-        foreach (array_unique($refs) as $token) {
-            if (!is_string($token)) throw new InvalidArgumentException('Invalid call reference.');
-            $ref = intelligenceVerify($token, $domain);
-            $job = intelligenceReadJob($client, $domain, $ref, $watches);
-            if (($job['status'] ?? '') !== 'finished' || empty($job['matches'])) throw new InvalidArgumentException('A selected call no longer matches or is not available. Refresh the report.');
-            $body .= 'Call (' . $ref['displayField'] . '): ' . $ref['callid'] . "\nJob: " . $ref['id'] . "\n";
-            foreach ($job['matches'] as $match) $body .= $match['keyword'] . ' (' . $match['source'] . '): ' . $match['excerpt'] . "\n";
-            $body .= "\n";
-        }
+        $body = intelligenceEmailBody($calls, $client, $domain, $watches);
         intelligenceSendMail(array_keys($addresses), $body);
-        auditView($user, ['domain' => $domain, 'calls' => count($refs), 'recipients' => count($addresses)], 'intelligence-email');
+        auditView($user, ['domain' => $domain, 'calls' => count($calls), 'recipients' => count($addresses)], 'intelligence-email');
         jsonResponse(['sent' => true]);
     }
     throw new InvalidArgumentException('Unknown action.');
