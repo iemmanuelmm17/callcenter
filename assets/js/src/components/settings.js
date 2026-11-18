@@ -27,6 +27,8 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
     topAgentAhtMinutes: DEFAULTS.topAgentAhtMinutes,
     topAgentMinCalls: DEFAULTS.topAgentMinCalls
   });
+  // Null until loaded: never overwrite a domain's value on a failed read.
+  const [intelligenceWorkers, setIntelligenceWorkers] = useState(null);
   const [live, setLive] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -48,6 +50,7 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
     api('settings').then(r => {
       const d = r && r.data ? r.data : r;
       if (!d) return;
+      if (canSave) setIntelligenceWorkers(Number(d.intelligenceWorkers ?? 8));
       setService({
         businessHours: normalizeHours(d.businessHours),
         queueSla: (d.queueSla && typeof d.queueSla === 'object') ? d.queueSla : {},
@@ -152,6 +155,13 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
          * finished loading cannot blank the desk's clock. */
         timezone: service.timezone
       };
+      if (intelligenceWorkers !== null) {
+        const workers = Number(intelligenceWorkers);
+        if (String(intelligenceWorkers).trim() === '' || !Number.isInteger(workers) || workers < 1 || workers > 32) {
+          throw new Error('Intelligence workers must be a whole number from 1 to 32.');
+        }
+        payload.intelligenceWorkers = workers;
+      }
       if (payload.businessHours && payload.businessHours.enabled && !hoursHaveOpenDay(payload.businessHours)) {
         throw new Error('Opening hours need at least one open day before they can be switched on.');
       }
@@ -345,6 +355,21 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
           agents: directory.agents,
           queues: directory.queues
         }),
+        canSave ? h('div', null,
+          h('div', { className: 'set-sec-label' }, 'Topics & summaries · performance'),
+          h('div', { className: 'set-row-card is-good' },
+            h('div', { className: 'set-row-copy' },
+              h('label', { className: 'set-row-title', htmlFor: 'intelligence-workers' }, 'Transcription lookup workers'),
+              h('div', { className: 'set-row-desc' }, '1–32 simultaneous lookups per browser; default 8. Applies to this domain on the next report reload. More workers increase server load and may not improve speed.'),
+              h('div', { className: 'set-row-desc' }, 'The shared PBX rate limit still applies to all traffic and is configured on the server, not here.'),
+              intelligenceWorkers === null ? h('div', { className: 'set-row-desc' }, 'Worker setting is loading or unavailable; it will not be changed by Save.') : null
+            ),
+            h('div', { className: 'set-input-wrap' }, h('div', { className: 'set-input-shell' },
+              h('input', { id: 'intelligence-workers', type: 'number', min: 1, max: 32, step: 1, disabled: intelligenceWorkers === null, value: intelligenceWorkers ?? '', onChange: e => setIntelligenceWorkers(e.target.value) }),
+              h('span', { className: 'set-suffix' }, 'workers')
+            ))
+          )
+        ) : null,
         h('div', { className: 'set-sec-label' }, 'Appearance'),
         h('div', { className: 'set-theme-row' },
           h('div', { className: 'set-row-copy' },
@@ -358,7 +383,7 @@ function SettingsModal({user, slaSeconds, filters, callTypes, onSlaChange, onClo
       ),
       h('div', { className: 'set-foot' },
         h('div', { className: 'set-foot-left' },
-          canSave ? h('button', { type: 'button', className: 'set-reset', onClick: () => setForm({ ...DEFAULTS }) }, 'Reset to defaults') : null,
+          canSave ? h('button', { type: 'button', className: 'set-reset', onClick: () => { setForm({ ...DEFAULTS }); if (intelligenceWorkers !== null) setIntelligenceWorkers(8); } }, 'Reset to defaults') : null,
           h('div', { className: 'set-scope' }, 'Applies to this PBX domain only')
         ),
         h('div', { className: 'set-foot-right' },

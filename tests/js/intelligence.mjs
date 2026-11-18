@@ -40,6 +40,25 @@ FIXTURES.intelligence = body => {
 };
 const { window, document, root, flush, click, byText, errors, act, requested, press } = await createHarness({ search: 'start=2025-01-01&end=2025-01-01' });
 await flush(10);
+// Managers can configure domain workers, and invalid values never get saved.
+let savedSettings;
+const settingsFixture = FIXTURES.settings;
+FIXTURES.settings = body => {
+  if (Object.keys(body).length) { savedSettings = body; return { data: { ...settingsFixture, ...body } }; }
+  return { data: { ...settingsFixture, intelligenceWorkers: 12 } };
+};
+await click(byText('.nav-item', 'Settings'));
+await flush(10);
+let workersInput = document.querySelector('#intelligence-workers');
+assert.equal(workersInput.value, '12');
+await act(async () => { Simulate.change(workersInput, { target: { value: '33' } }); });
+await click(byText('button', 'Save'));
+assert.match(document.querySelector('[aria-label="Settings"]').textContent, /whole number from 1 to 32/);
+assert.equal(savedSettings, undefined);
+await act(async () => { Simulate.change(workersInput, { target: { value: '16' } }); });
+await click(byText('button', 'Save'));
+assert.equal(savedSettings.intelligenceWorkers, 16);
+FIXTURES.settings = settingsFixture;
 await click(byText('.nav-item', 'Topics & summaries'));
 await flush(1200);
 const firstList = operations.find(x => x.action === 'list');
@@ -291,13 +310,13 @@ window.Date.now = () => clock;
 const pendingJobs = new Map();
 FIXTURES.cache_job = () => ({ complete: true, ready: 29, total: 29 });
 FIXTURES.intelligence = body => {
-  if (body.action === 'list') return { calls: Array.from({ length: 12 }, (_, i) => ({ reference: 'job-' + i, emailReference: 'email-' + i, callId: 'progress-' + i, startedAt: '2024-02-29T12:00:00Z', topicsHint: ['device'] })), missing: 0, cacheStatus: { complete: true } };
+  if (body.action === 'list') return { intelligenceWorkers: 3, calls: Array.from({ length: 12 }, (_, i) => ({ reference: 'job-' + i, emailReference: 'email-' + i, callId: 'progress-' + i, startedAt: '2024-02-29T12:00:00Z', topicsHint: ['device'] })), missing: 0, cacheStatus: { complete: true } };
   if (body.action === 'lookup') { started++; return new Promise(resolve => { pendingJobs.set(body.reference, resolve); }); }
   return { watches: [] };
 };
 await click(document.querySelector('[aria-label="Reload"]'));
 await flush(20);
-assert.equal(started, 8, 'up to eight lookups run concurrently');
+assert.equal(started, 3, 'configured workers control simultaneous lookups');
 const resolveJob = key => { const resolve = pendingJobs.get(key); pendingJobs.delete(key); resolve({ status: 'finished', topics: ['device'], summary: 'ready', matches: [] }); };
 await act(async () => { resolveJob('job-0'); });
 await flush(10);
@@ -306,11 +325,30 @@ clock += 600;
 await act(async () => { resolveJob('job-1'); });
 await flush(10);
 assert.match(root().textContent, /Checked 2 \/ 12/, 'progress updates without waiting for ten completions');
-for (let i = 0; i < 4 && pendingJobs.size; i++) {
+for (let i = 0; i < 12 && pendingJobs.size; i++) {
   await act(async () => { for (const key of [...pendingJobs.keys()]) resolveJob(key); });
   await flush(10);
 }
 window.Date.now = realNow;
 assert.match(root().textContent, /Checked 12 \/ 12/);
+// Higher configured values can start more than eight requests (per browser).
+let highStarted = 0;
+const highPending = [];
+FIXTURES.intelligence = body => {
+  if (body.action === 'list') return { intelligenceWorkers: 32, calls: Array.from({ length: 40 }, (_, i) => ({ reference: 'high-' + i, callId: 'high-' + i, topicsHint: ['device'] })), missing: 0, cacheStatus: { complete: true } };
+  if (body.action === 'lookup') { highStarted++; return new Promise(resolve => highPending.push(resolve)); }
+  return { watches: [] };
+};
+await click(document.querySelector('[aria-label="Reload"]'));
+await flush(20);
+assert.equal(highStarted, 32, 'upper bound starts 32 lookups when work is available');
+await act(async () => { for (const resolve of highPending.splice(0)) resolve({ status: 'finished', topics: ['device'] }); });
+await flush(20);
+assert.equal(highStarted, 40, 'workers continue through the remaining calls');
+for (let i = 0; i < 3 && highPending.length; i++) {
+  await act(async () => { for (const resolve of highPending.splice(0)) resolve({ status: 'finished', topics: ['device'] }); });
+  await flush(10);
+}
+
 assert.equal(errors.length, 0, errors.join('\n'));
 console.log('INTELLIGENCE UI OK — compact dashboard, filters, batch email and partial Excel');

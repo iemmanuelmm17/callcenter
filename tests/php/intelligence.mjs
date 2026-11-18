@@ -11,6 +11,17 @@ assert.equal((await req('save_watches', { watches: ['reboot', 'ACCOUNT', 'reboot
 assert.deepEqual((await req('watches')).body.watches, ['reboot', 'ACCOUNT']);
 const other = { ...USERS.office_manager, domain: 'other.example' };
 assert.deepEqual((await req('watches', {}, other)).body.watches, []);
+const settings = (user, method = 'GET', body = null) => h.request('settings.php', { user, method, body });
+assert.equal((await settings(USERS.office_manager)).body.data.intelligenceWorkers, 8);
+assert.equal((await settings(USERS.office_manager, 'POST', { intelligenceWorkers: 24 })).body.data.intelligenceWorkers, 24);
+assert.equal((await settings(other)).body.data.intelligenceWorkers, 8, 'workers are scoped to domain');
+assert.equal((await settings(USERS.supervisor, 'POST', { intelligenceWorkers: 2 })).status, 403);
+assert.equal((await settings(USERS.office_manager, 'POST', { slaPct: 89 })).body.data.intelligenceWorkers, 24, 'partial settings save preserves workers');
+assert.equal((await settings(USERS.office_manager, 'POST', { intelligenceWorkers: 100 })).body.data.intelligenceWorkers, 32);
+assert.equal((await settings(USERS.office_manager, 'POST', { intelligenceWorkers: -1 })).body.data.intelligenceWorkers, 1);
+assert.equal((await settings(USERS.office_manager, 'POST', { intelligenceWorkers: 'invalid' })).body.data.intelligenceWorkers, 1);
+await settings(USERS.office_manager, 'POST', { intelligenceWorkers: 24 });
+
 assert.equal((await req('save_watches', { watches: ['bad\nline'] })).status, 422);
 await h.seedPbx('users', []);
 await h.seedPbx('fetchCdrs', [{
@@ -27,6 +38,7 @@ await h.seedPbx('fetchCdrs', [{
 const listing = await req('list', { start: '2026-11-16', end: '2026-11-16', hours: 'all' });
 assert.equal(listing.status, 200, JSON.stringify(listing));
 assert.equal(listing.body.calls.length, 3, JSON.stringify(listing.body));
+assert.equal(listing.body.intelligenceWorkers, 24);
 const unavailable = listing.body.calls.find(x => x.status === 'unavailable');
 assert.equal(unavailable.reference, null);
 assert.ok(unavailable.emailReference);

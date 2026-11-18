@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1474 names.
+ * 1476 names.
  */
 return [
     'aa',
@@ -721,6 +721,7 @@ return [
     'intelligence-report',
     'intelligence-topic-list',
     'intelligence-watch-settings',
+    'intelligence-workers',
     'interval',
     'intervals',
     'intval',
@@ -1486,6 +1487,7 @@ return [
     'width',
     'within24',
     'within72',
+    'workers',
     'worklist',
     'year',
     'yes',

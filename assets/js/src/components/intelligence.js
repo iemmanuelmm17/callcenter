@@ -7,7 +7,7 @@ import { recordRangeLabel } from '../lib/pagination.js';
 import { APP_TZ, date, formatCallDate, formatCallTime, parseCallInstant } from '../lib/time.js';
 import { h, useEffect, useState } from '../lib/react.js';
 
-const LOOKUP_CONCURRENCY = 8;
+const DEFAULT_LOOKUP_CONCURRENCY = 8;
 const PROGRESS_UPDATE_MS = 500;
 
 /* Render watched phrases as text nodes and marks, never as HTML. */
@@ -156,7 +156,9 @@ function IntelligenceDashboard({ filters }) {
                         }
                     }
                 };
-                await Promise.all(Array.from({ length: Math.min(LOOKUP_CONCURRENCY, candidates.length) }, worker));
+                const configuredWorkers = Number(list.intelligenceWorkers);
+                const concurrency = Number.isInteger(configuredWorkers) && configuredWorkers >= 1 && configuredWorkers <= 32 ? configuredWorkers : DEFAULT_LOOKUP_CONCURRENCY;
+                await Promise.all(Array.from({ length: Math.min(concurrency, candidates.length) }, worker));
                 if (active) { setRows(items.slice()); setSync({ stage: 'complete', done: completed, total: candidates.length }); setProgress(''); }
             } catch (e) { if (active) { setError(e.message); setSync({ stage: 'error', done: 0, total: 0 }); setProgress(''); } }
         })();

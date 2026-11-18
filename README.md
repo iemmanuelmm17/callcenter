@@ -325,9 +325,16 @@ can therefore appear as missing even if the PBX has intelligence data. Refresh
 or expire those CDR cache days (and any imported node JSONL source) before relying
 on historical coverage; the default closed-day cache lifetime is one year. The
 report also flags an incomplete date cache. A large range may require many PBX
-requests. The selected month is warmed in batches and lookups run with at most
-eight concurrent requests per browser. The PBX's shared per-server rate limit
-(default five requests per second) and retry rules still apply, so throughput
-depends on server latency, PHP worker capacity and other users. Progress and
+requests. The selected month is warmed in batches and lookups use the domain's **Settings → Topics & summaries → Transcription lookup
+workers** value (1–32 simultaneous requests per browser; default 8). Only office
+managers can change it. Save, then reload the report to start a new check with
+the updated value (the report reload button is enabled after checking finishes);
+other open browsers also need to reload. The number is per
+browser, not a domain-wide total, so multiple users can multiply the server load.
+The shared per-PBX-server rate limit and retry rules still apply to all PBX
+traffic: it defaults to five requests per second and is configured by the server
+administrator with `PBX_REQUESTS_PER_SECOND` in `includes/config.local.php`
+(see the PBX benchmark above). Raising either setting can overload the server or
+trigger throttling; throughput also depends on latency and PHP worker capacity. Progress and
 partial results are displayed; counts
 and pages may change until checking finishes.

@@ -55,6 +55,8 @@ function defaultDomainSettings(): array {
          */
         'topAgentAhtMinutes' => 5.0,
         'topAgentMinCalls' => 20,
+        /* Concurrent intelligence lookups per browser, shared by the domain. */
+        'intelligenceWorkers' => 8,
 
         /*
          * The desk's opening hours (manager review, Sprint A).
@@ -270,6 +272,8 @@ function loadDomainSettings(string $domain): array {
     /* The calendar is the one nested setting: a file written before a day
      * existed (or edited by hand) still yields all seven days. */
     $merged['businessHours'] = normalizeBusinessHours($raw['businessHours'] ?? null);
+    $workers = $merged['intelligenceWorkers'];
+    $merged['intelligenceWorkers'] = is_numeric($workers) ? max(1, min(32, (int)$workers)) : 8;
     return $merged;
 }
 
@@ -326,6 +330,8 @@ function saveDomainSettings(string $domain, array $in): array {
      * rather than 1.
      */
     $cur['topAgentMinCalls'] = max(0, min(10000, (int)$pick('topAgentMinCalls', 20)));
+    $workers = $pick('intelligenceWorkers', 8);
+    $cur['intelligenceWorkers'] = is_numeric($workers) ? max(1, min(32, (int)$workers)) : $existing['intelligenceWorkers'];
 
     /*
      * The desk's timezone (finding C7), validated rather than clamped: an id
