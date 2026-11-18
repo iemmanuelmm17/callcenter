@@ -191,7 +191,9 @@ function monitorProcessCall(PbxClient $client, string $domain, array $call, arra
         $sending = ['status' => 'sending', 'time' => time(), 'callid' => $ref['callid']];
         $file = monitorDirectory() . '/job-' . monitorDomainId($domain) . '-' . monitorJobKey($ref) . '.json';
         monitorWriteFile($file, $sending);
-        $body = "CallScope automatic keyword alert\n\nDomain: " . $domain . "\nCall: " . $ref['callid'] . "\nStarted: " . (string)($call['call-start-datetime'] ?? '') . "\nSummary: " . $result['summary'] . "\nTopics: " . implode(', ', $result['topics']) . "\n\n";
+        $body = "CallScope automatic keyword alert\n\nDomain: " . $domain . "\nCall: " . $ref['callid'] . "\n";
+        $body .= intelligenceEmailCallDetails((string)($call['call-start-datetime'] ?? ''), intelligencePartyDetails($call));
+        $body .= "Summary: " . $result['summary'] . "\nTopics: " . implode(', ', $result['topics']) . "\n\n";
         foreach ($result['matches'] as $match) $body .= $match['keyword'] . ' (' . $match['source'] . '): ' . $match['excerpt'] . "\n";
         try {
             intelligenceSendMail(monitorRecipients(), $body, 'CallScope keyword alert');

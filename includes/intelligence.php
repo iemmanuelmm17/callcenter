@@ -70,10 +70,37 @@ function intelligenceVerify(string $token, string $domain): array {
     if (!isset($data['server'], $data['id'], $data['month'], $data['callid'], $data['identifiers']) || !is_array($data['identifiers'])) throw new InvalidArgumentException('Invalid call reference.');
     return $data;
 }
+/** Use the same caller and destination rules as the existing Calls report. */
+function intelligencePartyDetails(array $call): array {
+    $caller = callFromNumber($call);
+    if ($caller === '') $caller = callFrom($call);
+    $clean = static function (string $value): string {
+        $value = trim((string)preg_replace('/[\x00-\x1f\x7f]/', '', $value));
+        $value = substr($value, 0, 256);
+        while ($value !== '' && preg_match('//u', $value) !== 1) $value = substr($value, 0, -1);
+        return $value === '' ? 'Unknown' : $value;
+    };
+    return [
+        'callerNumber' => $clean($caller),
+        'dialedNumber' => $clean(callDialed($call)),
+        'destinationNumber' => $clean(callTo($call)),
+    ];
+}
+/** Render the call's start time in the configured reporting timezone. */
+function intelligenceEmailCallDetails(string $startedAt, array $details): string {
+    $dt = parseEasternDateTime($startedAt);
+    $body = 'Date: ' . ($dt ? $dt->format('Y-m-d') : 'Unknown') . "\n";
+    $body .= 'Time: ' . ($dt ? $dt->format('g:i A') . ' (' . reportingTimezoneName() . ')' : 'Unknown') . "\n";
+    foreach (['callerNumber' => 'Caller number', 'dialedNumber' => 'Originally dialed', 'destinationNumber' => 'Final destination'] as $key => $label) {
+        $value = is_string($details[$key] ?? null) ? $details[$key] : '';
+        $body .= $label . ': ' . ($value !== '' ? $value : 'Unknown') . "\n";
+    }
+    return $body;
+}
 /** Signed email snapshots are session/domain scoped. PBX jobs are re-read at send
  * time; CDR-only rows have no lookup, so carry their original topics with an
  * explicit unavailable status. Bound the snapshot and disclose truncation. */
-function intelligenceEmailReference(?array $ref, string $callId, string $field, string $startedAt, array $topics, string $reason, string $domain): string {
+function intelligenceEmailReference(?array $ref, string $callId, string $field, string $startedAt, array $topics, string $reason, string $domain, array $details = []): string {
     $kept = []; $bytes = 0; $truncated = false;
     foreach ($topics as $topic) {
         if (!is_string($topic)) continue;
@@ -84,6 +111,10 @@ function intelligenceEmailReference(?array $ref, string $callId, string $field, 
     }
     $data = ['kind' => 'email', 'ref' => $ref, 'callid' => substr($callId, 0, 512), 'field' => substr($field, 0, 64),
         'startedAt' => substr($startedAt, 0, 128), 'topics' => $kept, 'topicsTruncated' => $truncated, 'reason' => $reason];
+    foreach (['callerNumber', 'dialedNumber', 'destinationNumber'] as $key) {
+        $value = is_string($details[$key] ?? null) ? $details[$key] : '';
+        $data[$key] = substr((string)preg_replace('/[\x00-\x1f\x7f]/', '', $value), 0, 256);
+    }
     $token = intelligenceSign($data, $domain);
     if (strlen($token) > 16384) throw new RuntimeException('Call reference is too large.');
     return $token;
@@ -93,6 +124,11 @@ function intelligenceVerifyEmail(string $token, string $domain): array {
     if (($data['kind'] ?? '') !== 'email' || !is_string($data['callid'] ?? null) || !is_string($data['field'] ?? null)
         || !is_string($data['startedAt'] ?? null) || !is_string($data['reason'] ?? null) || !is_array($data['topics'] ?? null)
         || count(array_filter($data['topics'], 'is_string')) !== count($data['topics'])) throw new InvalidArgumentException('Invalid call reference.');
+    foreach (['callerNumber', 'dialedNumber', 'destinationNumber'] as $key) {
+        // Snapshots from older open tabs did not include party details.
+        if (!array_key_exists($key, $data)) $data[$key] = '';
+        if (!is_string($data[$key]) || strlen($data[$key]) > 256 || preg_match('/[\x00-\x1f\x7f]/', $data[$key])) throw new InvalidArgumentException('Invalid call reference.');
+    }
     $ref = $data['ref'] ?? null;
     if ($ref !== null && (!is_array($ref) || !isset($ref['server'], $ref['id'], $ref['month'], $ref['callid'], $ref['identifiers']) || !is_array($ref['identifiers']))) throw new InvalidArgumentException('Invalid call reference.');
     return $data;
@@ -213,7 +249,7 @@ function intelligenceEmailBody(array $calls, PbxClient $client, string $domain, 
     $body = "CallScope selected calls\n\n";
     foreach ($calls as $call) {
         $body .= 'Call (' . $call['field'] . '): ' . $call['callid'] . "\n";
-        if ($call['startedAt'] !== '') $body .= 'Started: ' . $call['startedAt'] . "\n";
+        $body .= intelligenceEmailCallDetails($call['startedAt'], $call);
         $topics = $call['topics'];
         $usingCdrTopics = true;
         $job = null;

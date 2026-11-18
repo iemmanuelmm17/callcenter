@@ -47,6 +47,7 @@ try {
         $missingReasons = ['jobId' => 0, 'server' => 0, 'callId' => 0, 'month' => 0];
         $watches = intelligenceWatches($domain);
         foreach ($calls as $index => $call) {
+            $parties = intelligencePartyDetails($call);
             $topicsHint = intelligenceCdrTopics($call);
             $matchesHint = $topicsHint ? intelligenceMatches(['call-intelligence-topics-top' => $topicsHint], $watches) : [];
             $reason = null;
@@ -64,9 +65,10 @@ try {
                         if (trim((string)($call[$candidate] ?? '')) !== '') { $field = $candidate; $display = trim((string)$call[$candidate]); break; }
                     }
                     if ($display === '') $display = 'CDR ' . ($index + 1);
-                    $emailRef = intelligenceEmailReference(null, $display, $field, (string)($call['call-start-datetime'] ?? ''), $topicsHint, (string)$reason, $domain);
+                    $emailRef = intelligenceEmailReference(null, $display, $field, (string)($call['call-start-datetime'] ?? ''), $topicsHint, (string)$reason, $domain, $parties);
                     $rows[] = ['rowKey' => 'cdr-' . hash('sha256', cdrCacheKey($call, $index)), 'reference' => null, 'emailReference' => $emailRef,
                         'callId' => $display, 'callIdField' => $field, 'startedAt' => (string)($call['call-start-datetime'] ?? ''),
+                        'callerNumber' => $parties['callerNumber'], 'dialedNumber' => $parties['dialedNumber'], 'destinationNumber' => $parties['destinationNumber'],
                         'topicsHint' => $topicsHint, 'matchesHint' => $matchesHint, 'status' => 'unavailable', 'detail' => 'Transcription lookup unavailable (' . $reason . ')'];
                 }
                 continue;
@@ -75,9 +77,10 @@ try {
             $key = $ref['id'] . '|' . $ref['callid'];
             if (isset($seen[$key])) continue;
             $seen[$key] = true;
-            $emailRef = intelligenceEmailReference($ref, $ref['callid'], $ref['displayField'], (string)($call['call-start-datetime'] ?? ''), $topicsHint, '', $domain);
+            $emailRef = intelligenceEmailReference($ref, $ref['callid'], $ref['displayField'], (string)($call['call-start-datetime'] ?? ''), $topicsHint, '', $domain, $parties);
             $rows[] = ['reference' => intelligenceSign($ref, $domain), 'emailReference' => $emailRef, 'callId' => $ref['callid'], 'callIdField' => $ref['displayField'],
-                'startedAt' => (string)($call['call-start-datetime'] ?? ''), 'month' => $ref['month'], 'topicsHint' => $topicsHint, 'matchesHint' => $matchesHint];
+                'startedAt' => (string)($call['call-start-datetime'] ?? ''), 'month' => $ref['month'],
+                'callerNumber' => $parties['callerNumber'], 'dialedNumber' => $parties['dialedNumber'], 'destinationNumber' => $parties['destinationNumber'], 'topicsHint' => $topicsHint, 'matchesHint' => $matchesHint];
         }
         auditView($user, ['start' => $filters['start'], 'end' => $filters['end']], 'intelligence-report');
         jsonResponse(['calls' => $rows, 'intelligenceWorkers' => loadDomainSettings($domain)['intelligenceWorkers'], 'missing' => $missing, 'missingReasons' => $missingReasons, 'hours' => $filters['hours'], 'cacheStatus' => cdrRangeCacheStatus($user, $filters['start'], $filters['end']), 'timezone' => reportingTimezoneName()]);
@@ -115,6 +118,7 @@ try {
         if (function_exists('set_time_limit')) set_time_limit(360);
         $watches = intelligenceWatches($domain);
         $client = new PbxClient((string)($_SESSION['token'] ?? ''));
+        setReportingTimezone(loadDomainSettings($domain)['timezone'] ?? null);
         $body = intelligenceEmailBody($calls, $client, $domain, $watches);
         intelligenceSendMail(array_keys($addresses), $body);
         auditView($user, ['domain' => $domain, 'calls' => count($calls), 'recipients' => count($addresses)], 'intelligence-email');

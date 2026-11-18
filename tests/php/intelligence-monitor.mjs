@@ -52,15 +52,15 @@ require_once TEST_TMP . '/includes/intelligence.php';
 require_once TEST_TMP . '/includes/intelligence-monitor.php';
 foreach (['CURLOPT_USERNAME','CURLOPT_PASSWORD','CURLOPT_USE_SSL','CURLOPT_SSL_VERIFYPEER','CURLOPT_SSL_VERIFYHOST','CURLOPT_MAIL_FROM','CURLOPT_MAIL_RCPT','CURLOPT_UPLOAD','CURLOPT_INFILE','CURLOPT_INFILESIZE','CURLOPT_TIMEOUT','CURLOPT_CONNECTTIMEOUT','CURLUSESSL_ALL'] as $i => $n) if (!defined($n)) define($n, $i + 100);
 function curl_init($url) { return new stdClass(); }
-function curl_setopt_array($curl, $opts) { return true; }
+function curl_setopt_array($curl, $opts) { $payload = stream_get_contents($opts[CURLOPT_INFILE]); rewind($opts[CURLOPT_INFILE]); $parts = explode("\r\n\r\n", $payload, 2); $GLOBALS['bodies'][] = base64_decode($parts[1] ?? ''); return true; }
 function curl_exec($curl) { $GLOBALS['sends']++; return !$GLOBALS['fail']; }
 function curl_close($curl) {}
-$GLOBALS['sends'] = 0; $GLOBALS['fail'] = false;
+$GLOBALS['sends'] = 0; $GLOBALS['fail'] = false; $GLOBALS['bodies'] = [];
 $domain = 'test.example';
 intelligenceSaveWatches($domain, ['urgent']);
 monitorSetEnabled($domain, true);
 $state = monitorUpdate($domain, function ($s) { $s['since'] = time() - 100; return $s; });
-$make = function ($id) use ($domain) { return ['id'=>'cdr-'.$id, '_server'=>'nms1', 'call-start-datetime'=>gmdate('c', time()-40), 'call-disconnect-datetime'=>gmdate('c', time()-20), 'call-intelligence-job-id'=>'123', 'prefilled-transcription-api'=>'/ns-api/v2/domains/'.$domain.'/transcriptions?id=123&date=202611&callid='.$id]; };
+$make = function ($id) use ($domain) { return ['id'=>'cdr-'.$id, '_server'=>'nms1', 'call-direction'=>1, 'call-orig-from-user'=>'15550001111', 'call-orig-to-user'=>'18005550999', 'call-term-user'=>'222', 'call-start-datetime'=>gmdate('c', time()-40), 'call-disconnect-datetime'=>gmdate('c', time()-20), 'call-intelligence-job-id'=>'123', 'prefilled-transcription-api'=>'/ns-api/v2/domains/'.$domain.'/transcriptions?id=123&date=202611&callid='.$id]; };
 $counts = ['checked'=>0,'sent'=>0,'pending'=>0,'review'=>0,'unresolved'=>0,'missingTime'=>0];
 $client = new PbxClient('key');
 $call = $make('one');
@@ -76,11 +76,16 @@ monitorProcessCall($client, $domain, $make('three'), $state, $counts);
 $missing = $make('four'); unset($missing['call-intelligence-job-id']); $missing['call-disconnect-datetime'] = gmdate('c', time()-90000);
 $state['since'] = time()-100000;
 monitorProcessCall($client, $domain, $missing, $state, $counts);
-echo json_encode(['sends'=>$GLOBALS['sends'], 'counts'=>$counts, 'reviews'=>monitorReviews($domain)]);
+echo json_encode(['sends'=>$GLOBALS['sends'], 'counts'=>$counts, 'reviews'=>monitorReviews($domain), 'body'=>$GLOBALS['bodies'][0] ?? '']);
 `);
 const result = JSON.parse(output.trim());
 assert.equal(result.sends, 2, 'duplicate and report-checked calls send nothing; uncertain delivery is not retried');
 assert.equal(result.counts.sent, 1);
+assert.match(result.body, /Date: \d{4}-\d{2}-\d{2}/);
+assert.match(result.body, /Time: .*US\/Eastern/);
+assert.match(result.body, /Caller number: 15550001111/);
+assert.match(result.body, /Originally dialed: 18005550999/);
+assert.match(result.body, /Final destination: 222/);
 assert.equal(result.reviews.total, 2, JSON.stringify(result));
 assert.match(JSON.stringify(result.reviews), /uncertain/);
 assert.match(JSON.stringify(result.reviews), /unavailable after 24 hours/);

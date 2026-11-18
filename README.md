@@ -285,7 +285,14 @@ filtered pages, summaries and matching excerpts, plus report scope and coverage
 metadata. Exports are available during checking when filtered rows are available;
 the file name and report information identify partial results. Unavailable checks
 and incomplete cache coverage are also flagged. Treat
-these files as sensitive. Optional scheduled keyword email alerts are described below.
+these files as sensitive. Call rows, Excel exports, and both manual and scheduled
+emails show the call-start date and time in the domain reporting timezone, plus
+caller number, originally dialed number, and destination. These use the existing
+Calls report's From, Dialed and To mappings; the destination is the value on
+that CDR leg and may not represent the last hop of a transferred call. Missing
+fields are shown as Unknown. Some older trimmed caches or imported data may lack
+these fields and need a refresh or re-import to show them. Optional scheduled
+keyword email alerts are described below.
 
 The report retrieves one transcription per job using the authenticated PBX
 session. It takes the call ID and month from a valid CDR

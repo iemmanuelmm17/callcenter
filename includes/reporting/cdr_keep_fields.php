@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1494 names.
+ * 1495 names.
  */
 return [
     'aa',
@@ -685,6 +685,7 @@ return [
     'intel-page-size',
     'intel-pagination',
     'intel-partial-note',
+    'intel-party',
     'intel-quick-pill',
     'intel-quick-scroll',
     'intel-redesign-head',
