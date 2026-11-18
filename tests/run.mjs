@@ -55,6 +55,7 @@ const SUITES = {
     { name: 'PBX auth retry', cmd: ['node', 'tests/php/pbx-auth-retry.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'token refresh', cmd: ['node', 'tests/php/token-refresh.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'intelligence', cmd: ['node', 'tests/php/intelligence.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
+    { name: 'intel monitor', cmd: ['node', 'tests/php/intelligence-monitor.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'api matrix', cmd: ['node', 'tests/php/endpoints.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'url policy', cmd: ['node', 'tests/php/security.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'csv exports', cmd: ['node', 'tests/php/export.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },

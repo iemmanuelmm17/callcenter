@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require_once __DIR__ . '/../includes/reporting.php';
 require_once __DIR__ . '/../includes/intelligence.php';
+require_once __DIR__ . '/../includes/intelligence-monitor.php';
 requireMethod('POST');
 try {
     $user = currentUser();
@@ -10,6 +11,22 @@ try {
     if ($domain === '') jsonResponse(['error' => 'Missing domain.'], 422);
     $input = readJsonBody();
     $action = (string)($input['action'] ?? '');
+    if ($action === 'monitor_status') {
+        $state = monitorState($domain);
+        jsonResponse(['enabled' => !empty($state['enabled']), 'configured' => monitorReady(), 'lastRun' => $state['lastRun'] ?? null, 'reviews' => monitorReviews($domain)]);
+    }
+    if ($action === 'monitor_reviewed') {
+        if (!is_string($input['id'] ?? null)) throw new InvalidArgumentException('A review is required.');
+        monitorAcknowledge($domain, $input['id']);
+        auditView($user, ['domain' => $domain], 'intelligence-monitor-review');
+        jsonResponse(['reviews' => monitorReviews($domain)]);
+    }
+    if ($action === 'monitor_enable') {
+        if (!is_bool($input['enabled'] ?? null)) throw new InvalidArgumentException('An enabled setting is required.');
+        $state = monitorSetEnabled($domain, $input['enabled']);
+        auditView($user, ['domain' => $domain, 'enabled' => $input['enabled']], 'intelligence-monitor-settings');
+        jsonResponse(['enabled' => !empty($state['enabled']), 'configured' => monitorReady(), 'lastRun' => $state['lastRun'] ?? null, 'reviews' => monitorReviews($domain)]);
+    }
     if ($action === 'watches') {
         jsonResponse(['watches' => intelligenceWatches($domain)]);
     }
@@ -54,6 +71,7 @@ try {
                 }
                 continue;
             }
+            $ref['completedAt'] = (string)($call['call-disconnect-datetime'] ?? '');
             $key = $ref['id'] . '|' . $ref['callid'];
             if (isset($seen[$key])) continue;
             $seen[$key] = true;
@@ -67,7 +85,16 @@ try {
     if ($action === 'lookup') {
         $ref = intelligenceVerify((string)($input['reference'] ?? ''), $domain);
         $client = new PbxClient((string)($_SESSION['token'] ?? ''));
-        jsonResponse(intelligenceReadJob($client, $domain, $ref, intelligenceWatches($domain)));
+        setReportingTimezone(loadDomainSettings($domain)['timezone'] ?? null);
+        $job = intelligenceReadJob($client, $domain, $ref, intelligenceWatches($domain));
+        if ($job['status'] === 'finished') {
+            try { monitorMarkReport($domain, $ref); } catch (Throwable $e) {
+                appExceptionLog('Intelligence report check tracking', $e);
+                $job['status'] = 'partial';
+                $job['detail'] = 'Unable to record this report check for automatic alerts; review before relying on suppression.';
+            }
+        }
+        jsonResponse($job);
     }
     if ($action === 'send') {
         $recipients = $input['recipients'] ?? null;

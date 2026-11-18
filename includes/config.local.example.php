@@ -7,8 +7,8 @@ declare(strict_types=1);
  *
  * Everything here is optional: config.php defines a safe default for every
  * constant and only skips a definition when this file already made it, so you
- * can set one value without restating the others. Environment variables work
- * too and take effect when this file does not define the constant.
+ * can set one value without restating the others. Some constants also read
+ * environment variables; the SMTP and monitor constants below do not.
  */
 
 /* --- PBX endpoints ------------------------------------------------------- */
@@ -76,3 +76,10 @@ declare(strict_types=1);
 // define('INTELLIGENCE_SMTP_USERNAME', 'user@example.com');
 // define('INTELLIGENCE_SMTP_PASSWORD', 'set-on-server');
 // define('INTELLIGENCE_SMTP_FROM', 'callscope@example.com');
+
+/* Scheduled automatic alerts (global configuration, server-only).
+ * The key needs permission to read CDRs and transcriptions for every enabled
+ * domain. Never commit credentials. Office managers enable each domain in the
+ * Keyword Watch panel. Install the task described in README.md. */
+// define('INTELLIGENCE_MONITOR_API_KEY', 'set-on-server');
+// define('INTELLIGENCE_ALERT_RECIPIENTS', ['alerts@example.com']);

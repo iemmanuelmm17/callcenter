@@ -285,7 +285,7 @@ filtered pages, summaries and matching excerpts, plus report scope and coverage
 metadata. Exports are available during checking when filtered rows are available;
 the file name and report information identify partial results. Unavailable checks
 and incomplete cache coverage are also flagged. Treat
-these files as sensitive. No automatic email or background monitoring is performed.
+these files as sensitive. Optional scheduled keyword email alerts are described below.
 
 The report retrieves one transcription per job using the authenticated PBX
 session. It takes the call ID and month from a valid CDR
@@ -318,6 +318,77 @@ and a server-only call-reference signing key under `CACHE_DIR` (not transcript
 text); keep this directory persistent and shared between application workers, and
 configure the web server to deny HTTP
 access to cache and logs, or place them outside the web root.
+
+### Scheduled keyword alerts (Windows)
+
+Optional automatic alerts poll the PBX directly; there is no webhook subscription.
+Configure `INTELLIGENCE_SMTP_*`, `INTELLIGENCE_MONITOR_API_KEY`, and the global
+`INTELLIGENCE_ALERT_RECIPIENTS` array (1–10 addresses) in the server-only `includes/config.local.php`
+(see `includes/config.local.example.php`). Use a dedicated PBX API key with
+permission to read CDRs and transcriptions for each enabled domain. Every
+configured PBX server used by the worker must use HTTPS so the long-lived API
+key is not transmitted in plaintext. SMTP uses
+authenticated STARTTLS and verifies certificates. **Every address in the global
+list receives matching call details from every enabled domain**; restrict access
+to recipients and to the server configuration. Do not put keys or passwords in Git.
+
+An office manager saves watched phrases, then enables **Automatic keyword email
+alerts** in the report's Keyword Watch drawer for each domain. Enabling starts
+with calls completed after that point, not historical calls. Report checks made
+after enabling are recorded separately: a completed report check suppresses the
+automatic email for that call even if no email was sent. Earlier report checks
+were not stored and cannot be used to suppress alerts. Already checked calls
+are not automatically rechecked when watched phrases change. Re-enabling starts
+a new cutoff. The scheduler checks all calls in the domain, not the report's site or
+department filters. Disabling stops further work, although a message already in
+flight may still be delivered. Checks search the same current watched phrases in summary,
+topics and transcript segments; an automatic message contains the summary,
+topics and matching excerpts. Calls without finished intelligence and topics
+are revisited for up to 24 hours after completion, then flagged for review.
+If the scheduled task is stopped for more than 24 hours, affected calls are
+flagged instead of automatically emailed when the worker returns.
+
+Create a Windows Task Scheduler task with a repeating trigger at your preferred
+interval, **Run whether user is logged on or not**, and **Do not start a new
+instance**. Set the action to the full path of the same PHP CLI installation
+used by the application and pass the full path to `tools/intelligence-monitor.php`
+as its argument. For example (adjust both paths to your server):
+
+```text
+Program/script: C:\php\php.exe
+Add arguments:  C:\inetpub\wwwroot\callscope\tools\intelligence-monitor.php
+Start in:       C:\inetpub\wwwroot\callscope
+```
+
+Install the PHP cURL extension and give the task account read access to the app
+and server configuration, and read/write access to the **same persistent**
+`CACHE_DIR` and `LOG_DIR` as the web server. Deny HTTP access to those directories
+and `includes`, or place them outside the web root. Configure the task's own
+execution time limit to allow the scans to finish; a file lock prevents overlapping
+instances. The task maintains its checkpoint and re-reads recent CDRs directly,
+including two earlier start-date days for delayed CDRs. Very long calls starting
+more than two days before completion may not be discovered; failed or incomplete
+PBX page fetches do not advance the checkpoint. PBX limits, retries, API key
+permissions, the PBX's actual CDR/lookup fields and PHP capacity still affect
+coverage. The PBX lookup month must be resolvable via its prefilled link or
+`INTELLIGENCE_MONTH_TIMEZONE`; the browser-only month override is not used.
+
+The drawer shows the last scan and calls needing review. SMTP errors or a process
+crash during sending may be ambiguous; the worker does **not** resend those
+messages automatically. Verify delivery before marking a review handled. Missing
+lookup references and unfinished intelligence after 24 hours also require review.
+CDRs with no usable completion time cannot be confidently classified as new; the
+last scan reports their count, and those that started after enablement are flagged
+for review after 24 hours.
+Inspect the application logs for scan failures, and monitor the Windows task's
+last run/result: enabling the switch does not install or start the task. Mail
+acceptance by SMTP does not guarantee delivery. Monitor state and call-reference
+identifiers are retained under `CACHE_DIR/intelligence-monitor`; this grows with
+the number of checked calls. Monitor available disk space, and protect and back
+up this directory with the same care as other sensitive call metadata. Deleting
+it loses the checkpoint and deduplication history and can cause missed or
+repeated alerts. Live PBX, scheduler and SMTP behavior must be verified on the
+actual deployment.
 
 CDR caches created before this version may not contain the job ID or the
 prefilled transcription URL, because older versions trimmed these fields. They

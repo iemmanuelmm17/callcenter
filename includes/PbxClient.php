@@ -73,7 +73,8 @@ final class PbxClient
 
 
     public function __construct(
-        private string $token
+        private string $token,
+        private bool $serviceCredential = false
     ) {}
 
 
@@ -210,6 +211,7 @@ final class PbxClient
 
     private function bearerToken(): string
     {
+        if ($this->serviceCredential) return $this->token;
         if (
             function_exists('ensurePbxToken') &&
             !ensurePbxToken()
@@ -321,7 +323,7 @@ final class PbxClient
         while ($attempt < self::PAGE_ATTEMPTS) {
 
             $curl = $this->newCurl($server, $path, $query, $method, $body);
-            $sentToken = (string)($_SESSION['token'] ?? $this->token);
+            $sentToken = $this->serviceCredential ? $this->token : (string)($_SESSION['token'] ?? $this->token);
             $this->rateLimit($server);
             $raw = curl_exec($curl);
             $parsed = $this->decodeCurl($curl, $raw);
@@ -330,7 +332,7 @@ final class PbxClient
             if (
                 $parsed['status'] === 401 &&
                 $attempt === 0 &&
-                function_exists('refreshPbxToken') &&
+                !$this->serviceCredential && function_exists('refreshPbxToken') &&
                 refreshPbxToken($sentToken)
             ) {
                 appLog("PBX {$server} {$path}: HTTP 401 - refreshed or reused token and retrying");
@@ -389,7 +391,7 @@ final class PbxClient
             $this->rateLimit($job['server']);
             $curl = $this->newCurl($job['server'], $job['path'], $job['query']);
             $handles[$job['id']] = $curl;
-            $sentTokens[$job['id']] = (string)($_SESSION['token'] ?? $this->token);
+            $sentTokens[$job['id']] = $this->serviceCredential ? $this->token : (string)($_SESSION['token'] ?? $this->token);
             curl_multi_add_handle($mh, $curl);
         }
 
@@ -602,7 +604,7 @@ final class PbxClient
                         $parsed = $batch[$id] ?? ['ok' => false, 'transient' => true, 'status' => 0, 'error' => 'missing', 'data' => null];
 
                         if (!$parsed['ok'] && (int)($parsed['status'] ?? 0) === 401) {
-                            if (!$refreshAttempted && function_exists('refreshPbxToken')) {
+                            if (!$this->serviceCredential && !$refreshAttempted && function_exists('refreshPbxToken')) {
                                 $refreshAttempted = true;
                                 $refreshSucceeded = refreshPbxToken((string)($parsed['sentToken'] ?? ''));
                             }
@@ -1186,7 +1188,7 @@ final class PbxClient
                     ];
                     if (!empty($parsed['ok'])) continue;
                     if ((int)($parsed['status'] ?? 0) === 401) {
-                        if (!$refreshAttempted && function_exists('refreshPbxToken')) {
+                        if (!$this->serviceCredential && !$refreshAttempted && function_exists('refreshPbxToken')) {
                             $refreshAttempted = true;
                             $refreshSucceeded = refreshPbxToken((string)($parsed['sentToken'] ?? ''));
                         }

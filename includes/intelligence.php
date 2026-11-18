@@ -255,14 +255,15 @@ function intelligenceSmtpConfigured(): bool {
     return $host !== '' && preg_match('/^[a-zA-Z0-9.-]+$/', $host) === 1 && $port > 0 && $port <= 65535 && $user !== '' && $password !== '' && filter_var($from, FILTER_VALIDATE_EMAIL) !== false;
 }
 /** SMTP via libcurl; STARTTLS and certificate verification are mandatory. */
-function intelligenceSendMail(array $recipients, string $body): void {
+function intelligenceSendMail(array $recipients, string $body, string $subject = 'CallScope selected calls'): void {
+    if ($subject === '' || preg_match('/[\r\n]/', $subject)) throw new InvalidArgumentException('Invalid email subject.');
     $host = defined('INTELLIGENCE_SMTP_HOST') ? (string)INTELLIGENCE_SMTP_HOST : '';
     $port = defined('INTELLIGENCE_SMTP_PORT') ? (int)INTELLIGENCE_SMTP_PORT : 0;
     $username = defined('INTELLIGENCE_SMTP_USERNAME') ? (string)INTELLIGENCE_SMTP_USERNAME : '';
     $password = defined('INTELLIGENCE_SMTP_PASSWORD') ? (string)INTELLIGENCE_SMTP_PASSWORD : '';
     $from = defined('INTELLIGENCE_SMTP_FROM') ? (string)INTELLIGENCE_SMTP_FROM : '';
     if (!intelligenceSmtpConfigured()) throw new RuntimeException('SMTP is not configured.');
-    $payload = 'From: ' . $from . "\r\nTo: " . implode(', ', $recipients) . "\r\nSubject: CallScope selected calls\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($body), 76, "\r\n");
+    $payload = 'From: ' . $from . "\r\nTo: " . implode(', ', $recipients) . "\r\nSubject: " . $subject . "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($body), 76, "\r\n");
     $stream = fopen('php://temp', 'w+');
     if (!$stream) throw new RuntimeException('Unable to prepare email.');
     fwrite($stream, $payload); rewind($stream);
