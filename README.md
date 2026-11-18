@@ -270,6 +270,9 @@ calls with topics, offers 30/50/100 rows per page and highlights keyword matches
 red. The topic browser shows the ten most common topics by default; search all
 topics or expand the list and sort by call count or name. CDR topics are used
 while lookups are pending or unavailable, with those rows marked incomplete.
+Separate watched phrases with commas or line breaks. To retain a comma within
+one phrase, enclose it in double quotes; double a quote within a quoted phrase.
+Existing comma-containing phrases are quoted automatically in the editor.
 Phrase matching is case-insensitive substring matching across topics, summaries
 and transcript segments. Tags are recalculated against the current watch list;
 removing a phrase removes its tag on the next scan. Topic counts include CDR topics and retrieved jobs; they are provisional
@@ -323,5 +326,8 @@ or expire those CDR cache days (and any imported node JSONL source) before relyi
 on historical coverage; the default closed-day cache lifetime is one year. The
 report also flags an incomplete date cache. A large range may require many PBX
 requests. The selected month is warmed in batches and lookups run with at most
-four concurrent requests. Progress and partial results are displayed; counts
+eight concurrent requests per browser. The PBX's shared per-server rate limit
+(default five requests per second) and retry rules still apply, so throughput
+depends on server latency, PHP worker capacity and other users. Progress and
+partial results are displayed; counts
 and pages may change until checking finishes.

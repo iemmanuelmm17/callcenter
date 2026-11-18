@@ -2,11 +2,13 @@ import { api } from '../lib/api.js';
 import { IntelligenceOverlay } from './intelligence-overlay.js';
 import { downloadIntelligenceWorkbook } from '../lib/intelligence-export.js';
 import { intelligenceMonthRange } from '../lib/intelligence-month.js';
+import { parseWatchedPhrases, formatWatchedPhrases } from '../lib/intelligence-watch.js';
 import { recordRangeLabel } from '../lib/pagination.js';
 import { APP_TZ, date, formatCallDate, formatCallTime, parseCallInstant } from '../lib/time.js';
 import { h, useEffect, useState } from '../lib/react.js';
 
-const LOOKUP_CONCURRENCY = 4;
+const LOOKUP_CONCURRENCY = 8;
+const PROGRESS_UPDATE_MS = 500;
 
 /* Render watched phrases as text nodes and marks, never as HTML. */
 function markedSummary(text, phrases) {
@@ -81,7 +83,7 @@ function IntelligenceDashboard({ filters }) {
 
     useEffect(() => {
         let active = true;
-        api('intelligence', { action: 'watches' }).then(r => { if (active) { setWatches(r.watches.join('\n')); setSavedWatches(r.watches); } }).catch(e => { if (active) setError(e.message); });
+        api('intelligence', { action: 'watches' }).then(r => { if (active) { setWatches(formatWatchedPhrases(r.watches)); setSavedWatches(r.watches); } }).catch(e => { if (active) setError(e.message); });
         return () => { active = false; };
     }, []);
 
@@ -129,7 +131,7 @@ function IntelligenceDashboard({ filters }) {
                 });
                 setRows(items.slice());
                 const candidates = items.map((item, i) => item.reference ? i : -1).filter(i => i >= 0);
-                let cursor = 0, completed = 0;
+                let cursor = 0, completed = 0, lastUpdate = 0;
                 setSync({ stage: 'jobs', done: 0, total: candidates.length });
                 setProgress('Checked 0 of ' + candidates.length + ' transcription jobs…');
                 const worker = async () => {
@@ -145,7 +147,9 @@ function IntelligenceDashboard({ filters }) {
                             items[i] = { ...items[i], ...result };
                         } catch (e) { items[i] = { ...items[i], status: 'error', detail: e.message }; }
                         completed++;
-                        if (active && (completed === 1 || completed % 10 === 0 || completed === candidates.length)) {
+                        const now = Date.now();
+                        if (active && (completed === 1 || now - lastUpdate >= PROGRESS_UPDATE_MS || completed === candidates.length)) {
+                            lastUpdate = now;
                             setRows(items.slice());
                             setSync({ stage: 'jobs', done: completed, total: candidates.length });
                             setProgress('Checked ' + completed + ' of ' + candidates.length + ' transcription jobs…');
@@ -160,10 +164,10 @@ function IntelligenceDashboard({ filters }) {
     }, [scopeKey, selectedMonth, reportToday, appliedOverride, refresh]);
 
     const saveWatches = async () => {
-        setBusy(true); setError(''); setMessage('');
+        setBusy(true); setError(''); setMessage(''); setMessage('');
         try {
-            const r = await api('intelligence', { action: 'save_watches', watches: watches.split(/\r?\n/) });
-            setWatches(r.watches.join('\n')); setSavedWatches(r.watches); setKeywordFilter(''); setMessage('Watched phrases saved. Rechecking calls.'); setRefresh(x => x + 1);
+            const r = await api('intelligence', { action: 'save_watches', watches: parseWatchedPhrases(watches) });
+            setWatches(formatWatchedPhrases(r.watches)); setSavedWatches(r.watches); setKeywordFilter(''); setMessage('Watched phrases saved. Rechecking calls.'); setRefresh(x => x + 1);
         } catch (e) { setError(e.message); } finally { setBusy(false); }
     };
     const send = async () => {
@@ -279,7 +283,7 @@ function IntelligenceDashboard({ filters }) {
                     h('input', { type: 'month', value: selectedMonth, max: reportToday.slice(0, 7), onChange: e => setSelectedMonth(e.target.value), 'aria-label': 'Report month' }),
                     h('button', { type: 'button', className: 'intel-icon-btn', disabled: !!progress, onClick: () => setRefresh(x => x + 1), title: progress ? 'Wait for current checking to finish' : 'Reload report', 'aria-label': 'Reload' }, h('i', { className: 'fa-solid fa-rotate-right', 'aria-hidden': 'true' }))))),
         cacheIncomplete ? h('p', { role: 'alert', className: 'intel-warning' }, 'The CDR month is not fully loaded; this report is incomplete.') : null,
-        error ? h('p', { role: 'alert', className: 'intel-warning' }, error) : null,
+        error && !watchOpen ? h('p', { role: 'alert', className: 'intel-warning' }, error) : null,
         message ? h('p', { role: 'status', className: 'intel-notice' }, message) : null,
         h('section', { className: 'intel-filter-card', 'aria-label': 'Topic and call filters' },
             h('div', { className: 'intel-ribbon-row' },
@@ -327,7 +331,9 @@ function IntelligenceDashboard({ filters }) {
             h('button', { type: 'button', className: 'intel-export-btn', disabled: busy, onClick: send }, 'Email (' + selected.length.toLocaleString() + ')'),
             emailProgress ? h('span', { role: 'status', className: 'intel-muted' }, emailProgress) : null) : null,
         watchOpen ? h(IntelligenceOverlay, { title: 'Keyword Watch', drawer: true, onClose: () => setWatchOpen(false) },
-            h('p', { className: 'intel-drawer-copy' }, 'One phrase per line. Case-insensitive substring search across transcript, summary and topics.'),
+            error ? h('p', { role: 'alert', className: 'intel-warning' }, error) : null,
+            message.startsWith('Watched phrases saved') ? h('p', { role: 'status', className: 'intel-notice' }, message) : null,
+            h('p', { className: 'intel-drawer-copy' }, 'Separate phrases with commas or new lines. To keep a comma in a phrase, enclose it in double quotes. Matching ignores case and searches transcripts, summaries and topics.'),
             h('label', { className: 'intel-drawer-label' }, 'Watched phrases', h('textarea', { value: watches, onChange: e => setWatches(e.target.value), rows: 8, 'aria-label': 'Watched phrases', className: 'intelligence-input intel-watch-input' })),
             h('button', { type: 'button', className: 'intel-export-btn', disabled: busy, onClick: saveWatches }, 'Save watched phrases'),
             h('details', { className: 'intel-override' }, h('summary', null, 'PBX lookup month override'),

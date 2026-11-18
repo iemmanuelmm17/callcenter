@@ -3723,7 +3723,7 @@ html[data-theme="light"] .intel-table tr.is-matched { background: #fff3f4; }
 .intel-selection-badge span { font-size: 10px; color: var(--color-slate-400); }
 .intel-email-label input { font-size: 11px; width: 180px; max-width: 100%; }
 .intel-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
-.intel-overlay { position: fixed; z-index: 100; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; background: #020617b3; }
+.intel-overlay { position: fixed; z-index: 2147483647; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; background: #020617b3; }
 .intel-overlay.is-drawer { justify-content: flex-end; padding: 0; }
 .intel-overlay-panel { width: min(650px, 100%); max-height: min(80vh, 800px); overflow: auto; border: 1px solid var(--color-slate-700); border-radius: 10px; background: var(--color-slate-900); color: var(--color-slate-200); box-shadow: 0 20px 60px #0009; }
 .is-drawer .intel-overlay-panel { width: min(448px, 100%); height: 100%; max-height: none; border-radius: 0; }

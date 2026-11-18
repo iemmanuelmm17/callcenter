@@ -1,11 +1,20 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { Simulate } from 'react-dom/test-utils';
 import { unzipSync, strFromU8 } from 'fflate';
 import { createHarness, FIXTURES } from './harness.mjs';
+import { parseWatchedPhrases, formatWatchedPhrases } from '../../assets/js/src/lib/intelligence-watch.js';
 import { intelligenceMonthRange } from '../../assets/js/src/lib/intelligence-month.js';
 assert.deepEqual(intelligenceMonthRange('2024-02', '2026-11-17'), { start: '2024-02-01', end: '2024-02-29' });
 assert.deepEqual(intelligenceMonthRange('2026-11', '2026-11-17'), { start: '2026-11-01', end: '2026-11-17' });
 assert.equal(intelligenceMonthRange('2026-12', '2026-11-17'), null);
+assert.deepEqual(parseWatchedPhrases(' red, blue\n  green , ,  '), ['red', 'blue', 'green']);
+assert.deepEqual(parseWatchedPhrases('reboot, "billing, urgent"\n"said ""hello"""'), ['reboot', 'billing, urgent', 'said "hello"']);
+const existingPhrases = ['plain', 'keep, this', 'say "hello"', '"quoted, words"'];
+assert.deepEqual(parseWatchedPhrases(formatWatchedPhrases(existingPhrases)), existingPhrases, 'existing literal commas and quotes round-trip');
+assert.throws(() => parseWatchedPhrases('"unfinished'), /Close the quoted/);
+assert.throws(() => parseWatchedPhrases('"one"two'), /comma or new line/);
+assert.throws(() => parseWatchedPhrases('"a\nb"'), /stay on one line/);
 const operations = [];
 let activeLookups = 0, maxLookups = 0, sendAttempts = 0, failSendAt = 0;
 const calls = Array.from({ length: 115 }, (_, i) => ({ reference: 'ref-' + String(i).padStart(3, '0'), emailReference: 'email-' + String(i).padStart(3, '0'), callId: 'call-' + String(i).padStart(3, '0'), startedAt: '2024-02-29T12:00:00Z', month: '202402' }));
@@ -38,7 +47,7 @@ assert.equal(firstList.start.slice(-3), '-01');
 assert.equal(firstList.start.slice(0, 7), firstList.end.slice(0, 7));
 assert.notEqual(firstList.start, '2025-01-01');
 assert.equal(firstList.hours, 'all');
-assert.ok(maxLookups > 1 && maxLookups <= 4);
+assert.ok(maxLookups > 4 && maxLookups <= 8);
 assert.ok(requested.some(r => r.endpoint === 'cache_job' && JSON.parse(r.body).action === 'warm'));
 assert.match(root().textContent, /Managers only/);
 assert.match(root().textContent, /Checked 115 \/ 115/);
@@ -71,6 +80,11 @@ const watchButton = [...document.querySelectorAll('button')].find(el => el.textC
 watchButton.focus();
 await click(watchButton);
 assert.ok(document.querySelector('[role="dialog"][aria-label="Keyword Watch"]'));
+const watchOverlay = document.querySelector('[aria-label="Keyword Watch"]').closest('.intel-overlay');
+assert.ok(watchOverlay.parentElement === document.body, 'drawer portal is outside the filter stacking context');
+const css = readFileSync(new URL('../../assets/css/src/custom.css', import.meta.url), 'utf8');
+assert.match(css, /\.intel-overlay\s*\{[^}]*z-index:\s*2147483647/s);
+assert.match(css, /\.filters-bar\s*\{[^}]*z-index:\s*40000/s);
 assert.equal(document.querySelector('[aria-label="Watched phrases"]').value, 'reboot\nbilling');
 assert.ok(document.querySelector('[aria-label="Keyword Watch"] summary').textContent.includes('PBX lookup month override'));
 await press(document.activeElement, 'Escape');
@@ -202,13 +216,13 @@ assert.equal(document.querySelector('.intel-bulk-dock'), null);
 assert.ok(operations.filter(x => x.action === 'send').every(x => x.references.length <= 10));
 
 // During checking, allow a marked partial export and preserve email selection.
-let finishLookup;
+let finishLookup, submittedWatches;
 FIXTURES.cache_job = () => ({ complete: true, ready: 29, total: 29 });
 FIXTURES.intelligence = body => {
   if (body.action === 'list') return { calls: [{ reference: 'slow', emailReference: 'email-slow', callId: 'slow-call', startedAt: '2024-02-29T12:00:00Z', topicsHint: ['device'], matchesHint: [] }], missing: 0, cacheStatus: { complete: true } };
   if (body.action === 'lookup') return new Promise(resolve => { finishLookup = resolve; });
   if (body.action === 'send') return { sent: true };
-  if (body.action === 'save_watches') return { watches: body.watches.filter(Boolean) };
+  if (body.action === 'save_watches') { submittedWatches = body.watches; return { watches: body.watches.filter(Boolean) }; }
   return { watches: ['reboot'] };
 };
 await click(document.querySelector('[aria-label="Reload"]'));
@@ -231,14 +245,21 @@ assert.equal(document.querySelector('.intel-bulk-dock'), null);
 // Saving watched phrases updates the badge and highlights literal metacharacters safely.
 await click([...document.querySelectorAll('button')].find(el => el.textContent.includes('Keyword Watch')));
 const watched = document.querySelector('[aria-label="Watched phrases"]');
-await act(async () => { Simulate.change(watched, { target: { value: 'reboot\nbilling\n[oops' } }); });
+await act(async () => { Simulate.change(watched, { target: { value: '"unclosed' } }); });
+await click(byText('button', 'Save watched phrases'));
+assert.match(document.querySelector('[aria-label="Keyword Watch"] [role="alert"]').textContent, /Close the quoted watched phrase/);
+assert.equal(submittedWatches, undefined, 'invalid quotes must not be sent to the server');
+await act(async () => { Simulate.change(watched, { target: { value: 'reboot, billing\n"[oops,stuff"' } }); });
 await click(byText('button', 'Save watched phrases'));
 await flush(20);
+assert.deepEqual(submittedWatches, ['reboot', 'billing', '[oops,stuff']);
 assert.match([...document.querySelectorAll('button')].find(el => el.textContent.includes('Keyword Watch')).textContent, /3/);
+assert.match(watched.value, /"\[oops,stuff"/, 'literal comma is preserved when saved phrases are redisplayed');
+assert.match(document.querySelector('[aria-label="Keyword Watch"] [role="status"]').textContent, /Watched phrases saved/);
 await click(document.querySelector('[aria-label="Close Keyword Watch"]'));
-await act(async () => { finishLookup({ status: 'finished', topics: ['device'], summary: 'Literal [OOPS found', matches: [] }); });
+await act(async () => { finishLookup({ status: 'finished', topics: ['device'], summary: 'Literal [OOPS,stuff found', matches: [] }); });
 await flush(20);
-assert.equal(row('slow-call').querySelector('mark').textContent, '[OOPS');
+assert.equal(row('slow-call').querySelector('mark').textContent, '[OOPS,stuff');
 
 // A failed or incomplete cache is never hidden, and no-match filters explain a disabled export.
 let warmAttempts = 0;
@@ -262,5 +283,34 @@ await click(document.querySelector('[aria-label="Reload"]'));
 await flush(30);
 assert.match(root().textContent, /Could not fully prepare call history: network unavailable/);
 assert.ok(row('pending-call'));
+
+// Progress is driven by elapsed time, not by waiting for a ten-job boundary.
+const realNow = window.Date.now;
+let clock = 10000, started = 0;
+window.Date.now = () => clock;
+const pendingJobs = new Map();
+FIXTURES.cache_job = () => ({ complete: true, ready: 29, total: 29 });
+FIXTURES.intelligence = body => {
+  if (body.action === 'list') return { calls: Array.from({ length: 12 }, (_, i) => ({ reference: 'job-' + i, emailReference: 'email-' + i, callId: 'progress-' + i, startedAt: '2024-02-29T12:00:00Z', topicsHint: ['device'] })), missing: 0, cacheStatus: { complete: true } };
+  if (body.action === 'lookup') { started++; return new Promise(resolve => { pendingJobs.set(body.reference, resolve); }); }
+  return { watches: [] };
+};
+await click(document.querySelector('[aria-label="Reload"]'));
+await flush(20);
+assert.equal(started, 8, 'up to eight lookups run concurrently');
+const resolveJob = key => { const resolve = pendingJobs.get(key); pendingJobs.delete(key); resolve({ status: 'finished', topics: ['device'], summary: 'ready', matches: [] }); };
+await act(async () => { resolveJob('job-0'); });
+await flush(10);
+assert.match(root().textContent, /Checked 1 \/ 12/);
+clock += 600;
+await act(async () => { resolveJob('job-1'); });
+await flush(10);
+assert.match(root().textContent, /Checked 2 \/ 12/, 'progress updates without waiting for ten completions');
+for (let i = 0; i < 4 && pendingJobs.size; i++) {
+  await act(async () => { for (const key of [...pendingJobs.keys()]) resolveJob(key); });
+  await flush(10);
+}
+window.Date.now = realNow;
+assert.match(root().textContent, /Checked 12 \/ 12/);
 assert.equal(errors.length, 0, errors.join('\n'));
 console.log('INTELLIGENCE UI OK — compact dashboard, filters, batch email and partial Excel');

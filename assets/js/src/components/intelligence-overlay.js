@@ -23,10 +23,10 @@ function IntelligenceOverlay({ title, onClose, drawer, children }) {
         document.addEventListener('keydown', handle);
         return () => { document.removeEventListener('keydown', handle); if (previous && previous.isConnected) previous.focus(); };
     }, []);
-    return h('div', { className: 'intel-overlay cursor-pointer' + (drawer ? ' is-drawer' : ''), onClick: onClose, role: 'presentation' },
+    return ReactDOM.createPortal(h('div', { className: 'intel-overlay cursor-pointer' + (drawer ? ' is-drawer' : ''), onClick: onClose, role: 'presentation' },
         h('div', { className: 'intel-overlay-panel cursor-default', role: 'dialog', 'aria-modal': 'true', 'aria-label': title, tabIndex: -1, ref: panel, onClick: e => e.stopPropagation() },
             h('div', { className: 'intel-overlay-head' }, h('h2', null, title),
                 h('button', { type: 'button', className: 'intel-icon-btn', 'aria-label': 'Close ' + title, onClick: onClose }, '×')),
-            h('div', { className: 'intel-overlay-body' }, children)));
+            h('div', { className: 'intel-overlay-body' }, children))), document.body);
 }
 export { IntelligenceOverlay };
