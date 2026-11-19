@@ -315,7 +315,8 @@ final class PbxClient
         string $path,
         array $query = [],
         string $method = 'GET',
-        ?array $body = null
+        ?array $body = null,
+        bool $retryTransient = true
     ): array {
 
         $attempt = 0;
@@ -343,6 +344,7 @@ final class PbxClient
             if (
                 !$parsed['ok'] &&
                 $parsed['transient'] &&
+                $retryTransient &&
                 $attempt < self::PAGE_ATTEMPTS - 1
             ) {
                 $wait = $attempt + 1;
@@ -529,7 +531,8 @@ final class PbxClient
         string $end,
         int $startOffset = 0,
         array $existing = [],
-        ?callable $onPage = null
+        ?callable $onPage = null,
+        int $concurrency = self::MULTI_CONCURRENCY
     ): array {
 
         $pageSize = self::pageSize();
@@ -570,7 +573,7 @@ final class PbxClient
 
                     $jobs = [];
                     $launch = $offset;
-                    for ($i = 0; $i < self::MULTI_CONCURRENCY; $i++) {
+                    for ($i = 0; $i < max(1, min(self::MULTI_CONCURRENCY, $concurrency)); $i++) {
                         if ($stopAt !== null && $launch >= $stopAt) {
                             break;
                         }
@@ -1395,6 +1398,22 @@ final class PbxClient
         }
 
         return [];
+    }
+
+    /** Create only once: a timeout may mean the PBX accepted the subscription. */
+    public function createCdrSubscription(string $server, string $domain, string $url): array
+    {
+        if (!$this->serviceCredential || !isset(PBX_SERVERS[$server])) throw new RuntimeException('Invalid subscription credentials or server');
+        return $this->request($server, '/ns-api/v2/subscriptions', [], 'POST', [
+            'model' => 'cdr', 'post-url' => $url, 'domain' => $domain,
+            'user' => '*', 'subscription-geo-support' => 'yes',
+        ], false);
+    }
+
+    public function readCdrSubscription(string $server, string $id): array
+    {
+        if (!$this->serviceCredential || !isset(PBX_SERVERS[$server]) || $id === '' || strlen($id) > 256) throw new RuntimeException('Invalid subscription credentials or ID');
+        return $this->request($server, '/ns-api/v2/subscriptions/' . rawurlencode($id));
     }
 
     /** Fetch one call-intelligence job from the CDR's PBX server. */

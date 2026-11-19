@@ -48,7 +48,8 @@ function IntelligenceRow({ row, checked, busy, onSelect, topic, onTopic, onCopy,
             row.summary && row.summary.length > 80 ? h('button', { type: 'button', className: 'intel-text-btn', 'aria-expanded': expanded, onClick: () => setExpanded(x => !x) }, expanded ? 'Show less' : 'Show full summary') : null),
         h('td', null, row.matches?.length ? h('div', { className: 'intel-match-pills' }, ...row.matches.map(m => h('span', { key: m.keyword, className: 'intel-match-label' }, 'Matched: ' + m.keyword))) : h('span', { className: 'intel-muted' }, row.status === 'finished' ? 'No match' : 'Not fully checked'),
             row.status !== 'finished' ? h('div', { className: 'intel-muted' }, 'Incomplete check · ' + row.status + (row.detail ? ': ' + row.detail : '')) : null,
-            row.matches?.length ? h('details', { className: 'intel-excerpts' }, h('summary', null, 'Matching excerpts'), ...row.matches.map(m => h('p', { key: m.keyword }, m.keyword + ' (' + m.source + '): ' + m.excerpt))) : null));
+            row.matches?.length ? h('details', { className: 'intel-excerpts' }, h('summary', null, 'Matching excerpts'), ...row.matches.map(m => h('p', { key: m.keyword }, m.keyword + ' (' + m.source + '): ' + m.excerpt))) : null),
+        h('td', { className: 'intel-party' }, row.emailStatus ? h('div', null, h('strong', null, 'SMTP accepted (' + row.emailStatus.kind + ')'), h('div', null, new Intl.DateTimeFormat(undefined, { timeZone: APP_TZ, dateStyle: 'medium', timeStyle: 'short' }).format(new Date(row.emailStatus.time * 1000))), h('div', null, (row.emailStatus.recipients || []).join(', '))) : h('span', { className: 'intel-muted' }, 'No email recorded')));
 }
 
 function IntelligenceDashboard({ filters }) {
@@ -135,6 +136,12 @@ function IntelligenceDashboard({ filters }) {
                     return bt - at || String(a.reference || a.rowKey).localeCompare(String(b.reference || b.rowKey));
                 });
                 setRows(items.slice());
+                // Lookups may finish while a selected-call email is being sent.
+                // Preserve its newer status when publishing lookup progress.
+                const publish = () => setRows(current => {
+                    const statuses = new Map(current.map(row => [row.reference || row.rowKey, row.emailStatus]));
+                    return items.map(row => ({ ...row, emailStatus: statuses.get(row.reference || row.rowKey) || row.emailStatus }));
+                });
                 const candidates = items.map((item, i) => item.reference ? i : -1).filter(i => i >= 0);
                 let cursor = 0, completed = 0, lastUpdate = 0;
                 setSync({ stage: 'jobs', done: 0, total: candidates.length });
@@ -155,7 +162,7 @@ function IntelligenceDashboard({ filters }) {
                         const now = Date.now();
                         if (active && (completed === 1 || now - lastUpdate >= PROGRESS_UPDATE_MS || completed === candidates.length)) {
                             lastUpdate = now;
-                            setRows(items.slice());
+                            publish();
                             setSync({ stage: 'jobs', done: completed, total: candidates.length });
                             setProgress('Checked ' + completed + ' of ' + candidates.length + ' transcription jobs…');
                         }
@@ -164,7 +171,7 @@ function IntelligenceDashboard({ filters }) {
                 const configuredWorkers = Number(list.intelligenceWorkers);
                 const concurrency = Number.isInteger(configuredWorkers) && configuredWorkers >= 1 && configuredWorkers <= 32 ? configuredWorkers : DEFAULT_LOOKUP_CONCURRENCY;
                 await Promise.all(Array.from({ length: Math.min(concurrency, candidates.length) }, worker));
-                if (active) { setRows(items.slice()); setSync({ stage: 'complete', done: completed, total: candidates.length }); setProgress(''); }
+                if (active) { publish(); setSync({ stage: 'complete', done: completed, total: candidates.length }); setProgress(''); }
             } catch (e) { if (active) { setError(e.message); setSync({ stage: 'error', done: 0, total: 0 }); setProgress(''); } }
         })();
         return () => { active = false; };
@@ -207,9 +214,10 @@ function IntelligenceDashboard({ filters }) {
             for (let i = 0; i < toSend.length; i += 10) {
                 const batch = toSend.slice(i, i + 10);
                 setEmailProgress('Sending email ' + (Math.floor(i / 10) + 1) + ' of ' + totalBatches + '…');
-                await api('intelligence', { action: 'send', references: batch.map(row => row.emailReference), recipients: recipientsList });
+                const response = await api('intelligence', { action: 'send', references: batch.map(row => row.emailReference), recipients: recipientsList });
                 sent += batch.length;
                 const sentKeys = new Set(batch.map(row => row.reference || row.rowKey));
+                if (response.emailStatus) setRows(current => current.map(row => sentKeys.has(row.reference || row.rowKey) ? { ...row, emailStatus: response.emailStatus } : row));
                 setSelected(current => current.filter(key => !sentKeys.has(key)));
             }
             setMessage('SMTP accepted ' + totalBatches + ' email' + (totalBatches === 1 ? '' : 's') + ' for ' + sent + ' calls.');
@@ -337,7 +345,7 @@ function IntelligenceDashboard({ filters }) {
                             checked: visible.length > 0 && visibleSelected === visible.length,
                             ref: el => { if (el) el.indeterminate = visibleSelected > 0 && visibleSelected < visible.length; },
                             onChange: e => e.target.checked ? selectAllFiltered() : unselectFiltered() })),
-                        ...['Date / time / PBX reference', 'Caller number', 'Originally dialed', 'Final destination', 'Topics', 'Summary', 'Watch matches'].map(x => h('th', { key: x, scope: 'col' }, x)))),
+                        ...['Date / time / PBX reference', 'Caller number', 'Originally dialed', 'Final destination', 'Topics', 'Summary', 'Watch matches', 'Email status'].map(x => h('th', { key: x, scope: 'col' }, x)))),
                     h('tbody', null, ...pageRows.map(row => h(IntelligenceRow, { key: row.reference || row.rowKey, row, checked: selectedKeys.has(row.reference || row.rowKey), busy, onSelect: toggleRow, topic, onTopic: changeTopic, onCopy: copyReference, watches: savedWatches }))))),
             !pageRows.length ? h('p', { className: 'intel-empty' }, progress ? 'Checking calls for topics…' : (topic || matchFilter !== 'all' || keywordFilter ? 'No calls match the current filters.' : 'No calls with topics in this month.')) : null,
             h('div', { className: 'intel-pagination', 'aria-label': 'Call table pagination' },
@@ -359,14 +367,15 @@ function IntelligenceDashboard({ filters }) {
             h('label', { className: 'intel-drawer-label' }, 'Watched phrases', h('textarea', { value: watches, onChange: e => setWatches(e.target.value), rows: 8, 'aria-label': 'Watched phrases', className: 'intelligence-input intel-watch-input' })),
             h('button', { type: 'button', className: 'intel-export-btn', disabled: busy, onClick: saveWatches }, 'Save watched phrases'),
             h('details', { className: 'intel-override' }, h('summary', null, 'Automatic keyword email alerts'),
-                h('p', { className: 'intel-drawer-copy' }, 'A Windows scheduled task checks new completed calls for these phrases and emails the server-configured global recipients. Completed report checks are skipped, even if no alert was sent. Unready jobs are retried for 24 hours.'),
+                h('p', { className: 'intel-drawer-copy' }, 'CDR webhooks queue new calls for a Windows scheduled task, which checks these phrases and emails the server-configured global recipients. Missed webhooks are not recovered. Completed report checks are skipped, even if no alert was sent. Unready jobs are retried for 24 hours.'),
                 monitor?.unavailable ? h('p', { className: 'intel-warning' }, 'Unable to load automatic alert status.') : null,
+                monitor?.subscriptionPending ? h('p', { className: 'intel-warning' }, 'Subscription setup needs server administrator review before retrying.') : null,
                 monitor && !monitor.unavailable ? h('p', { className: 'intel-drawer-copy' }, 'Status: ' + (monitor.enabled ? 'Enabled' : 'Disabled') + (monitor.configured ? '' : ' · server configuration incomplete')) : null,
                 monitor?.reviews?.total ? h('div', { className: 'intel-warning', role: 'status' }, h('strong', null, monitor.reviews.total + ' calls need review'), ...monitor.reviews.items.map((item, i) => h('p', { key: item.id || i }, (item.callid || 'Unknown call') + ': ' + item.reason, ' ', h('button', { type: 'button', className: 'intel-text-btn', disabled: busy, onClick: () => acknowledgeReview(item.id) }, 'Mark reviewed'))), monitor.reviews.total > monitor.reviews.items.length ? h('p', null, 'Additional reviews are retained on the server.') : null) : null,
                 monitor?.enabled && !monitor.lastRun ? h('p', { className: 'intel-drawer-copy' }, 'No scheduled scan has completed yet. Verify the Windows task is running.') : null,
-                monitor?.lastRun ? h('p', { className: 'intel-drawer-copy' }, monitor.lastRun.error || ('Last scan: ' + new Date(monitor.lastRun.time * 1000).toLocaleString() + ' · sent ' + (monitor.lastRun.counts?.sent || 0) + ' · pending ' + (monitor.lastRun.counts?.pending || 0) + ' · CDRs without completion time ' + (monitor.lastRun.counts?.missingTime || 0))) : null,
+                monitor?.lastRun ? h('p', { className: 'intel-drawer-copy' }, monitor.lastRun.error || ('Last scan: ' + new Date(monitor.lastRun.time * 1000).toLocaleString() + ' · sent ' + (monitor.lastRun.counts?.sent || 0) + ' · pending ' + (monitor.lastRun.counts?.pending || 0) + '')) : null,
                 message.startsWith('Automatic alerts') ? h('p', { role: 'status', className: 'intel-notice' }, message) : null,
-                monitor && !monitor.unavailable ? h('button', { type: 'button', className: 'intel-action-btn', disabled: busy || (!monitor.enabled && !monitor.configured), onClick: toggleMonitor }, monitor.enabled ? 'Disable automatic alerts' : 'Enable automatic alerts') : null),
+                monitor && !monitor.unavailable ? h('button', { type: 'button', className: 'intel-action-btn', disabled: busy || monitor.subscriptionPending || (!monitor.enabled && !monitor.configured), onClick: toggleMonitor }, monitor.enabled ? 'Disable automatic alerts' : 'Enable automatic alerts') : null),
             h('details', { className: 'intel-override' }, h('summary', null, 'PBX lookup month override'),
                 h('p', { className: 'intel-drawer-copy' }, 'Optional YYYYMM used for every lookup; leave blank to use the PBX link or server configuration. This does not change the report month.'),
                 h('label', { className: 'intel-drawer-label' }, 'Override', h('input', { value: overrideMonth, onChange: e => setOverrideMonth(e.target.value), placeholder: 'YYYYMM', maxLength: 6, className: 'intelligence-input' })),

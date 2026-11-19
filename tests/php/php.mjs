@@ -142,6 +142,8 @@ final class PbxClient
     }
     public function cradle(string $origCallId, string $termCallId, string $start10, string $end10): array { return (array)$this->canned('cradle', []); }
     public function recording(string $domain, string $ext, string $callId): array { return (array)$this->canned('recording', []); }
+    public function createCdrSubscription(string $server, string $domain, string $url): array { return (array)$this->canned('createCdrSubscription', ['id' => 'subscription-' . $domain, 'domain' => $domain, 'model' => 'cdr', 'post-url' => $url, 'user' => '*']); }
+    public function readCdrSubscription(string $server, string $id): array { return (array)$this->canned('readCdrSubscription', ['id' => $id, 'domain' => substr($id, 13), 'model' => 'cdr', 'post-url' => INTELLIGENCE_WEBHOOK_URL, 'user' => '*']); }
     public function transcription(string $server, string $domain, string $jobId, string $month, array $identifiers): array {
         $this->record('transcription-args:' . json_encode(['server'=>$server, 'domain'=>$domain, 'id'=>$jobId, 'month'=>$month, 'identifiers'=>$identifiers]));
         return (array)$this->canned('transcription', []);
@@ -153,7 +155,8 @@ final class PbxClient
         string $end,
         int $startOffset = 0,
         array $existing = [],
-        ?callable $onPage = null
+        ?callable $onPage = null,
+        int $concurrency = 4
     ): array {
         /*
          * fetchCdrs.json          → one complete page (the default)

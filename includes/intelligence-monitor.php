@@ -57,6 +57,20 @@ function monitorRecipients(): array {
     }
     return array_values($out);
 }
+function monitorWebhookConfig(): bool {
+    $url = defined('INTELLIGENCE_WEBHOOK_URL') && is_string(INTELLIGENCE_WEBHOOK_URL) ? INTELLIGENCE_WEBHOOK_URL : '';
+    $parts = parse_url($url);
+    if (!is_array($parts) || strtolower((string)($parts['scheme'] ?? '')) !== 'https' || empty($parts['host'])
+        || isset($parts['user']) || isset($parts['pass']) || isset($parts['query']) || isset($parts['fragment'])) return false;
+    if (!defined('INTELLIGENCE_WEBHOOK_ALLOWED_IPS') || !is_array(INTELLIGENCE_WEBHOOK_ALLOWED_IPS) || !INTELLIGENCE_WEBHOOK_ALLOWED_IPS) return false;
+    foreach (INTELLIGENCE_WEBHOOK_ALLOWED_IPS as $ip) if (!is_string($ip) || !filter_var($ip, FILTER_VALIDATE_IP)) return false;
+    return monitorSubscriptionServer() !== '';
+}
+function monitorSubscriptionServer(): string {
+    $key = defined('INTELLIGENCE_MONITOR_PBX_SERVER') ? trim((string)INTELLIGENCE_MONITOR_PBX_SERVER) : '';
+    if ($key === '' && count(PBX_SERVERS) === 1) $key = (string)array_key_first(PBX_SERVERS);
+    return isset(PBX_SERVERS[$key]) ? $key : '';
+}
 function monitorReady(): bool {
     if (!intelligenceSmtpConfigured() || monitorRecipients() === []
         || !defined('INTELLIGENCE_MONITOR_API_KEY') || !is_string(INTELLIGENCE_MONITOR_API_KEY)
@@ -71,21 +85,66 @@ function monitorReady(): bool {
             || isset($parts['query']) || isset($parts['fragment'])) return false;
         $configured = true;
     }
-    return $configured;
+    return $configured && monitorWebhookConfig();
+}
+function monitorValidateSubscription(array $result, string $domain, ?string $expectedId = null): string {
+    $id = $result['id'] ?? null;
+    if (!is_string($id) || $id === '' || strlen($id) > 256 || preg_match('/[\x00-\x20\x7f]/', $id)
+        || ($expectedId !== null && !hash_equals($expectedId, $id)) || ($result['domain'] ?? null) !== $domain
+        || ($result['model'] ?? null) !== 'cdr' || ($result['post-url'] ?? null) !== INTELLIGENCE_WEBHOOK_URL
+        || ($result['user'] ?? null) !== '*') throw new RuntimeException('PBX subscription response invalid; administrator review required');
+    return $id;
 }
 function monitorSetEnabled(string $domain, bool $enabled): array {
-    if ($enabled && !monitorReady()) throw new InvalidArgumentException('Configure SMTP, alert recipients, the PBX API key and HTTPS PBX servers first.');
+    if ($enabled && !monitorReady()) throw new InvalidArgumentException('Configure SMTP, recipients, PBX key, webhook URL, allowed IPs and subscription server first.');
     if ($enabled && intelligenceWatches($domain) === []) throw new InvalidArgumentException('Save at least one watched phrase before enabling alerts.');
-    return monitorUpdate($domain, static function (array $state) use ($domain, $enabled): array {
-        if ($enabled && empty($state['enabled'])) {
-            $state['since'] = time();
-            $state['generation'] = bin2hex(random_bytes(16));
-            $state['cursor'] = '';
-            $state['lastRun'] = null;
-        }
-        $state['enabled'] = $enabled;
-        $state['domain'] = $domain;
+    if (!$enabled) return monitorUpdate($domain, static function (array $state): array { $state['enabled'] = false; unset($state['activationToken']); return $state; });
+    $token = bin2hex(random_bytes(16));
+    $state = monitorUpdate($domain, static function (array $state) use ($token): array {
+        if (!empty($state['subscriptionPending'])) throw new InvalidArgumentException('Subscription creation needs administrator review before retrying.');
+        if (empty($state['subscriptionId'])) $state['subscriptionPending'] = true;
+        $state['activationToken'] = $token;
         return $state;
+    });
+    if (!empty($state['subscriptionPending'])) {
+        // Do not retry a POST automatically: timeout/409 may mean it was created.
+        $client = new PbxClient(trim(INTELLIGENCE_MONITOR_API_KEY), true);
+        $result = $client->createCdrSubscription(monitorSubscriptionServer(), $domain, INTELLIGENCE_WEBHOOK_URL);
+        $id = monitorValidateSubscription($result, $domain);
+        $state = monitorUpdate($domain, static function (array $state) use ($id): array {
+            $state['subscriptionId'] = $id; unset($state['subscriptionPending']); return $state;
+        });
+    } else {
+        // Re-enabling must not silently use a deleted or reconfigured subscription.
+        $client = new PbxClient(trim(INTELLIGENCE_MONITOR_API_KEY), true);
+        $existing = (string)$state['subscriptionId'];
+        monitorValidateSubscription($client->readCdrSubscription(monitorSubscriptionServer(), $existing), $domain, $existing);
+    }
+    return monitorUpdate($domain, static function (array $state) use ($domain, $token): array {
+        if (($state['activationToken'] ?? '') !== $token) return $state;
+        unset($state['activationToken']);
+        if (empty($state['enabled']) || empty($state['generation'])) {
+            $state['since'] = time(); $state['generation'] = bin2hex(random_bytes(16)); $state['lastRun'] = null;
+        }
+        $state['enabled'] = true; $state['domain'] = $domain; return $state;
+    });
+}
+/** Latest SMTP acceptance recorded for a CDR. Absence is not proof of no email. */
+function monitorEmailStatus(string $domain, string $id): ?array {
+    if ($id === '') return null;
+    $key = hash('sha256', $domain . "\0" . $id);
+    $data = monitorReadFile(monitorDirectory() . '/mail-' . monitorDomainId($domain) . '-' . $key . '.json');
+    return $data ?: null;
+}
+function monitorRecordEmail(string $domain, string $id, array $recipients, string $kind, ?int $when = null): void {
+    if ($id === '') return;
+    $key = hash('sha256', $domain . "\0" . $id);
+    monitorLocked('mail-' . monitorDomainId($domain) . '-' . substr($key, 0, 2), static function () use ($domain, $key, $recipients, $kind, $when): void {
+        $file = monitorDirectory() . '/mail-' . monitorDomainId($domain) . '-' . $key . '.json';
+        $now = $when ?? time();
+        $old = monitorReadFile($file);
+        if ((int)($old['time'] ?? 0) > $now) return;
+        monitorWriteFile($file, ['time' => $now, 'recipients' => array_values($recipients), 'kind' => $kind]);
     });
 }
 function monitorJobKey(array $ref): string { return hash('sha256', (string)$ref['id'] . '|' . (string)$ref['callid']); }
@@ -197,8 +256,11 @@ function monitorProcessCall(PbxClient $client, string $domain, array $call, arra
         foreach ($result['matches'] as $match) $body .= $match['keyword'] . ' (' . $match['source'] . '): ' . $match['excerpt'] . "\n";
         try {
             intelligenceSendMail(monitorRecipients(), $body, 'CallScope keyword alert');
+            $accepted = time();
+            try { monitorRecordEmail($domain, (string)($call['id'] ?? ''), monitorRecipients(), 'automatic', $accepted); }
+            catch (Throwable $e) { appExceptionLog('Intelligence email status', $e); }
             $counts['sent']++;
-            return ['status' => 'sent', 'time' => time()];
+            return ['status' => 'sent', 'time' => $accepted];
         } catch (Throwable $e) {
             $counts['review']++;
             return ['status' => 'review', 'time' => time(), 'callid' => $ref['callid'], 'reason' => 'SMTP delivery uncertain; verify before retrying'];

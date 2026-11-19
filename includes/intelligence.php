@@ -115,6 +115,8 @@ function intelligenceEmailReference(?array $ref, string $callId, string $field, 
         $value = is_string($details[$key] ?? null) ? $details[$key] : '';
         $data[$key] = substr((string)preg_replace('/[\x00-\x1f\x7f]/', '', $value), 0, 256);
     }
+    $cdrId = is_string($details['cdrId'] ?? null) ? $details['cdrId'] : '';
+    $data['cdrId'] = strlen($cdrId) <= 512 && !preg_match('/[\x00-\x1f\x7f]/', $cdrId) ? $cdrId : '';
     $token = intelligenceSign($data, $domain);
     if (strlen($token) > 16384) throw new RuntimeException('Call reference is too large.');
     return $token;
@@ -129,6 +131,8 @@ function intelligenceVerifyEmail(string $token, string $domain): array {
         if (!array_key_exists($key, $data)) $data[$key] = '';
         if (!is_string($data[$key]) || strlen($data[$key]) > 256 || preg_match('/[\x00-\x1f\x7f]/', $data[$key])) throw new InvalidArgumentException('Invalid call reference.');
     }
+    if (!isset($data['cdrId'])) $data['cdrId'] = ''; // old open tabs
+    if (!is_string($data['cdrId']) || strlen($data['cdrId']) > 512 || preg_match('/[\x00-\x1f\x7f]/', $data['cdrId'])) throw new InvalidArgumentException('Invalid call reference.');
     $ref = $data['ref'] ?? null;
     if ($ref !== null && (!is_array($ref) || !isset($ref['server'], $ref['id'], $ref['month'], $ref['callid'], $ref['identifiers']) || !is_array($ref['identifiers']))) throw new InvalidArgumentException('Invalid call reference.');
     return $data;

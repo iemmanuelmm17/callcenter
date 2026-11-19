@@ -3695,7 +3695,7 @@ html[data-theme="light"] .intel-table tr.is-matched { background: #ffe3e3; }
 .intel-results-head div { display: flex; align-items: baseline; gap: 9px; }
 .intel-results-head h2 { margin: 0; color: var(--color-slate-100); font-size: 13px; font-weight: 700; }
 .intel-results .intel-table-wrap { border: 0; border-top: 1px solid var(--color-slate-700); border-radius: 0; max-height: max(260px, calc(100vh - 245px)); }
-.intel-table { table-layout: fixed; min-width: 1370px; }
+.intel-table { table-layout: fixed; min-width: 1590px; }
 .intel-table th { padding: 8px 10px; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
 .intel-table td { padding: 9px 10px; }
 .intel-table th:first-child { width: 44px; }
@@ -3704,6 +3704,7 @@ html[data-theme="light"] .intel-table tr.is-matched { background: #ffe3e3; }
 .intel-table th:nth-child(6) { width: 215px; }
 .intel-table th:nth-child(7) { width: 320px; }
 .intel-table th:nth-child(8) { width: 240px; }
+.intel-table th:nth-child(9) { width: 220px; }
 .intel-party { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .intel-table tr.is-matched { background: color-mix(in srgb, #e11d48 6%, transparent); }
 .intel-table tr.is-matched td:first-child { box-shadow: inset 4px 0 0 #f43f5e; }

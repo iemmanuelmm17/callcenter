@@ -13,7 +13,7 @@ try {
     $action = (string)($input['action'] ?? '');
     if ($action === 'monitor_status') {
         $state = monitorState($domain);
-        jsonResponse(['enabled' => !empty($state['enabled']), 'configured' => monitorReady(), 'lastRun' => $state['lastRun'] ?? null, 'reviews' => monitorReviews($domain)]);
+        jsonResponse(['enabled' => !empty($state['enabled']) && !empty($state['subscriptionId']), 'subscriptionPending' => !empty($state['subscriptionPending']), 'configured' => monitorReady(), 'lastRun' => $state['lastRun'] ?? null, 'reviews' => monitorReviews($domain)]);
     }
     if ($action === 'monitor_reviewed') {
         if (!is_string($input['id'] ?? null)) throw new InvalidArgumentException('A review is required.');
@@ -25,7 +25,7 @@ try {
         if (!is_bool($input['enabled'] ?? null)) throw new InvalidArgumentException('An enabled setting is required.');
         $state = monitorSetEnabled($domain, $input['enabled']);
         auditView($user, ['domain' => $domain, 'enabled' => $input['enabled']], 'intelligence-monitor-settings');
-        jsonResponse(['enabled' => !empty($state['enabled']), 'configured' => monitorReady(), 'lastRun' => $state['lastRun'] ?? null, 'reviews' => monitorReviews($domain)]);
+        jsonResponse(['enabled' => !empty($state['enabled']) && !empty($state['subscriptionId']), 'subscriptionPending' => !empty($state['subscriptionPending']), 'configured' => monitorReady(), 'lastRun' => $state['lastRun'] ?? null, 'reviews' => monitorReviews($domain)]);
     }
     if ($action === 'watches') {
         jsonResponse(['watches' => intelligenceWatches($domain)]);
@@ -48,6 +48,9 @@ try {
         $watches = intelligenceWatches($domain);
         foreach ($calls as $index => $call) {
             $parties = intelligencePartyDetails($call);
+            $cdrId = is_string($call['id'] ?? null) ? $call['id'] : '';
+            $parties['cdrId'] = $cdrId;
+            $emailStatus = monitorEmailStatus($domain, $cdrId);
             $topicsHint = intelligenceCdrTopics($call);
             $matchesHint = $topicsHint ? intelligenceMatches(['call-intelligence-topics-top' => $topicsHint], $watches) : [];
             $reason = null;
@@ -68,7 +71,7 @@ try {
                     $emailRef = intelligenceEmailReference(null, $display, $field, (string)($call['call-start-datetime'] ?? ''), $topicsHint, (string)$reason, $domain, $parties);
                     $rows[] = ['rowKey' => 'cdr-' . hash('sha256', cdrCacheKey($call, $index)), 'reference' => null, 'emailReference' => $emailRef,
                         'callId' => $display, 'callIdField' => $field, 'startedAt' => (string)($call['call-start-datetime'] ?? ''),
-                        'callerNumber' => $parties['callerNumber'], 'dialedNumber' => $parties['dialedNumber'], 'destinationNumber' => $parties['destinationNumber'],
+                        'emailStatus' => $emailStatus, 'callerNumber' => $parties['callerNumber'], 'dialedNumber' => $parties['dialedNumber'], 'destinationNumber' => $parties['destinationNumber'],
                         'topicsHint' => $topicsHint, 'matchesHint' => $matchesHint, 'status' => 'unavailable', 'detail' => 'Transcription lookup unavailable (' . $reason . ')'];
                 }
                 continue;
@@ -80,7 +83,7 @@ try {
             $emailRef = intelligenceEmailReference($ref, $ref['callid'], $ref['displayField'], (string)($call['call-start-datetime'] ?? ''), $topicsHint, '', $domain, $parties);
             $rows[] = ['reference' => intelligenceSign($ref, $domain), 'emailReference' => $emailRef, 'callId' => $ref['callid'], 'callIdField' => $ref['displayField'],
                 'startedAt' => (string)($call['call-start-datetime'] ?? ''), 'month' => $ref['month'],
-                'callerNumber' => $parties['callerNumber'], 'dialedNumber' => $parties['dialedNumber'], 'destinationNumber' => $parties['destinationNumber'], 'topicsHint' => $topicsHint, 'matchesHint' => $matchesHint];
+                'emailStatus' => $emailStatus, 'callerNumber' => $parties['callerNumber'], 'dialedNumber' => $parties['dialedNumber'], 'destinationNumber' => $parties['destinationNumber'], 'topicsHint' => $topicsHint, 'matchesHint' => $matchesHint];
         }
         auditView($user, ['start' => $filters['start'], 'end' => $filters['end']], 'intelligence-report');
         jsonResponse(['calls' => $rows, 'intelligenceWorkers' => loadDomainSettings($domain)['intelligenceWorkers'], 'missing' => $missing, 'missingReasons' => $missingReasons, 'hours' => $filters['hours'], 'cacheStatus' => cdrRangeCacheStatus($user, $filters['start'], $filters['end']), 'timezone' => reportingTimezoneName()]);
@@ -121,8 +124,10 @@ try {
         setReportingTimezone(loadDomainSettings($domain)['timezone'] ?? null);
         $body = intelligenceEmailBody($calls, $client, $domain, $watches);
         intelligenceSendMail(array_keys($addresses), $body);
+        $accepted = time();
+        foreach ($calls as $call) monitorRecordEmail($domain, $call['cdrId'], array_keys($addresses), 'manual', $accepted);
         auditView($user, ['domain' => $domain, 'calls' => count($calls), 'recipients' => count($addresses)], 'intelligence-email');
-        jsonResponse(['sent' => true]);
+        jsonResponse(['sent' => true, 'emailStatus' => ['time' => $accepted, 'recipients' => array_keys($addresses), 'kind' => 'manual']]);
     }
     throw new InvalidArgumentException('Unknown action.');
 } catch (InvalidArgumentException $e) {

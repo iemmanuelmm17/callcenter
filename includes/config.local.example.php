@@ -83,3 +83,10 @@ declare(strict_types=1);
  * Keyword Watch panel. Install the task described in README.md. */
 // define('INTELLIGENCE_MONITOR_API_KEY', 'set-on-server');
 // define('INTELLIGENCE_ALERT_RECIPIENTS', ['alerts@example.com']);
+
+/* Per-domain CDR event subscription. The HTTPS URL must be reachable by PBX.
+ * Allowlist compares REMOTE_ADDR directly, never untrusted forwarding headers.
+ * When multiple PBX servers are configured, select the subscription API server. */
+// define('INTELLIGENCE_WEBHOOK_URL', 'https://callscope.example.com/api/intelligence-webhook.php');
+// define('INTELLIGENCE_WEBHOOK_ALLOWED_IPS', ['64.113.255.88', '64.113.255.89']);
+// define('INTELLIGENCE_MONITOR_PBX_SERVER', 'nms1');

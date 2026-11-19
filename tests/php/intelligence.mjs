@@ -35,6 +35,7 @@ await h.seedPbx('fetchCdrs', [{
 { id: 'cdr5', _server: 'nms1', 'call-intelligence-job-id': 55, 'call-id': 'other', 'call-start-datetime': '2026-11-16T10:04:00Z[US/Eastern]' },
 { id: 'cdr6', _server: 'nms1', 'call-direction': 0, 'call-orig-user': '0100', 'call-orig-to-user': '5554444', 'call-intelligence-job-id': 330696339, 'call-start-datetime': '2026-11-16T14:27:13+00:00',
   'prefilled-transcription-api': '/ns-api/v2/domains/test.example/transcriptions?id=330696339&amp;date=202611&amp;orig_callid=orig%40pbx&amp;term_callid=term%40pbx&amp;by_callid=through%40pbx&amp;ignored=unsafe' }]);
+await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; monitorRecordEmail('test.example', 'cdr1', ['mail@example.com'], 'manual', 123456);`);
 const listing = await req('list', { start: '2026-11-16', end: '2026-11-16', hours: 'all' });
 assert.equal(listing.status, 200, JSON.stringify(listing));
 assert.equal(listing.body.calls.length, 3, JSON.stringify(listing.body));
@@ -52,6 +53,9 @@ assert.deepEqual(listing.body.missingReasons, { jobId: 1, server: 1, callId: 1, 
 assert.equal(listing.body.calls[0].callId, 'abc@pbx');
 assert.deepEqual([listing.body.calls[0].callerNumber, listing.body.calls[0].dialedNumber, listing.body.calls[0].destinationNumber], ['18005550101', '18005550999', '2400']);
 assert.equal(listing.body.calls[0].month, '202611');
+assert.deepEqual(listing.body.calls[0].emailStatus, {time: 123456, recipients: ['mail@example.com'], kind: 'manual'});
+const signedCdr = await h.script(`session_id('test-session-123'); require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; echo json_encode(intelligenceVerifyEmail(${JSON.stringify(listing.body.calls[0].emailReference)}, 'test.example')['cdrId']);`);
+assert.equal(JSON.parse(signedCdr), 'cdr1');
 const reference = listing.body.calls[0].reference;
 await h.seedPbx('transcription', {
   'call-intelligence-job-id': 78920299, 'call-id': 'abc@pbx', 'call-intelligence-processing-status': 'finished',

@@ -36,7 +36,7 @@ FIXTURES.intelligence = body => {
     };
     return Promise.resolve(result).finally(() => { activeLookups--; });
   }
-  if (body.action === 'send') { sendAttempts++; if (sendAttempts === failSendAt) throw new Error('mail failure'); return { sent: true }; }
+  if (body.action === 'send') { sendAttempts++; if (sendAttempts === failSendAt) throw new Error('mail failure'); return { sent: true, emailStatus: { time: 1709251200, recipients: body.recipients, kind: 'manual' } }; }
   if (body.action === 'save_watches') return { watches: body.watches.filter(Boolean) };
   return {};
 };
@@ -86,8 +86,8 @@ assert.equal(document.querySelector('[aria-label="Scrollable calls table"]').get
 assert.equal(row('call-000').querySelector('mark').textContent, 'REBOOT');
 assert.match(row('call-000').textContent, /2024-02-29/);
 assert.match(row('call-000').textContent, /7:00 AM/);
-assert.deepEqual([...row('call-000').querySelectorAll('.intel-party')].map(el => el.textContent), ['0015550100', '18005550100', '201']);
-assert.deepEqual([...row('call-unavailable').querySelectorAll('.intel-party')].map(el => el.textContent), ['Unknown', 'Unknown', 'Unknown']);
+assert.deepEqual([...row('call-000').querySelectorAll('.intel-party')].map(el => el.textContent), ['0015550100', '18005550100', '201', 'No email recorded']);
+assert.deepEqual([...row('call-unavailable').querySelectorAll('.intel-party')].map(el => el.textContent), ['Unknown', 'Unknown', 'Unknown', 'No email recorded']);
 assert.equal([...row('call-000').querySelector('.intel-topic-list').children].filter(el => el.tagName === 'BUTTON').length, 5);
 assert.match(row('call-000').querySelector('.intel-more-topics summary').textContent, /\+2 more/);
 assert.equal(row('call-000').querySelector('.intel-ref-pill').getAttribute('title'), 'call-000');
@@ -180,6 +180,8 @@ const send = operations.find(x => x.action === 'send');
 assert.deepEqual(send.references.sort(), ['email-000', 'email-085']);
 assert.deepEqual(send.recipients, ['manager@example.com']);
 assert.match(root().textContent, /SMTP accepted 1 email for 2 calls/);
+assert.match(row('call-000').textContent, /SMTP accepted \(manual\)/);
+assert.match(row('call-000').textContent, /manager@example.com/);
 assert.equal(document.querySelector('.intel-bulk-dock'), null);
 
 const month = document.querySelector('[aria-label="Report month"]');
