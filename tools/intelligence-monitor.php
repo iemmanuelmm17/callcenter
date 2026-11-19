@@ -19,8 +19,26 @@ try {
             $domain = (string)($stored['domain'] ?? '');
             if ($domain === '' || basename($path) !== basename(monitorStateFile($domain))) continue;
             $state = monitorState($domain);
-            if (empty($state['enabled']) || empty($state['subscriptionId'])) continue;
+            if (empty($state['enabled'])) continue;
             if (empty($state['since']) || empty($state['generation'])) throw new RuntimeException('Invalid monitor state');
+            setReportingTimezone(loadDomainSettings($domain)['timezone'] ?? null);
+            $counts = ['checked' => 0, 'sent' => 0, 'pending' => 0, 'review' => 0, 'unresolved' => 0, 'missingTime' => 0];
+            $now = time();
+            $scan = $client->fetchCdrs($domain, gmdate('Y-m-d\\TH:i:s\\Z', $now - monitorLookbackMinutes() * 60), gmdate('Y-m-d\\TH:i:s\\Z', $now), 0, [], null, 1);
+            $discovered = [];
+            foreach ($scan['records'] as $call) {
+                if (!is_array($call) || (isset($call['domain']) && (string)$call['domain'] !== $domain)) continue;
+                $id = $call['id'] ?? null;
+                $start = parseEasternDateTime((string)($call['call-start-datetime'] ?? ''));
+                $end = parseEasternDateTime((string)($call['call-disconnect-datetime'] ?? ''));
+                if (!is_string($id) || $id === '' || strlen($id) > 512 || preg_match('/[\x00-\x1f\x7f]/', $id) || !$start || !$end
+                    || $start->getTimestamp() <= 0 || $end->getTimestamp() < $start->getTimestamp()) { $counts['missingTime']++; continue; }
+                if ($end->getTimestamp() > $now || $end->getTimestamp() < (int)$state['since']) continue;
+                monitorQueueCdr($domain, $id, $start->getTimestamp(), $end->getTimestamp(), $state);
+                $discovered[$id] = $call;
+            }
+            // Keep CDRs from partial pages, but report failure and do not claim a complete scan.
+            if (empty($scan['complete'])) throw new RuntimeException('PBX returned an incomplete discovery window');
             if (monitorRecipients($state) === []) {
                 monitorUpdate($domain, static function (array $current) use ($state): array {
                     if (($current['generation'] ?? null) === ($state['generation'] ?? null) && monitorRecipients($current) === []) $current['lastRun'] = ['time' => time(), 'error' => 'Paused: save alert recipients for this domain.'];
@@ -30,8 +48,6 @@ try {
                 continue;
             }
             if (!intelligenceWatches($domain)) throw new RuntimeException('No watched phrases; monitoring paused');
-            setReportingTimezone(loadDomainSettings($domain)['timezone'] ?? null);
-            $counts = ['checked' => 0, 'sent' => 0, 'pending' => 0, 'review' => 0, 'unresolved' => 0, 'missingTime' => 0];
             foreach (monitorQueueDue($domain, $state) as $bucket => $items) {
                 $live = monitorState($domain);
                 if (empty($live['enabled']) || ($live['generation'] ?? null) !== ($state['generation'] ?? null) || monitorRecipients($live) === []) break;
@@ -44,12 +60,21 @@ try {
                     monitorQueueFinish($domain, $item, 'review'); $counts['review']++; unset($items[$id]);
                 }
                 if (!$items) continue;
-                // Coalesce queued CDRs into five-minute call-start windows. No
-                // report cache and no historical reconciliation scans are used.
-                $batch = $client->fetchCdrs($domain, gmdate('Y-m-d\\TH:i:s\\Z', (int)$bucket), gmdate('Y-m-d\\TH:i:s\\Z', (int)$bucket + 299), 0, [], null, 1);
-                if (empty($batch['complete'])) throw new RuntimeException('PBX returned an incomplete CDR window');
+                // Reuse the current scan where possible; older pending calls
+                // are grouped into bounded call-start windows for fresh CDRs.
+                $records = [];
+                foreach ($items as $id => $item) if (isset($discovered[$id])) $records[$id] = $discovered[$id];
+                if (count($records) < count($items)) {
+                    $batch = $client->fetchCdrs($domain, gmdate('Y-m-d\\TH:i:s\\Z', (int)$bucket), gmdate('Y-m-d\\TH:i:s\\Z', (int)$bucket + 299), 0, [], null, 1);
+                    if (empty($batch['complete'])) throw new RuntimeException('PBX returned an incomplete retry window');
+                    foreach ($batch['records'] as $row) {
+                        if (!is_array($row)) continue;
+                        $rowId = (string)($row['id'] ?? '');
+                        if (isset($items[$rowId]) && (!isset($row['domain']) || (string)$row['domain'] === $domain)) $records[$rowId] = $row;
+                    }
+                }
                 $found = [];
-                foreach ($batch['records'] as $call) {
+                foreach ($records as $call) {
                     $id = (string)($call['id'] ?? '');
                     if (!isset($items[$id]) || isset($found[$id])) continue;
                     $found[$id] = true;
@@ -67,12 +92,12 @@ try {
                 if (($current['generation'] ?? null) === ($state['generation'] ?? null)) $current['lastRun'] = ['time' => time(), 'counts' => $counts, 'error' => ''];
                 return $current;
             });
-            echo "Completed monitor queue.\n";
+            echo "Completed monitor scan.\n";
         } catch (Throwable $e) {
             $failed = true;
             appExceptionLog('Intelligence monitor', $e);
-            if ($domain !== '') monitorUpdate($domain, static function (array $current): array { $current['lastRun'] = ['time' => time(), 'error' => 'Queue processing failed; check server logs.']; return $current; });
-            fwrite(STDERR, "Monitor queue failed; check server logs.\n");
+            if ($domain !== '') monitorUpdate($domain, static function (array $current): array { $current['lastRun'] = ['time' => time(), 'error' => 'CDR scan failed; check server logs.']; return $current; });
+            fwrite(STDERR, "Monitor scan failed; check server logs.\n");
         }
     }
 } finally { flock($lock, LOCK_UN); fclose($lock); }

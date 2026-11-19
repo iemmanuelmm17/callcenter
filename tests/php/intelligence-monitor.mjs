@@ -8,8 +8,6 @@ await h.boot();
 await h.write('includes/config.local.php', `<?php
   define('PBX_SERVERS', ['nms1' => 'https://pbx.example']);
   define('INTELLIGENCE_MONITOR_API_KEY', 'server-only-key');
-  define('INTELLIGENCE_WEBHOOK_URL', 'https://example.test/api/intelligence-webhook.php');
-  define('INTELLIGENCE_WEBHOOK_ALLOWED_IPS', ['64.113.255.88', '64.113.255.89']);
   define('INTELLIGENCE_ALERT_RECIPIENTS', ['alerts@example.com']);
   define('INTELLIGENCE_SMTP_HOST', 'smtp.example.com');
   define('INTELLIGENCE_SMTP_PORT', 587);
@@ -113,86 +111,109 @@ assert.match(JSON.stringify(result.reviews), /unavailable after 24 hours/);
 const review = result.reviews.items[0];
 assert.equal((await req('monitor_reviewed', { id: review.id }, { ...USERS.office_manager, domain: 'another.test' })).status, 422, 'review is tenant scoped');
 assert.equal((await req('monitor_reviewed', { id: review.id })).body.reviews.total, 1);
-// Exercise the real scheduled entry point with a queued webhook and unmatched job.
+// The old subscription and pending state must not be required or changed by enabling polling.
+const legacyState = JSON.parse(await h.script(`
+require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php';
+$s=monitorUpdate('test.example', function ($s) { $s['subscriptionId']='legacy-id'; $s['subscriptionPending']=true; return $s; });
+echo json_encode(monitorSetEnabled('test.example',true));
+`));
+assert.equal(legacyState.subscriptionId, 'legacy-id', 'existing PBX subscriptions are left alone');
+assert.equal(legacyState.subscriptionPending, undefined, 'old provisioning state no longer blocks the domain');
+assert.equal((await req('monitor_status')).body.enabled, true);
+const gone = await h.script(`require TEST_TMP . '/api/intelligence-webhook.php'; echo ':' . http_response_code();`);
+assert.match(gone, /no longer active.*:410/);
+const configured = await h.script(`define('INTELLIGENCE_CDR_LOOKBACK_MINUTES', 60); require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; echo json_encode(['minutes'=>monitorLookbackMinutes(),'ready'=>monitorReady()]);`);
+assert.deepEqual(JSON.parse(configured), {minutes:60, ready:true});
+const invalidConfig = await h.script(`define('INTELLIGENCE_CDR_LOOKBACK_MINUTES', 0); require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; echo json_encode(['minutes'=>monitorLookbackMinutes(),'ready'=>monitorReady()]);`);
+assert.deepEqual(JSON.parse(invalidConfig), {minutes:null, ready:false});
+
+// A polling scan discovers a CDR even when it has no job ID. No webhook needed.
+await req('monitor_enable', {enabled:false}, { ...USERS.office_manager, domain:'another.test' });
 await h.seedPbx('transcription', { 'call-intelligence-job-id': '123', 'call-intelligence-processing-status': 'finished', 'call-intelligence-summary-status': 'success', 'call-intelligence-summary': 'all good', 'call-intelligence-topics-top': ['billing'], 'call-intelligence-segments': [] });
-await h.seedPbx('fetchCdrs', [{ id: 'cdr-cron', _server: 'nms1', 'call-start-datetime': new Date(Date.now()-40000).toISOString(), 'call-disconnect-datetime': new Date(Date.now()-20000).toISOString(), 'call-intelligence-job-id': '123', 'prefilled-transcription-api': '/ns-api/v2/domains/test.example/transcriptions?id=123&date=202611&callid=cron' }]);
-await h.script(`
-require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php';
-$state = monitorUpdate('test.example', function ($s) { $s['since'] = time() - 1000; return $s; }); $e = ['domain'=>'test.example','cdr_id'=>'cdr-cron','time_start'=>time()-400,'time_release'=>time()-380];
-monitorWebhookEvents('64.113.255.88', 'subscription-test.example', [$e]);
-monitorWebhookEvents('64.113.255.88', 'subscription-test.example', [$e]);
-try { monitorWebhookEvents('192.0.2.1', 'subscription-test.example', [$e]); throw new Exception('bad ip accepted'); } catch (DomainException $ok) {}
-try { monitorWebhookEvents('64.113.255.88', 'bad', [$e]); throw new Exception('bad id accepted'); } catch (DomainException $ok) {}
-`);
+const discoveredCall = { id:'cdr-cron', domain:'test.example', _server:'nms1', 'call-start-datetime':new Date(Date.now()-400000).toISOString(), 'call-disconnect-datetime':new Date(Date.now()-380000).toISOString() };
+await h.seedPbx('fetchCdrs', [discoveredCall]);
+await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; monitorUpdate('test.example', function ($s) { $s['since']=time()-1000; return $s; });`);
 await h.write('tools/intelligence-monitor.php', readFileSync(path.join(ROOT, 'tools/intelligence-monitor.php'), 'utf8'));
 assert.equal((await req('monitor_recipients', {recipients:''})).body.paused, true);
-await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; monitorWebhookEvents('64.113.255.88','subscription-test.example', [['domain'=>'test.example','cdr_id'=>'paused-event','time_start'=>time()-420,'time_release'=>time()-390]]);`);
 await h.script(`require TEST_TMP . '/tools/intelligence-monitor.php';`);
+const windows = (await h.pbxCalls()).filter(x => typeof x === 'string' && x.startsWith('cdr-window:')).map(x => JSON.parse(x.slice('cdr-window:'.length)));
+assert.equal(windows.length, 1, 'one discovery request for the enabled domain');
+assert.equal(windows[0].domain, 'test.example');
+assert.equal(Date.parse(windows[0].end)-Date.parse(windows[0].start), 600000, 'default discovery window is 10 minutes');
+assert.equal(windows[0].concurrency, 1, 'avoid speculative extra pages');
+const originalConfig = await h.readInterpreterFile('includes/config.local.php');
+await h.write('includes/config.local.php', originalConfig + "\ndefine('INTELLIGENCE_CDR_LOOKBACK_MINUTES', 60);\n");
+await h.script(`@unlink(TEST_TMP . '/pbx-calls.jsonl'); require TEST_TMP . '/tools/intelligence-monitor.php';`);
+const customWindows = (await h.pbxCalls()).filter(x => typeof x === 'string' && x.startsWith('cdr-window:')).map(x => JSON.parse(x.slice('cdr-window:'.length)));
+assert.equal(Date.parse(customWindows[0].end)-Date.parse(customWindows[0].start), 3600000, 'configured discovery window is applied');
+await h.write('includes/config.local.php', originalConfig);
 const paused = await req('monitor_status');
 assert.equal(paused.body.paused, true);
 assert.match(paused.body.lastRun.error, /Paused/);
-const queuedWhilePaused = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; echo json_encode(monitorReadFile(monitorQueueFile('test.example','cdr-cron')));`));
-assert.equal(queuedWhilePaused.status, 'pending', 'missing recipients never consume pending CDRs');
-const eventDuringPause = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; echo json_encode(monitorReadFile(monitorQueueFile('test.example','paused-event')));`));
-assert.equal(eventDuringPause.status, 'pending', 'webhooks continue to queue during pause');
+const queued = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; echo json_encode(monitorReadFile(monitorQueueFile('test.example','cdr-cron')));`));
+assert.equal(queued.status, 'pending', 'discovery continues while recipients are paused');
 assert.equal((await req('monitor_recipients', {recipients:'ALERTS@example.com; second@example.com'})).body.paused, false);
+await h.script(`require TEST_TMP . '/tools/intelligence-monitor.php';`);
+const retry = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; echo json_encode(monitorReadFile(monitorQueueFile('test.example','cdr-cron')));`));
+assert.equal(retry.status, 'pending');
+assert.equal(retry.attempts, 1, 'missing job is retried');
+await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; $f=monitorQueueFile('test.example','cdr-cron'); $s=monitorReadFile($f); $s['next']=time()-1; monitorWriteFile($f,$s);`);
+await h.seedPbx('fetchCdrs', [{ ...discoveredCall, 'call-intelligence-job-id':'123', 'prefilled-transcription-api':'/ns-api/v2/domains/test.example/transcriptions?id=123&date=202611&callid=cron' }]);
 await h.script(`require TEST_TMP . '/tools/intelligence-monitor.php';`);
 const after = await req('monitor_status');
 assert.equal(after.body.lastRun.counts.checked, 1, JSON.stringify(after.body));
 assert.equal(after.body.lastRun.error, '');
-const queueChecks = JSON.parse(await h.script(`
-require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php';
-$d='test.example'; $state = monitorUpdate($d, function ($s) { $s['since'] = time()-2000; return $s; });
-$base = intdiv(time()-900, 300)*300;
-$a = ['domain'=>$d,'cdr_id'=>'queue-a','time_start'=>$base+10,'time_release'=>time()-500];
-$b = ['domain'=>$d,'cdr_id'=>'queue-b','time_start'=>$base+20,'time_release'=>time()-500];
-monitorWebhookEvents('64.113.255.88', 'subscription-test.example', [$a,$b]);
-$groups=monitorQueueDue($d,$state); $items=reset($groups);
-monitorQueueFinish($d,$items['queue-a'],'pending');
-$retry=monitorReadFile(monitorQueueFile($d,'queue-a'));
-monitorQueueFinish($d,$items['queue-b'],'done');
-monitorWebhookEvents('64.113.255.88', 'subscription-test.example', [$b]);
-$existing=monitorEmailStatus($d,'cdr-one');
-monitorRecordEmail($d,'manual-1',['one@example.com','two@example.com'],'manual',123456);
-$manual=monitorEmailStatus($d,'manual-1');
-$other=monitorEmailStatus('another.test','manual-1');
-$cross=false;
-try { monitorWebhookEvents('64.113.255.88', 'subscription-test.example', [$a, ['domain'=>'another.test']]); }
-catch (DomainException $e) { $cross=true; }
-echo json_encode(['groups'=>count($groups),'items'=>count($items),'attempts'=>$retry['attempts'], 'next'=>$retry['next']-time(), 'pendingB'=>is_file(monitorQueueFile($d,'queue-b')), 'doneB'=>is_file(monitorQueueDoneFile($d,'queue-b')), 'auto'=>$existing, 'manual'=>$manual, 'other'=>$other, 'cross'=>$cross]);
-`));
-assert.equal(queueChecks.groups, 1, 'same call-start window is grouped');
-assert.equal(queueChecks.items, 2);
-assert.equal(queueChecks.attempts, 1);
-assert.ok(queueChecks.next >= 299 && queueChecks.next <= 300);
-assert.equal(queueChecks.pendingB, false, 'completed events leave the pending queue');
-assert.equal(queueChecks.doneB, true, 'duplicate events cannot recreate completed work');
-assert.equal(queueChecks.cross, true, 'a subscription cannot inject another tenant');
-assert.deepEqual(queueChecks.auto.recipients, ['ALERTS@example.com', 'second@example.com']);
-assert.equal(queueChecks.auto.kind, 'automatic');
-assert.deepEqual(queueChecks.manual.recipients, ['one@example.com', 'two@example.com']);
-assert.equal(queueChecks.manual.time, 123456);
-assert.equal(queueChecks.other, null, 'email records are tenant scoped');
-// A partial page must leave pending work untouched and report a worker failure.
-await h.script(`
-require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php';
-$f=monitorQueueFile('test.example','queue-a'); $item=monitorReadFile($f); $item['next']=time()-1; monitorWriteFile($f,$item);
-`);
-await h.seedPbx('fetchCdrsPages', [[[], 0, false]]);
 await h.script(`require TEST_TMP . '/tools/intelligence-monitor.php';`);
-const failure = await req('monitor_status');
-assert.match(failure.body.lastRun.error, /failed/);
-const preserved = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; echo json_encode(monitorReadFile(monitorQueueFile('test.example','queue-a')));`));
+const repeated = await req('monitor_status');
+assert.equal(repeated.body.lastRun.counts.checked, 0, 'overlapping scans do not re-check finished CDRs');
+const finalState = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; echo json_encode(['pending'=>is_file(monitorQueueFile('test.example','cdr-cron')), 'done'=>is_file(monitorQueueDoneFile('test.example','cdr-cron')), 'auto'=>monitorEmailStatus('test.example','cdr-one')]);`));
+assert.equal(finalState.pending, false); assert.equal(finalState.done, true);
+assert.deepEqual(finalState.auto.recipients, ['ALERTS@example.com', 'second@example.com']);
+
+// Once a pending call ages outside the discovery window, its old start bucket is re-fetched.
+const olderCall = { id:'cdr-older', domain:'test.example', _server:'nms1', 'call-start-datetime':new Date(Date.now()-900000).toISOString(), 'call-disconnect-datetime':new Date(Date.now()-850000).toISOString(), 'call-intelligence-job-id':'123', 'prefilled-transcription-api':'/ns-api/v2/domains/test.example/transcriptions?id=123&date=202611&callid=older' };
+await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; $s=monitorUpdate('test.example', function ($s) { $s['since']=time()-2000; return $s; }); monitorQueueCdr('test.example','cdr-older',time()-900,time()-850,$s);`);
+await h.seedPbx('filterCdrWindows', true);
+await h.seedPbx('fetchCdrs', [olderCall]);
+await h.script(`@unlink(TEST_TMP . '/pbx-calls.jsonl'); require TEST_TMP . '/tools/intelligence-monitor.php';`);
+const retryWindows = (await h.pbxCalls()).filter(x => typeof x === 'string' && x.startsWith('cdr-window:')).map(x => JSON.parse(x.slice('cdr-window:'.length)));
+assert.equal(retryWindows.length, 2, 'one discovery request and one older retry window');
+assert.equal(Date.parse(retryWindows[0].end)-Date.parse(retryWindows[0].start), 600000);
+assert.equal(Date.parse(retryWindows[1].end)-Date.parse(retryWindows[1].start), 299000);
+assert.equal((await req('monitor_status')).body.lastRun.counts.checked, 1, 'older pending call is checked');
+await h.seedPbx('filterCdrWindows', false);
+
+// An automatically matched CDR sends once even when successive windows overlap.
+const hit = { ...discoveredCall, id:'cdr-hit', 'call-intelligence-job-id':'123', 'prefilled-transcription-api':'/ns-api/v2/domains/test.example/transcriptions?id=123&date=202611&callid=hit' };
+await h.seedPbx('fetchCdrs', [hit]);
+await h.seedPbx('transcription', { 'call-intelligence-job-id':'123', 'call-intelligence-processing-status':'finished', 'call-intelligence-summary-status':'success', 'call-intelligence-summary':'urgent help', 'call-intelligence-topics-top':['billing'], 'call-intelligence-segments':[] });
+const mailHarness = `
+foreach (['CURLOPT_USERNAME','CURLOPT_PASSWORD','CURLOPT_USE_SSL','CURLOPT_SSL_VERIFYPEER','CURLOPT_SSL_VERIFYHOST','CURLOPT_MAIL_FROM','CURLOPT_MAIL_RCPT','CURLOPT_UPLOAD','CURLOPT_INFILE','CURLOPT_INFILESIZE','CURLOPT_TIMEOUT','CURLOPT_CONNECTTIMEOUT','CURLUSESSL_ALL'] as $i => $n) if (!defined($n)) define($n, $i + 100);
+function curl_init($url) { return new stdClass(); }
+function curl_setopt_array($curl, $opts) { return true; }
+function curl_exec($curl) { file_put_contents(TEST_TMP . '/mail-count', '1', FILE_APPEND); return true; }
+function curl_close($curl) {}
+require TEST_TMP . '/tools/intelligence-monitor.php';`;
+await h.script(mailHarness);
+await h.script(mailHarness);
+assert.equal(await h.readInterpreterFile('mail-count'), '1', 'matched CDR sends one automatic email across overlapping polls');
+const hitMail = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; echo json_encode(monitorEmailStatus('test.example','cdr-hit'));`));
+assert.deepEqual(hitMail.recipients, ['ALERTS@example.com', 'second@example.com']);
+assert.equal(hitMail.kind, 'automatic');
+
+// Completed CDRs already saved from the previous webhook version remain valid.
+await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; $s=monitorState('test.example'); monitorQueueCdr('test.example','legacy-pending',time()-900,time()-500,$s);`);
+await h.seedPbx('fetchCdrsPages', [[[ { ...discoveredCall, id:'cdr-partial' } ], 1, false]]);
+await h.script(`require TEST_TMP . '/tools/intelligence-monitor.php';`);
+assert.match((await req('monitor_status')).body.lastRun.error, /failed/, 'partial discovery is reported');
+const preserved = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; echo json_encode(monitorReadFile(monitorQueueFile('test.example','legacy-pending')));`));
 assert.equal(preserved.status, 'pending');
-assert.equal(preserved.attempts, 1);
+const partialSaved = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; echo json_encode(monitorReadFile(monitorQueueFile('test.example','cdr-partial')));`));
+assert.equal(partialSaved.status, 'pending', 'partial discovery rows are retained even when the scan fails');
 await h.seedPbx('fetchCdrsPages', []);
-await h.script(`
-require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php';
-$s=monitorUpdate('test.example', function ($s) { $s['since']=time()-100000; return $s; });
-monitorWebhookEvents('64.113.255.89','subscription-test.example', [['domain'=>'test.example','cdr_id'=>'expired','time_start'=>time()-95000,'time_release'=>time()-90000]]);
-`);
+await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; $s=monitorUpdate('test.example', function ($s) { $s['since']=time()-100000; return $s; }); monitorQueueCdr('test.example','expired',time()-95000,time()-90000,$s);`);
 await h.script(`require TEST_TMP . '/tools/intelligence-monitor.php';`);
 const expired = await req('monitor_status');
-assert.ok(expired.body.reviews.items.some(item => item.callid === 'expired' && /24 hours/.test(item.reason)), 'expired missing CDR is retained for review');
+assert.ok(expired.body.reviews.items.some(item => item.callid === 'expired' && /24 hours/.test(item.reason)), 'expired CDR needs review');
 assert.equal((await req('monitor_enable', { enabled: false })).body.enabled, false);
-console.log('INTELLIGENCE MONITOR OK — tenant controls, report suppression, deduplication, and review');
+console.log('INTELLIGENCE MONITOR OK — polling, retry, tenant isolation, deduplication and review');

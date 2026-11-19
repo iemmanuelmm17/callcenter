@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-/* The webhook is only a trigger. No summary or job ID from it is trusted. */
+/* Persist discovered CDRs for retries and durable notification deduplication. */
 function monitorQueueKey(string $domain, string $cdrId): string { return hash('sha256', $domain . "\0" . $cdrId); }
 function monitorQueueDirectory(string $domain, string $kind): string {
     if (!in_array($kind, ['pending', 'done'], true)) throw new InvalidArgumentException('Invalid queue directory');
@@ -18,40 +18,19 @@ function monitorQueueDoneFile(string $domain, string $cdrId): string {
 function monitorQueueLock(string $domain, string $cdrId): string {
     return 'queue-' . monitorDomainId($domain) . '-' . substr(monitorQueueKey($domain, $cdrId), 0, 2);
 }
-function monitorQueueEvent(string $domain, array $event, array $state): void {
-    $id = $event['cdr_id'] ?? null;
-    $start = $event['time_start'] ?? null;
-    $release = $event['time_release'] ?? null;
-    if (!is_string($id) || $id === '' || strlen($id) > 512 || preg_match('/[\x00-\x1f\x7f]/', $id)
-        || !is_numeric($start) || !is_numeric($release) || (int)$start <= 0 || (int)$release < (int)$start || (int)$release > time() + 300) {
-        throw new InvalidArgumentException('Invalid CDR event.');
-    }
-    if ((int)$release < (int)($state['since'] ?? PHP_INT_MAX)) return;
+/** Persist only calls discovered from a completed, authenticated PBX CDR. */
+function monitorQueueCdr(string $domain, string $id, int $start, int $release, array $state): void {
+    if ($id === '' || strlen($id) > 512 || preg_match('/[\x00-\x1f\x7f]/', $id)
+        || $start <= 0 || $release < $start || $release > time() + 300) throw new InvalidArgumentException('Invalid CDR.');
+    if ($release < (int)($state['since'] ?? PHP_INT_MAX)) return;
     monitorLocked(monitorQueueLock($domain, $id), static function () use ($domain, $id, $start, $release, $state): void {
         $current = monitorState($domain);
         if (empty($current['enabled']) || ($current['generation'] ?? null) !== ($state['generation'] ?? null)) return;
         $file = monitorQueueFile($domain, $id);
-        if (is_file($file) || is_file(monitorQueueDoneFile($domain, $id))) return; // durable dedup, including after a completed job
-        monitorWriteFile($file, ['domain' => $domain, 'id' => $id, 'start' => (int)$start, 'ended' => (int)$release,
-            'generation' => $state['generation'], 'status' => 'pending', 'attempts' => 0, 'next' => (int)$release + 300]);
+        if (is_file($file) || is_file(monitorQueueDoneFile($domain, $id))) return;
+        monitorWriteFile($file, ['domain' => $domain, 'id' => $id, 'start' => $start, 'ended' => $release,
+            'generation' => $state['generation'], 'status' => 'pending', 'attempts' => 0, 'next' => $release + 300]);
     });
-}
-function monitorWebhookEvents(string $remote, string $correlation, array $events): void {
-    if (!monitorWebhookConfig() || !in_array($remote, INTELLIGENCE_WEBHOOK_ALLOWED_IPS, true) || $correlation === '' || strlen($correlation) > 256) throw new DomainException('Unauthorized webhook');
-    if (!array_is_list($events) || count($events) < 1 || count($events) > 1000) throw new InvalidArgumentException('Invalid event batch');
-    // Authenticate every item before persisting any; correlation ID is per subscription.
-    $states = [];
-    foreach ($events as $event) {
-        if (!is_array($event) || !is_string($event['domain'] ?? null) || $event['domain'] === '' || strlen($event['domain']) > 64) throw new InvalidArgumentException('Invalid CDR event');
-        $domain = $event['domain'];
-        if (!isset($states[$domain])) $states[$domain] = monitorState($domain);
-        $state = $states[$domain];
-        if (empty($state['subscriptionId']) || !hash_equals((string)$state['subscriptionId'], $correlation)) throw new DomainException('Unauthorized webhook');
-    }
-    foreach ($events as $event) {
-        $state = $states[$event['domain']];
-        if (!empty($state['enabled'])) monitorQueueEvent($event['domain'], $event, $state);
-    }
 }
 function monitorQueueDue(string $domain, array $state): array {
     $groups = [];

@@ -315,8 +315,7 @@ final class PbxClient
         string $path,
         array $query = [],
         string $method = 'GET',
-        ?array $body = null,
-        bool $retryTransient = true
+        ?array $body = null
     ): array {
 
         $attempt = 0;
@@ -344,7 +343,6 @@ final class PbxClient
             if (
                 !$parsed['ok'] &&
                 $parsed['transient'] &&
-                $retryTransient &&
                 $attempt < self::PAGE_ATTEMPTS - 1
             ) {
                 $wait = $attempt + 1;
@@ -1398,22 +1396,6 @@ final class PbxClient
         }
 
         return [];
-    }
-
-    /** Create only once: a timeout may mean the PBX accepted the subscription. */
-    public function createCdrSubscription(string $server, string $domain, string $url): array
-    {
-        if (!$this->serviceCredential || !isset(PBX_SERVERS[$server])) throw new RuntimeException('Invalid subscription credentials or server');
-        return $this->request($server, '/ns-api/v2/subscriptions', [], 'POST', [
-            'model' => 'cdr', 'post-url' => $url, 'domain' => $domain,
-            'user' => '*', 'subscription-geo-support' => 'yes',
-        ], false);
-    }
-
-    public function readCdrSubscription(string $server, string $id): array
-    {
-        if (!$this->serviceCredential || !isset(PBX_SERVERS[$server]) || $id === '' || strlen($id) > 256) throw new RuntimeException('Invalid subscription credentials or ID');
-        return $this->request($server, '/ns-api/v2/subscriptions/' . rawurlencode($id));
     }
 
     /** Fetch one call-intelligence job from the CDR's PBX server. */

@@ -73,19 +73,12 @@ function monitorSaveRecipients(string $domain, string $input): array {
         return $state;
     });
 }
-function monitorWebhookConfig(): bool {
-    $url = defined('INTELLIGENCE_WEBHOOK_URL') && is_string(INTELLIGENCE_WEBHOOK_URL) ? INTELLIGENCE_WEBHOOK_URL : '';
-    $parts = parse_url($url);
-    if (!is_array($parts) || strtolower((string)($parts['scheme'] ?? '')) !== 'https' || empty($parts['host'])
-        || isset($parts['user']) || isset($parts['pass']) || isset($parts['query']) || isset($parts['fragment'])) return false;
-    if (!defined('INTELLIGENCE_WEBHOOK_ALLOWED_IPS') || !is_array(INTELLIGENCE_WEBHOOK_ALLOWED_IPS) || !INTELLIGENCE_WEBHOOK_ALLOWED_IPS) return false;
-    foreach (INTELLIGENCE_WEBHOOK_ALLOWED_IPS as $ip) if (!is_string($ip) || !filter_var($ip, FILTER_VALIDATE_IP)) return false;
-    return monitorSubscriptionServer() !== '';
-}
-function monitorSubscriptionServer(): string {
-    $key = defined('INTELLIGENCE_MONITOR_PBX_SERVER') ? trim((string)INTELLIGENCE_MONITOR_PBX_SERVER) : '';
-    if ($key === '' && count(PBX_SERVERS) === 1) $key = (string)array_key_first(PBX_SERVERS);
-    return isset(PBX_SERVERS[$key]) ? $key : '';
+/** Server-configured discovery window. Invalid configuration fails closed. */
+function monitorLookbackMinutes(): ?int {
+    $value = defined('INTELLIGENCE_CDR_LOOKBACK_MINUTES') ? INTELLIGENCE_CDR_LOOKBACK_MINUTES : 10;
+    if (!(is_int($value) || (is_string($value) && ctype_digit($value)))) return null;
+    $value = (int)$value;
+    return $value >= 1 && $value <= 1440 ? $value : null;
 }
 function monitorReady(): bool {
     if (!intelligenceSmtpConfigured()
@@ -101,49 +94,19 @@ function monitorReady(): bool {
             || isset($parts['query']) || isset($parts['fragment'])) return false;
         $configured = true;
     }
-    return $configured && monitorWebhookConfig();
-}
-function monitorValidateSubscription(array $result, string $domain, ?string $expectedId = null): string {
-    $id = $result['id'] ?? null;
-    if (!is_string($id) || $id === '' || strlen($id) > 256 || preg_match('/[\x00-\x20\x7f]/', $id)
-        || ($expectedId !== null && !hash_equals($expectedId, $id)) || ($result['domain'] ?? null) !== $domain
-        || ($result['model'] ?? null) !== 'cdr' || ($result['post-url'] ?? null) !== INTELLIGENCE_WEBHOOK_URL
-        || ($result['user'] ?? null) !== '*') throw new RuntimeException('PBX subscription response invalid; administrator review required');
-    return $id;
+    return $configured && monitorLookbackMinutes() !== null;
 }
 function monitorSetEnabled(string $domain, bool $enabled): array {
-    if ($enabled && !monitorReady()) throw new InvalidArgumentException('Configure SMTP, PBX key, webhook URL, allowed IPs and subscription server first.');
+    if ($enabled && !monitorReady()) throw new InvalidArgumentException('Configure SMTP, PBX key, HTTPS PBX servers and a valid CDR lookback first.');
     if ($enabled && intelligenceWatches($domain) === []) throw new InvalidArgumentException('Save at least one watched phrase before enabling alerts.');
-    if ($enabled && monitorRecipients(monitorState($domain)) === []) throw new InvalidArgumentException('Save at least one alert recipient for this domain before enabling alerts.');
-    if (!$enabled) return monitorUpdate($domain, static function (array $state): array { $state['enabled'] = false; unset($state['activationToken']); return $state; });
-    $token = bin2hex(random_bytes(16));
-    $state = monitorUpdate($domain, static function (array $state) use ($token): array {
-        if (!empty($state['subscriptionPending'])) throw new InvalidArgumentException('Subscription creation needs administrator review before retrying.');
-        if (empty($state['subscriptionId'])) $state['subscriptionPending'] = true;
-        $state['activationToken'] = $token;
-        return $state;
-    });
-    if (!empty($state['subscriptionPending'])) {
-        // Do not retry a POST automatically: timeout/409 may mean it was created.
-        $client = new PbxClient(trim(INTELLIGENCE_MONITOR_API_KEY), true);
-        $result = $client->createCdrSubscription(monitorSubscriptionServer(), $domain, INTELLIGENCE_WEBHOOK_URL);
-        $id = monitorValidateSubscription($result, $domain);
-        $state = monitorUpdate($domain, static function (array $state) use ($id): array {
-            $state['subscriptionId'] = $id; unset($state['subscriptionPending']); return $state;
-        });
-    } else {
-        // Re-enabling must not silently use a deleted or reconfigured subscription.
-        $client = new PbxClient(trim(INTELLIGENCE_MONITOR_API_KEY), true);
-        $existing = (string)$state['subscriptionId'];
-        monitorValidateSubscription($client->readCdrSubscription(monitorSubscriptionServer(), $existing), $domain, $existing);
-    }
-    return monitorUpdate($domain, static function (array $state) use ($domain, $token): array {
-        if (($state['activationToken'] ?? '') !== $token) return $state;
-        unset($state['activationToken']);
-        if (empty($state['enabled']) || empty($state['generation'])) {
+    return monitorUpdate($domain, static function (array $state) use ($domain, $enabled): array {
+        if ($enabled && monitorRecipients($state) === []) throw new InvalidArgumentException('Save at least one alert recipient for this domain before enabling alerts.');
+        if ($enabled && (empty($state['enabled']) || empty($state['generation']))) {
             $state['since'] = time(); $state['generation'] = bin2hex(random_bytes(16)); $state['lastRun'] = null;
         }
-        $state['enabled'] = true; $state['domain'] = $domain; return $state;
+        // Existing PBX subscriptions are deliberately left for manual removal.
+        unset($state['subscriptionPending'], $state['activationToken']);
+        $state['enabled'] = $enabled; $state['domain'] = $domain; return $state;
     });
 }
 /** Latest SMTP acceptance recorded for a CDR. Absence is not proof of no email. */

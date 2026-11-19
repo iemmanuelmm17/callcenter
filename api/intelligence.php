@@ -5,8 +5,8 @@ require_once __DIR__ . '/../includes/intelligence.php';
 require_once __DIR__ . '/../includes/intelligence-monitor.php';
 function intelligenceMonitorStatus(string $domain, array $state): array {
     $recipients = monitorRecipients($state);
-    return ['enabled' => !empty($state['enabled']) && !empty($state['subscriptionId']),
-        'subscriptionPending' => !empty($state['subscriptionPending']), 'configured' => monitorReady(),
+    return ['enabled' => !empty($state['enabled']), 'configured' => monitorReady(),
+        'lookbackMinutes' => monitorLookbackMinutes(),
         'recipients' => $recipients, 'paused' => !empty($state['enabled']) && $recipients === [],
         'lastRun' => $state['lastRun'] ?? null, 'reviews' => monitorReviews($domain)];
 }

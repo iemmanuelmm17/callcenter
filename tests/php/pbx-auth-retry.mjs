@@ -17,7 +17,7 @@ foreach (['CURLOPT_POST','CURLOPT_POSTFIELDS','CURLOPT_RETURNTRANSFER','CURLOPT_
 $GLOBALS['refreshCalls'] = 0; $GLOBALS['events'] = []; $GLOBALS['transcriptionUrl'] = '';
 function curl_init($url) { return (object)['url'=>$url,'opts'=>[],'status'=>0,'body'=>'']; }
 function curl_setopt_array($c, $opts) { $c->opts=$opts; return true; }
-function curl_exec($c) { $c->status=200; if (str_contains($c->url, '/tokens')) { $GLOBALS['refreshCalls']++; return json_encode(['access_token'=>'new','refresh_token'=>'rotated','expires_in'=>3600]); } if (str_contains($c->url, '/subscriptions')) { $GLOBALS['subscriptionCalls']++; $GLOBALS['subscriptionHeaders']=$c->opts[CURLOPT_HTTPHEADER]; $GLOBALS['subscriptionBody']=json_decode($c->opts[CURLOPT_POSTFIELDS],true); $c->status=503; return '{}'; } $GLOBALS['transcriptionUrl']=$c->url; $GLOBALS['lastHeaders']=$c->opts[CURLOPT_HTTPHEADER] ?? []; return json_encode(['call-intelligence-job-id'=>330696339]); }
+function curl_exec($c) { $c->status=200; if (str_contains($c->url, '/tokens')) { $GLOBALS['refreshCalls']++; return json_encode(['access_token'=>'new','refresh_token'=>'rotated','expires_in'=>3600]); } $GLOBALS['transcriptionUrl']=$c->url; $GLOBALS['lastHeaders']=$c->opts[CURLOPT_HTTPHEADER] ?? []; return json_encode(['call-intelligence-job-id'=>330696339]); }
 function curl_getinfo($c, $key) { return $c->status; }
 function curl_errno($c) { return 0; }
 function curl_error($c) { return ''; }
@@ -49,11 +49,9 @@ parse_str((string)parse_url($GLOBALS['transcriptionUrl'], PHP_URL_QUERY), $looku
 $serviceClient = new PbxClient('service-key', true);
 $serviceClient->transcription('nms1', 'test.example', '330696339', '202611', ['callid'=>'service']);
 $serviceHeaders = $GLOBALS['lastHeaders'];
-$GLOBALS['subscriptionCalls']=0; try { $serviceClient->createCdrSubscription('nms1','test.example','https://app.example/api/intelligence-webhook.php'); } catch (RuntimeException $e) {}
-$subscriptionCalls = $GLOBALS['subscriptionCalls']; $subscriptionHeaders = $GLOBALS['subscriptionHeaders']; $subscriptionBody = $GLOBALS['subscriptionBody'];
 $previousEvents = $GLOBALS['events']; $GLOBALS['events']=[]; $sequential = $client->fetchCdrs('test.example','2026-11-17T00:00:00Z','2026-11-17T00:05:00Z',0,[],null,1); $sequentialEvents=$GLOBALS['events']; $GLOBALS['events']=$previousEvents;
 $invalid = false; try { $client->transcription('nms1', 'test.example', '330696339', '202611', ['redirect'=>'https://untrusted.example']); } catch (InvalidArgumentException $e) { $invalid=true; }
-echo json_encode(['complete'=>$result['complete'],'count'=>count($result['records']),'refreshes'=>$GLOBALS['refreshCalls'],'events'=>$GLOBALS['events'],'lookupQuery'=>$lookupQuery,'serviceHeaders'=>$serviceHeaders,'invalid'=>$invalid,'subscriptionCalls'=>$subscriptionCalls,'subscriptionHeaders'=>$subscriptionHeaders,'subscriptionBody'=>$subscriptionBody,'sequentialEvents'=>$sequentialEvents]);
+echo json_encode(['complete'=>$result['complete'],'count'=>count($result['records']),'refreshes'=>$GLOBALS['refreshCalls'],'events'=>$GLOBALS['events'],'lookupQuery'=>$lookupQuery,'serviceHeaders'=>$serviceHeaders,'invalid'=>$invalid,'sequentialEvents'=>$sequentialEvents]);
 `);
 const out = JSON.parse(raw.trim());
 assert.equal(out.complete, true);
@@ -62,9 +60,6 @@ assert.equal(out.refreshes, 1, 'one refresh for a batch of 401s');
 assert.deepEqual(out.lookupQuery, {id: '330696339', date: '202611', orig_callid: 'orig@pbx', term_callid: 'term@pbx', by_callid: 'through@pbx'});
 assert.ok(out.serviceHeaders.includes('Authorization: Bearer service-key'), 'service requests never use the interactive session token');
 assert.equal(out.invalid, true, 'unexpected query parameters are rejected');
-assert.equal(out.subscriptionCalls, 1, 'ambiguous subscription POST is never automatically retried');
-assert.ok(out.subscriptionHeaders.includes('Authorization: Bearer service-key'));
-assert.deepEqual(out.subscriptionBody, {model:'cdr', 'post-url':'https://app.example/api/intelligence-webhook.php', domain:'test.example', user:'*', 'subscription-geo-support':'yes'});
 assert.deepEqual(out.sequentialEvents.map(e => e[0]), [0,1,2], 'queue CDR windows do not speculatively request extra pages');
 assert.deepEqual(out.events.filter(e => e[1]).map(e => e[0]), [0, 1, 2, 3], 'every 401 page retried with new token');
 console.log('PBX RETRY OK — all 401 pages replayed after one refresh');

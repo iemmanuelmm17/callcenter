@@ -328,65 +328,59 @@ access to cache and logs, or place them outside the web root.
 
 ### Scheduled keyword alerts (Windows)
 
-Automatic alerts use per-domain CDR event subscriptions and a durable pending queue.
-Configure `INTELLIGENCE_WEBHOOK_URL` (the PBX-reachable HTTPS URL ending in
-`/api/intelligence-webhook.php`) and `INTELLIGENCE_WEBHOOK_ALLOWED_IPS` in server-only
-`includes/config.local.php`. For example, use `['64.113.255.88', '64.113.255.89']`
-only if those are the actual PBX source addresses, including failover servers.
-The receiver compares `REMOTE_ADDR` directly and does not trust forwarded headers;
-if a reverse proxy is used, arrange for the web server to expose a verified client
-address and restrict proxy access. HTTPS, this IP allowlist and the confidential
-PBX subscription correlation ID protect the endpoint; the ID is not a cryptographic
-signature. Configure `INTELLIGENCE_MONITOR_PBX_SERVER` to a key of `PBX_SERVERS`
-when more than one server is configured. The PBX must be able to reach the URL,
-which must have a valid certificate. Configure `INTELLIGENCE_SMTP_*` and
-`INTELLIGENCE_MONITOR_API_KEY` in the server-only `includes/config.local.php`
-(see `includes/config.local.example.php`). Use a dedicated PBX API key with
-permission to create and read event subscriptions, and read CDRs and transcriptions for each enabled domain. Every
-configured PBX server used by the worker must use HTTPS so the long-lived API
-key is not transmitted in plaintext. SMTP uses
-authenticated STARTTLS and verifies certificates. Do not put keys or passwords in Git.
+Automatic alerts poll the PBX CDR API for enabled domains; they do **not** use
+webhooks. Configure `INTELLIGENCE_SMTP_*` and `INTELLIGENCE_MONITOR_API_KEY` in
+server-only `includes/config.local.php` (see `includes/config.local.example.php`).
+The dedicated PBX API key needs permission to read CDRs and transcriptions for
+each enabled domain. Every configured PBX server used by the worker must use
+HTTPS. SMTP uses authenticated STARTTLS and verifies certificates. Do not put
+credentials in Git.
+
+The default CDR discovery window is the **last 10 minutes**, per enabled domain,
+per task run. To change it, set a whole number from 1 to 1440 in the server config:
+
+```php
+define('INTELLIGENCE_CDR_LOOKBACK_MINUTES', 30);
+```
+
+A longer window increases PBX API load. Choose a window long enough for the task
+interval, call durations and CDR visibility delays. Confirm how your PBX applies
+its `datetime-start` and `datetime-end` filters: if it filters by call **start**,
+a call started before the window can be missed even if it just ended. Calls
+outside the discovery window, during a long outage, or never returned by a
+complete API scan may be missed; there is no automatic historical catch-up.
+Partial pages that were returned are retained for retry, but missing pages are
+not guaranteed to be recovered after they leave the discovery window.
 
 An office manager saves watched phrases and the domain's **Automatic alert
 recipients** (1–10 addresses separated by semicolons) in the report's Keyword
 Watch drawer, then enables **Automatic keyword email alerts**. Only that domain's
-saved addresses receive its automatic alerts. Managers can change the list or
-clear it to pause automatic checks and sends for that domain; a message already
-in flight may still be delivered. The old server-level `INTELLIGENCE_ALERT_RECIPIENTS`
-setting is ignored; it is never used as a fallback. **After upgrading, previously
-enabled domains are paused until their managers save domain recipients.** Webhook
-events continue to queue while paused. The 24-hour limit still applies: once
-recipients are saved, older pending calls are flagged for review rather than
-automatically emailed. Report checks can still suppress automatic emails while
-paused. The scheduler must keep running, and a paused domain is shown in the drawer. Enabling starts
-with calls completed after that point, not historical calls. Enabling creates a CDR
-subscription for that domain; disabling leaves it in the PBX for safe reuse but
-ignores incoming events. Re-enabling verifies the existing subscription. If an
-older installation was already enabled without a subscription, enable it again
-from the drawer after adding the webhook configuration. Calls arriving during
-subscription setup may be missed. Report checks made
-after enabling are recorded separately: a completed report check suppresses the
-automatic email for that call even if no email was sent. Earlier report checks
-were not stored and cannot be used to suppress alerts. Already checked calls
-are not automatically rechecked when watched phrases change. Re-enabling starts
-a new cutoff. The scheduler checks queued calls in the domain, not the report's site or
-department filters. Disabling stops further work, although a message already in
-flight may still be delivered. Checks search the same current watched phrases in summary,
-topics and transcript segments; an automatic message contains the summary,
-topics and matching excerpts. Calls without finished intelligence and topics
-are revisited for up to 24 hours after completion, then flagged for review.
-Events are queued by domain and CDR ID; after five minutes, due calls are grouped
-into five-minute call-start windows, and each relevant window is read directly
-from the PBX. Pages are requested sequentially for these windows to avoid
-speculative extra page requests. Missing jobs retry after approximately 5, 10 and
-then 30 minutes. The receiver accepts batches up to 1,000 events and 1 MiB;
-check PBX delivery errors and web server request limits under your traffic.
-There is **no reconciliation scan**: an event that never reaches the app will not
-be detected. Verify the PBX subscription status and error counters, firewall,
-queue and task regularly. A successful response acknowledges stored events, not
-that intelligence was checked. The PBX's delivery retry behavior is not guaranteed.
-If the scheduled task is stopped for more than 24 hours, affected calls are
-flagged instead of automatically emailed when the worker returns.
+saved addresses receive its automatic alerts. The old server-level
+`INTELLIGENCE_ALERT_RECIPIENTS` setting is ignored. Clearing the recipient list
+pauses checking and sending, but the worker continues to discover and queue calls
+while it runs. A message already in flight may still be delivered. Existing
+enabled domains, saved recipients, pending jobs and notification history are
+preserved on upgrade.
+
+Enabling starts with calls completed after that point, not historical calls.
+Report checks made after enabling suppress the automatic email for that call even
+if no email was sent; earlier report checks cannot reliably suppress alerts.
+Already checked calls are not automatically rechecked when watched phrases change.
+The worker uses current watched phrases and does not apply report site or department
+filters. Disabling stops further work, though an in-flight email may still arrive.
+Re-enabling starts a new cutoff. Checks search summary, topics and transcript
+segments; an automatic message contains the summary, topics and matching excerpts.
+
+Discovered completed CDRs are stored by domain and CDR ID and first checked about
+five minutes after completion. If the job ID or intelligence is not ready, the
+worker revisits the relevant CDR start-time windows, including windows older than
+the discovery window, until the existing 24-hour deadline. It reuses CDRs from the
+current scan when possible. After 24 hours a call that has not been checked is
+flagged for review instead of automatically emailed, including calls that aged
+out while recipients were paused. Stored completed states prevent overlapping scans
+from resending. SMTP errors or a process crash during sending may be ambiguous;
+the worker does **not** automatically resend. Verify delivery before acknowledging
+a review. Mail acceptance by SMTP does not guarantee delivery.
 
 Create a Windows Task Scheduler task with a repeating trigger at your preferred
 interval, **Run whether user is logged on or not**, and **Do not start a new
@@ -400,45 +394,32 @@ Add arguments:  C:\inetpub\wwwroot\callscope\tools\intelligence-monitor.php
 Start in:       C:\inetpub\wwwroot\callscope
 ```
 
-Install the PHP cURL extension and give the task account read access to the app
-and server configuration, and read/write access to the **same persistent**
-`CACHE_DIR` and `LOG_DIR` as the web server. Deny HTTP access to those directories
-and `includes`, or place them outside the web root. Configure the task's own
-execution time limit to allow the queue to finish; a file lock prevents overlapping
-instances. PBX limits, retries, API key permissions, the PBX's actual CDR/lookup
-fields and PHP capacity still affect coverage. Validate on your PBX that webhook
-`time_start` and the API time-window filter use the same call-start instant and
-that completed CDRs are retrievable by their `id` in that window. Long calls are
-looked up using the start time from the event, not the completion date. The PBX
-lookup month must be resolvable via its prefilled link or
-`INTELLIGENCE_MONTH_TIMEZONE`; the browser-only month override is not used.
+Install PHP cURL and give the task account read access to the app and server
+configuration, and read/write access to the **same persistent** `CACHE_DIR` and
+`LOG_DIR` as the web server. Deny HTTP access to those directories and `includes`,
+or place them outside the web root. Allow enough execution time; a file lock
+prevents overlap. PBX limits, retry behavior, permissions, actual CDR fields and
+capacity affect coverage. The PBX lookup month must be resolvable via its
+prefilled link or `INTELLIGENCE_MONTH_TIMEZONE`; the browser-only month override
+is not used. Monitor task results, application logs, and the report drawer's last
+run and reviews. Enabling alerts does not install the task.
 
-The drawer shows the last worker run and calls needing review. SMTP errors or a
-process crash during sending may be ambiguous; the worker does **not** resend
-those messages automatically. Verify delivery before marking a review handled.
-Missing CDRs, lookup references and unfinished intelligence after 24 hours
-require review. Inspect application logs and Windows task results; enabling the
-switch does not install or start the task. Mail acceptance by SMTP does not
-guarantee delivery. The report's Email status column shows the latest recorded
-SMTP acceptance for a CDR, including manual and automatic sends and recipients.
-"No email recorded" does not prove that no email was sent, particularly for old
-emails or if recording failed. A refresh is needed to see sends from other sessions.
+The report's Email status column shows the latest recorded SMTP acceptance for a
+CDR, including manual and automatic sends and recipients. "No email recorded" is
+not proof no email was sent, especially for old emails or if recording failed.
+Refresh to see sends from other sessions. Pending calls, recipient history and
+deduplication records are sensitive and retained under `CACHE_DIR/intelligence-monitor`;
+protect and back up this directory, share it between web and CLI processes, and
+monitor disk space. Deleting it can cause missed or repeated alerts.
 
-The pending queue, subscription IDs, recipient history and deduplication records
-are sensitive and retained under `CACHE_DIR/intelligence-monitor`; protect and
-back up this directory, keep it persistent across web and CLI processes, and
-monitor available disk space. Completed records grow over time. Deleting state
-can cause missed or repeated alerts. Do not expose this directory over HTTP.
-
-A failed or timed-out subscription creation is ambiguous. The app deliberately
-does not retry the POST automatically. Inspect the PBX subscriptions first, then
-run `php tools/intelligence-subscription-recover.php DOMAIN` as a trusted server
-administrator. Enter the existing subscription ID at the prompt to validate and
-adopt it, or enter `NONE` **only after confirming no subscription exists**; then
-re-enable alerts in the report. Keep subscription IDs confidential. If the URL,
-server or an existing subscription changes, resolve it on the PBX and in protected
-state deliberately; do not create duplicates blindly. Live PBX, scheduler and
-SMTP behavior must be verified on the actual deployment.
+**Upgrade from webhook monitoring:** the app no longer creates or uses PBX
+subscriptions. Existing subscriptions are **not deleted**; remove them manually
+in the PBX. The old `/api/intelligence-webhook.php` endpoint returns HTTP 410,
+so the PBX may report delivery errors until those subscriptions are removed.
+Webhook URL, IP allowlist and subscription-server config values are no longer used.
+The previous queue and existing subscription identifiers remain in protected state;
+keep identifiers confidential. Live PBX time-window behavior, the scheduled task
+and SMTP delivery must be verified in the actual deployment.
 
 CDR caches created before this version may not contain the job ID or the
 prefilled transcription URL, because older versions trimmed these fields. They

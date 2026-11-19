@@ -142,8 +142,6 @@ final class PbxClient
     }
     public function cradle(string $origCallId, string $termCallId, string $start10, string $end10): array { return (array)$this->canned('cradle', []); }
     public function recording(string $domain, string $ext, string $callId): array { return (array)$this->canned('recording', []); }
-    public function createCdrSubscription(string $server, string $domain, string $url): array { return (array)$this->canned('createCdrSubscription', ['id' => 'subscription-' . $domain, 'domain' => $domain, 'model' => 'cdr', 'post-url' => $url, 'user' => '*']); }
-    public function readCdrSubscription(string $server, string $id): array { return (array)$this->canned('readCdrSubscription', ['id' => $id, 'domain' => substr($id, 13), 'model' => 'cdr', 'post-url' => INTELLIGENCE_WEBHOOK_URL, 'user' => '*']); }
     public function transcription(string $server, string $domain, string $jobId, string $month, array $identifiers): array {
         $this->record('transcription-args:' . json_encode(['server'=>$server, 'domain'=>$domain, 'id'=>$jobId, 'month'=>$month, 'identifiers'=>$identifiers]));
         return (array)$this->canned('transcription', []);
@@ -158,6 +156,7 @@ final class PbxClient
         ?callable $onPage = null,
         int $concurrency = 4
     ): array {
+        $this->record('cdr-window:' . json_encode(['domain'=>$domain, 'start'=>$start, 'end'=>$end, 'concurrency'=>$concurrency]));
         /*
          * fetchCdrs.json          → one complete page (the default)
          * fetchCdrsPages.json     → [[newRowsOfPage, nextOffset, complete], ...]
@@ -199,6 +198,14 @@ final class PbxClient
         }
 
         $rows = $trim((array)$this->canned('fetchCdrs', []));
+        $filterFile = self::TMP . '/pbx/filterCdrWindows.json';
+        if (is_file($filterFile) && json_decode((string)file_get_contents($filterFile), true) === true) {
+            $from = strtotime($start); $to = strtotime($end);
+            $rows = array_values(array_filter($rows, static function ($row) use ($from, $to) {
+                $at = strtotime((string)($row['call-start-datetime'] ?? ''));
+                return $at !== false && $at >= $from && $at <= $to;
+            }));
+        }
         if (is_callable($onPage) && $rows !== []) {
             $onPage($rows, count($rows), true);
         }
