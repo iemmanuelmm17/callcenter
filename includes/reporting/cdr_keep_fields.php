@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1508 names.
+ * 1511 names.
  */
 return [
     'aa',
@@ -729,6 +729,7 @@ return [
     'intelligence',
     'intelligence-email',
     'intelligence-input',
+    'intelligence-monitor-recipients',
     'intelligence-monitor-review',
     'intelligence-monitor-settings',
     'intelligence-report',
@@ -835,6 +836,7 @@ return [
     'mode',
     'model',
     'monitor_enable',
+    'monitor_recipients',
     'monitor_reviewed',
     'monitor_status',
     'monotone',
@@ -1022,6 +1024,7 @@ return [
     'password',
     'path',
     'pause',
+    'paused',
     'pbx_client_id',
     'pct',
     'pdo_sqlite',

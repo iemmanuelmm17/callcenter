@@ -16,14 +16,15 @@ assert.throws(() => parseWatchedPhrases('"unfinished'), /Close the quoted/);
 assert.throws(() => parseWatchedPhrases('"one"two'), /comma or new line/);
 assert.throws(() => parseWatchedPhrases('"a\nb"'), /stay on one line/);
 const operations = [];
-let activeLookups = 0, maxLookups = 0, sendAttempts = 0, failSendAt = 0, monitorEnabled = false;
+let activeLookups = 0, maxLookups = 0, sendAttempts = 0, failSendAt = 0, monitorEnabled = false, monitorRecipients = [];
 const calls = Array.from({ length: 115 }, (_, i) => ({ reference: 'ref-' + String(i).padStart(3, '0'), emailReference: 'email-' + String(i).padStart(3, '0'), callId: 'call-' + String(i).padStart(3, '0'), callerNumber: '0015550100', dialedNumber: '18005550100', destinationNumber: '201', startedAt: '2024-02-29T12:00:00Z', month: '202402' }));
 calls.push({ rowKey: 'cdr-unavailable', reference: null, emailReference: 'email-unavailable', callId: 'call-unavailable', startedAt: '2024-02-29T12:00:00Z', status: 'unavailable', detail: 'missing job ID', topicsHint: ['device'], matchesHint: [{ keyword: 'reboot', source: 'Topic', excerpt: 'reboot request' }] });
 FIXTURES.cache_job = body => body.action === 'warm' ? { complete: true, ready: 29, total: 29, batch: { warmed: 29, stopped: 'complete' } } : { complete: false, ready: 0, total: 29 };
 FIXTURES.intelligence = body => {
   operations.push(body);
-  if (body.action === 'monitor_status') return { enabled: monitorEnabled, configured: true, reviews: { total: 0, items: [] } };
-  if (body.action === 'monitor_enable') { monitorEnabled = body.enabled; return { enabled: monitorEnabled, configured: true, reviews: { total: 0, items: [] } }; }
+  if (body.action === 'monitor_status') return { enabled: monitorEnabled, configured: true, recipients: monitorRecipients, paused: monitorEnabled && !monitorRecipients.length, reviews: { total: 0, items: [] } };
+  if (body.action === 'monitor_enable') { monitorEnabled = body.enabled; return { enabled: monitorEnabled, configured: true, recipients: monitorRecipients, paused: monitorEnabled && !monitorRecipients.length, reviews: { total: 0, items: [] } }; }
+  if (body.action === 'monitor_recipients') { monitorRecipients = body.recipients.split(';').map(x => x.trim()).filter(Boolean); return { enabled: monitorEnabled, configured: true, recipients: monitorRecipients, paused: monitorEnabled && !monitorRecipients.length, reviews: { total: 0, items: [] } }; }
   if (body.action === 'watches') return { watches: ['reboot', 'billing'] };
   if (body.action === 'list') return { calls, missing: 2, missingReasons: { jobId: 1, server: 0, callId: 0, month: 1 }, cacheStatus: { complete: true } };
   if (body.action === 'lookup') {
@@ -112,10 +113,18 @@ assert.match(css, /\.intel-overlay\s*\{[^}]*z-index:\s*2147483647/s);
 assert.match(css, /\.filters-bar\s*\{[^}]*z-index:\s*40000/s);
 assert.equal(document.querySelector('[aria-label="Watched phrases"]').value, 'reboot\nbilling');
 assert.ok([...document.querySelectorAll('[aria-label="Keyword Watch"] summary')].some(el => el.textContent.includes('PBX lookup month override')));
-assert.match(document.querySelector('[aria-label="Keyword Watch"]').textContent, /server-configured global recipients/);
+assert.match(document.querySelector('[aria-label="Keyword Watch"]').textContent, /this domain’s saved recipients/);
+assert.ok(byText('button', 'Enable automatic alerts').disabled, 'must save recipients first');
+const autoRecipients = document.querySelector('[aria-label="Automatic alert recipients"]');
+await act(async () => { Simulate.change(autoRecipients, { target: { value: 'one@example.com; two@example.com' } }); });
+await click(byText('button', 'Save alert recipients'));
+assert.deepEqual(monitorRecipients, ['one@example.com', 'two@example.com']);
 await click(byText('button', 'Enable automatic alerts'));
 assert.equal(monitorEnabled, true);
 assert.ok(byText('button', 'Disable automatic alerts'));
+await act(async () => { Simulate.change(document.querySelector('[aria-label="Automatic alert recipients"]'), { target: { value: '' } }); });
+await click(byText('button', 'Save alert recipients'));
+assert.match(document.querySelector('[aria-label="Keyword Watch"]').textContent, /alerts are paused/i);
 await click(byText('button', 'Disable automatic alerts'));
 assert.equal(monitorEnabled, false);
 

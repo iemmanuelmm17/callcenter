@@ -74,6 +74,7 @@ function IntelligenceDashboard({ filters }) {
     const [showAllTopics, setShowAllTopics] = useState(false);
     const [watchOpen, setWatchOpen] = useState(false);
     const [monitor, setMonitor] = useState(null);
+    const [alertRecipients, setAlertRecipients] = useState('');
     const [syncOpen, setSyncOpen] = useState(false);
     const [sync, setSync] = useState({ stage: 'loading', done: 0, total: 0 });
     const [topicSort, setTopicSort] = useState('count');
@@ -88,7 +89,7 @@ function IntelligenceDashboard({ filters }) {
 
     useEffect(() => {
         let active = true;
-        api('intelligence', { action: 'monitor_status' }).then(r => { if (active) setMonitor(r); }).catch(() => { if (active) setMonitor({ unavailable: true }); });
+        api('intelligence', { action: 'monitor_status' }).then(r => { if (active) { setMonitor(r); setAlertRecipients((r.recipients || []).join('; ')); } }).catch(() => { if (active) setMonitor({ unavailable: true }); });
         api('intelligence', { action: 'watches' }).then(r => { if (active) { setWatches(formatWatchedPhrases(r.watches)); setSavedWatches(r.watches); } }).catch(e => { if (active) setError(e.message); });
         return () => { active = false; };
     }, []);
@@ -182,6 +183,14 @@ function IntelligenceDashboard({ filters }) {
         try {
             const r = await api('intelligence', { action: 'save_watches', watches: parseWatchedPhrases(watches) });
             setWatches(formatWatchedPhrases(r.watches)); setSavedWatches(r.watches); setKeywordFilter(''); setMessage('Watched phrases saved. Rechecking calls.'); setRefresh(x => x + 1);
+        } catch (e) { setError(e.message); } finally { setBusy(false); }
+    };
+    const saveAlertRecipients = async () => {
+        setBusy(true); setError(''); setMessage('');
+        try {
+            const result = await api('intelligence', { action: 'monitor_recipients', recipients: alertRecipients });
+            setMonitor(result); setAlertRecipients((result.recipients || []).join('; '));
+            setMessage(result.recipients?.length ? 'Alert recipients saved for this domain.' : 'Alert recipients cleared; automatic alerts are paused.');
         } catch (e) { setError(e.message); } finally { setBusy(false); }
     };
     const toggleMonitor = async () => {
@@ -367,15 +376,20 @@ function IntelligenceDashboard({ filters }) {
             h('label', { className: 'intel-drawer-label' }, 'Watched phrases', h('textarea', { value: watches, onChange: e => setWatches(e.target.value), rows: 8, 'aria-label': 'Watched phrases', className: 'intelligence-input intel-watch-input' })),
             h('button', { type: 'button', className: 'intel-export-btn', disabled: busy, onClick: saveWatches }, 'Save watched phrases'),
             h('details', { className: 'intel-override' }, h('summary', null, 'Automatic keyword email alerts'),
-                h('p', { className: 'intel-drawer-copy' }, 'CDR webhooks queue new calls for a Windows scheduled task, which checks these phrases and emails the server-configured global recipients. Missed webhooks are not recovered. Completed report checks are skipped, even if no alert was sent. Unready jobs are retried for 24 hours.'),
+                h('p', { className: 'intel-drawer-copy' }, 'CDR webhooks queue new calls for a Windows scheduled task, which checks these phrases and emails this domain’s saved recipients. Missed webhooks are not recovered. Completed report checks are skipped, even if no alert was sent. Unready jobs are retried for 24 hours.'),
                 monitor?.unavailable ? h('p', { className: 'intel-warning' }, 'Unable to load automatic alert status.') : null,
                 monitor?.subscriptionPending ? h('p', { className: 'intel-warning' }, 'Subscription setup needs server administrator review before retrying.') : null,
+                h('label', { className: 'intel-drawer-label' }, 'Alert recipients for this domain', h('input', { type: 'text', value: alertRecipients, onChange: e => setAlertRecipients(e.target.value), placeholder: 'first@example.com; second@example.com', className: 'intelligence-input intel-watch-input', 'aria-label': 'Automatic alert recipients', disabled: busy || !monitor || monitor.unavailable })),
+                h('p', { className: 'intel-drawer-copy' }, 'Separate up to 10 email addresses with semicolons. Clearing the list pauses automatic alerts for this domain.'),
+                h('button', { type: 'button', className: 'intel-action-btn', disabled: busy || !monitor || monitor.unavailable, onClick: saveAlertRecipients }, 'Save alert recipients'),
+                monitor?.paused ? h('p', { className: 'intel-warning', role: 'status' }, 'Automatic alerts are paused until this domain has saved recipients. Pending calls older than 24 hours will require review.') : null,
+                message.startsWith('Alert recipients') ? h('p', { role: 'status', className: 'intel-notice' }, message) : null,
                 monitor && !monitor.unavailable ? h('p', { className: 'intel-drawer-copy' }, 'Status: ' + (monitor.enabled ? 'Enabled' : 'Disabled') + (monitor.configured ? '' : ' · server configuration incomplete')) : null,
                 monitor?.reviews?.total ? h('div', { className: 'intel-warning', role: 'status' }, h('strong', null, monitor.reviews.total + ' calls need review'), ...monitor.reviews.items.map((item, i) => h('p', { key: item.id || i }, (item.callid || 'Unknown call') + ': ' + item.reason, ' ', h('button', { type: 'button', className: 'intel-text-btn', disabled: busy, onClick: () => acknowledgeReview(item.id) }, 'Mark reviewed'))), monitor.reviews.total > monitor.reviews.items.length ? h('p', null, 'Additional reviews are retained on the server.') : null) : null,
                 monitor?.enabled && !monitor.lastRun ? h('p', { className: 'intel-drawer-copy' }, 'No scheduled scan has completed yet. Verify the Windows task is running.') : null,
-                monitor?.lastRun ? h('p', { className: 'intel-drawer-copy' }, monitor.lastRun.error || ('Last scan: ' + new Date(monitor.lastRun.time * 1000).toLocaleString() + ' · sent ' + (monitor.lastRun.counts?.sent || 0) + ' · pending ' + (monitor.lastRun.counts?.pending || 0) + '')) : null,
+                monitor?.lastRun ? h('p', { className: 'intel-drawer-copy' }, 'Last run: ' + new Date(monitor.lastRun.time * 1000).toLocaleString() + ' · ' + (monitor.lastRun.error || ('sent ' + (monitor.lastRun.counts?.sent || 0) + ' · pending ' + (monitor.lastRun.counts?.pending || 0)))) : null,
                 message.startsWith('Automatic alerts') ? h('p', { role: 'status', className: 'intel-notice' }, message) : null,
-                monitor && !monitor.unavailable ? h('button', { type: 'button', className: 'intel-action-btn', disabled: busy || monitor.subscriptionPending || (!monitor.enabled && !monitor.configured), onClick: toggleMonitor }, monitor.enabled ? 'Disable automatic alerts' : 'Enable automatic alerts') : null),
+                monitor && !monitor.unavailable ? h('button', { type: 'button', className: 'intel-action-btn', disabled: busy || monitor.subscriptionPending || (!monitor.enabled && (!monitor.configured || !monitor.recipients?.length)), onClick: toggleMonitor }, monitor.enabled ? 'Disable automatic alerts' : 'Enable automatic alerts') : null),
             h('details', { className: 'intel-override' }, h('summary', null, 'PBX lookup month override'),
                 h('p', { className: 'intel-drawer-copy' }, 'Optional YYYYMM used for every lookup; leave blank to use the PBX link or server configuration. This does not change the report month.'),
                 h('label', { className: 'intel-drawer-label' }, 'Override', h('input', { value: overrideMonth, onChange: e => setOverrideMonth(e.target.value), placeholder: 'YYYYMM', maxLength: 6, className: 'intelligence-input' })),

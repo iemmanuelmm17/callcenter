@@ -80,9 +80,9 @@ declare(strict_types=1);
 /* Scheduled automatic alerts (global configuration, server-only).
  * The key needs permission to read CDRs and transcriptions for every enabled
  * domain. Never commit credentials. Office managers enable each domain in the
- * Keyword Watch panel. Install the task described in README.md. */
+ * Keyword Watch panel, where each domain also saves its alert recipients.
+ * Install the task described in README.md. */
 // define('INTELLIGENCE_MONITOR_API_KEY', 'set-on-server');
-// define('INTELLIGENCE_ALERT_RECIPIENTS', ['alerts@example.com']);
 
 /* Per-domain CDR event subscription. The HTTPS URL must be reachable by PBX.
  * Allowlist compares REMOTE_ADDR directly, never untrusted forwarding headers.

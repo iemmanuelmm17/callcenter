@@ -3,6 +3,13 @@ declare(strict_types=1);
 require_once __DIR__ . '/../includes/reporting.php';
 require_once __DIR__ . '/../includes/intelligence.php';
 require_once __DIR__ . '/../includes/intelligence-monitor.php';
+function intelligenceMonitorStatus(string $domain, array $state): array {
+    $recipients = monitorRecipients($state);
+    return ['enabled' => !empty($state['enabled']) && !empty($state['subscriptionId']),
+        'subscriptionPending' => !empty($state['subscriptionPending']), 'configured' => monitorReady(),
+        'recipients' => $recipients, 'paused' => !empty($state['enabled']) && $recipients === [],
+        'lastRun' => $state['lastRun'] ?? null, 'reviews' => monitorReviews($domain)];
+}
 requireMethod('POST');
 try {
     $user = currentUser();
@@ -13,7 +20,13 @@ try {
     $action = (string)($input['action'] ?? '');
     if ($action === 'monitor_status') {
         $state = monitorState($domain);
-        jsonResponse(['enabled' => !empty($state['enabled']) && !empty($state['subscriptionId']), 'subscriptionPending' => !empty($state['subscriptionPending']), 'configured' => monitorReady(), 'lastRun' => $state['lastRun'] ?? null, 'reviews' => monitorReviews($domain)]);
+        jsonResponse(intelligenceMonitorStatus($domain, $state));
+    }
+    if ($action === 'monitor_recipients') {
+        if (!is_string($input['recipients'] ?? null)) throw new InvalidArgumentException('Enter email addresses separated by semicolons.');
+        $state = monitorSaveRecipients($domain, $input['recipients']);
+        auditView($user, ['domain' => $domain, 'recipients' => count(monitorRecipients($state))], 'intelligence-monitor-recipients');
+        jsonResponse(intelligenceMonitorStatus($domain, $state));
     }
     if ($action === 'monitor_reviewed') {
         if (!is_string($input['id'] ?? null)) throw new InvalidArgumentException('A review is required.');
@@ -25,7 +38,7 @@ try {
         if (!is_bool($input['enabled'] ?? null)) throw new InvalidArgumentException('An enabled setting is required.');
         $state = monitorSetEnabled($domain, $input['enabled']);
         auditView($user, ['domain' => $domain, 'enabled' => $input['enabled']], 'intelligence-monitor-settings');
-        jsonResponse(['enabled' => !empty($state['enabled']) && !empty($state['subscriptionId']), 'subscriptionPending' => !empty($state['subscriptionPending']), 'configured' => monitorReady(), 'lastRun' => $state['lastRun'] ?? null, 'reviews' => monitorReviews($domain)]);
+        jsonResponse(intelligenceMonitorStatus($domain, $state));
     }
     if ($action === 'watches') {
         jsonResponse(['watches' => intelligenceWatches($domain)]);

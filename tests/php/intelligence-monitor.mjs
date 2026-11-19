@@ -21,6 +21,16 @@ const req = (action, data = {}, user = USERS.office_manager) => h.request('intel
 for (const role of ['supervisor', 'agent', 'basic_user']) assert.equal((await req('monitor_status', {}, USERS[role])).status, 403);
 assert.equal((await req('monitor_enable', { enabled: true })).status, 422, 'watches are required');
 await req('save_watches', { watches: ['urgent'] });
+assert.equal((await req('monitor_enable', { enabled: true })).status, 422, 'global addresses must not activate a domain');
+for (const role of ['supervisor', 'agent', 'basic_user']) assert.equal((await req('monitor_recipients', {recipients:'a@example.com'}, USERS[role])).status, 403);
+assert.equal((await req('monitor_recipients', { recipients: 'not-an-email' })).status, 422);
+assert.equal((await req('monitor_recipients', { recipients: 'a@example.com\nb@example.com' })).status, 422);
+assert.equal((await req('monitor_recipients', { recipients: Array.from({length:11}, (_,i)=>`a${i}@example.com`).join(';') })).status, 422);
+const savedRecipients = await req('monitor_recipients', {recipients:'alerts@example.com; second@example.com; ALERTS@example.com'});
+assert.deepEqual(savedRecipients.body.recipients, ['ALERTS@example.com','second@example.com']);
+assert.equal((await req('monitor_recipients', {recipients:'bad@example.com; not-valid'})).status, 422);
+assert.deepEqual((await req('monitor_status')).body.recipients, ['ALERTS@example.com','second@example.com'], 'invalid edits do not overwrite the saved list');
+assert.deepEqual((await req('monitor_status', {}, { ...USERS.office_manager, domain: 'another.test' })).body.recipients, [], 'recipients are domain isolated');
 assert.equal((await req('monitor_enable', { enabled: true })).body.enabled, true);
 assert.equal((await req('monitor_status')).body.configured, true);
 assert.equal((await req('monitor_status', {}, { ...USERS.office_manager, domain: 'another.test' })).body.enabled, false);
@@ -54,10 +64,10 @@ require_once TEST_TMP . '/includes/intelligence.php';
 require_once TEST_TMP . '/includes/intelligence-monitor.php';
 foreach (['CURLOPT_USERNAME','CURLOPT_PASSWORD','CURLOPT_USE_SSL','CURLOPT_SSL_VERIFYPEER','CURLOPT_SSL_VERIFYHOST','CURLOPT_MAIL_FROM','CURLOPT_MAIL_RCPT','CURLOPT_UPLOAD','CURLOPT_INFILE','CURLOPT_INFILESIZE','CURLOPT_TIMEOUT','CURLOPT_CONNECTTIMEOUT','CURLUSESSL_ALL'] as $i => $n) if (!defined($n)) define($n, $i + 100);
 function curl_init($url) { return new stdClass(); }
-function curl_setopt_array($curl, $opts) { $payload = stream_get_contents($opts[CURLOPT_INFILE]); rewind($opts[CURLOPT_INFILE]); $parts = explode("\r\n\r\n", $payload, 2); $GLOBALS['bodies'][] = base64_decode($parts[1] ?? ''); return true; }
+function curl_setopt_array($curl, $opts) { $payload = stream_get_contents($opts[CURLOPT_INFILE]); rewind($opts[CURLOPT_INFILE]); $parts = explode("\r\n\r\n", $payload, 2); $GLOBALS['bodies'][] = base64_decode($parts[1] ?? ''); $GLOBALS['rcpt'][] = $opts[CURLOPT_MAIL_RCPT]; return true; }
 function curl_exec($curl) { $GLOBALS['sends']++; return !$GLOBALS['fail']; }
 function curl_close($curl) {}
-$GLOBALS['sends'] = 0; $GLOBALS['fail'] = false; $GLOBALS['bodies'] = [];
+$GLOBALS['sends'] = 0; $GLOBALS['fail'] = false; $GLOBALS['bodies'] = []; $GLOBALS['rcpt'] = [];
 $domain = 'test.example';
 intelligenceSaveWatches($domain, ['urgent']);
 monitorSetEnabled($domain, true);
@@ -75,13 +85,22 @@ $GLOBALS['fail'] = true;
 monitorProcessCall($client, $domain, $make('three'), $state, $counts);
 $GLOBALS['fail'] = false;
 monitorProcessCall($client, $domain, $make('three'), $state, $counts);
+$otherDomain='another.test'; intelligenceSaveWatches($otherDomain, ['urgent']);
+monitorSaveRecipients($otherDomain, 'other@example.com; next@example.com'); monitorSetEnabled($otherDomain, true);
+$otherState=monitorUpdate($otherDomain, function ($s) { $s['since']=time()-100; return $s; });
+$otherCall=$make('tenant'); $otherCall['prefilled-transcription-api']='/ns-api/v2/domains/another.test/transcriptions?id=123&date=202611&callid=tenant';
+$otherCounts=['checked'=>0,'sent'=>0,'pending'=>0,'review'=>0,'unresolved'=>0,'missingTime'=>0];
+monitorProcessCall($client,$otherDomain,$otherCall,$otherState,$otherCounts);
 $missing = $make('four'); unset($missing['call-intelligence-job-id']); $missing['call-disconnect-datetime'] = gmdate('c', time()-90000);
 $state['since'] = time()-100000;
 monitorProcessCall($client, $domain, $missing, $state, $counts);
-echo json_encode(['sends'=>$GLOBALS['sends'], 'counts'=>$counts, 'reviews'=>monitorReviews($domain), 'body'=>$GLOBALS['bodies'][0] ?? '']);
+echo json_encode(['sends'=>$GLOBALS['sends'], 'counts'=>$counts, 'reviews'=>monitorReviews($domain), 'body'=>$GLOBALS['bodies'][0] ?? '', 'rcpt'=>$GLOBALS['rcpt'], 'otherCounts'=>$otherCounts]);
 `);
 const result = JSON.parse(output.trim());
-assert.equal(result.sends, 2, 'duplicate and report-checked calls send nothing; uncertain delivery is not retried');
+assert.equal(result.sends, 3, 'duplicate and report-checked calls send nothing; uncertain delivery is not retried');
+assert.deepEqual(result.rcpt[0], ['<ALERTS@example.com>', '<second@example.com>']);
+assert.deepEqual(result.rcpt[2], ['<other@example.com>', '<next@example.com>'], 'each domain uses only its own recipients');
+assert.equal(result.otherCounts.sent, 1);
 assert.equal(result.counts.sent, 1);
 assert.match(result.body, /Date: \d{4}-\d{2}-\d{2}/);
 assert.match(result.body, /Time: .*US\/Eastern/);
@@ -106,6 +125,17 @@ try { monitorWebhookEvents('192.0.2.1', 'subscription-test.example', [$e]); thro
 try { monitorWebhookEvents('64.113.255.88', 'bad', [$e]); throw new Exception('bad id accepted'); } catch (DomainException $ok) {}
 `);
 await h.write('tools/intelligence-monitor.php', readFileSync(path.join(ROOT, 'tools/intelligence-monitor.php'), 'utf8'));
+assert.equal((await req('monitor_recipients', {recipients:''})).body.paused, true);
+await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; monitorWebhookEvents('64.113.255.88','subscription-test.example', [['domain'=>'test.example','cdr_id'=>'paused-event','time_start'=>time()-420,'time_release'=>time()-390]]);`);
+await h.script(`require TEST_TMP . '/tools/intelligence-monitor.php';`);
+const paused = await req('monitor_status');
+assert.equal(paused.body.paused, true);
+assert.match(paused.body.lastRun.error, /Paused/);
+const queuedWhilePaused = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; echo json_encode(monitorReadFile(monitorQueueFile('test.example','cdr-cron')));`));
+assert.equal(queuedWhilePaused.status, 'pending', 'missing recipients never consume pending CDRs');
+const eventDuringPause = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; echo json_encode(monitorReadFile(monitorQueueFile('test.example','paused-event')));`));
+assert.equal(eventDuringPause.status, 'pending', 'webhooks continue to queue during pause');
+assert.equal((await req('monitor_recipients', {recipients:'ALERTS@example.com; second@example.com'})).body.paused, false);
 await h.script(`require TEST_TMP . '/tools/intelligence-monitor.php';`);
 const after = await req('monitor_status');
 assert.equal(after.body.lastRun.counts.checked, 1, JSON.stringify(after.body));
@@ -138,7 +168,7 @@ assert.ok(queueChecks.next >= 299 && queueChecks.next <= 300);
 assert.equal(queueChecks.pendingB, false, 'completed events leave the pending queue');
 assert.equal(queueChecks.doneB, true, 'duplicate events cannot recreate completed work');
 assert.equal(queueChecks.cross, true, 'a subscription cannot inject another tenant');
-assert.deepEqual(queueChecks.auto.recipients, ['alerts@example.com']);
+assert.deepEqual(queueChecks.auto.recipients, ['ALERTS@example.com', 'second@example.com']);
 assert.equal(queueChecks.auto.kind, 'automatic');
 assert.deepEqual(queueChecks.manual.recipients, ['one@example.com', 'two@example.com']);
 assert.equal(queueChecks.manual.time, 123456);

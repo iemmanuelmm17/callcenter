@@ -47,15 +47,31 @@ function monitorUpdate(string $domain, callable $change): array {
         return $state;
     });
 }
-function monitorRecipients(): array {
-    $values = defined('INTELLIGENCE_ALERT_RECIPIENTS') ? INTELLIGENCE_ALERT_RECIPIENTS : [];
-    if (!is_array($values) || !$values || count($values) > 10) return [];
+/** A domain's saved list. Invalid or absent lists fail closed, never globally. */
+function monitorRecipients(array $state): array {
+    $values = $state['recipients'] ?? [];
+    if (!is_array($values) || count($values) > 10) return [];
     $out = [];
     foreach ($values as $value) {
-        if (!is_string($value) || strlen($value) > 254 || !filter_var($value, FILTER_VALIDATE_EMAIL) || preg_match('/[\r\n]/', $value)) return [];
+        if (!is_string($value) || strlen($value) > 254 || preg_match('/[\x00-\x1f\x7f]/', $value) || !filter_var($value, FILTER_VALIDATE_EMAIL)) return [];
         $out[strtolower($value)] = $value;
     }
     return array_values($out);
+}
+function monitorSaveRecipients(string $domain, string $input): array {
+    if (strlen($input) > 3000 || preg_match('/[\x00-\x1f\x7f]/', $input)) throw new InvalidArgumentException('Enter valid email addresses separated by semicolons.');
+    $values = [];
+    foreach (explode(';', $input) as $part) {
+        $address = trim($part);
+        if ($address === '') continue;
+        if (strlen($address) > 254 || !filter_var($address, FILTER_VALIDATE_EMAIL)) throw new InvalidArgumentException('Enter valid email addresses separated by semicolons.');
+        $values[strtolower($address)] = $address;
+    }
+    if (count($values) > 10) throw new InvalidArgumentException('Enter at most 10 email addresses.');
+    return monitorUpdate($domain, static function (array $state) use ($values): array {
+        $state['recipients'] = array_values($values);
+        return $state;
+    });
 }
 function monitorWebhookConfig(): bool {
     $url = defined('INTELLIGENCE_WEBHOOK_URL') && is_string(INTELLIGENCE_WEBHOOK_URL) ? INTELLIGENCE_WEBHOOK_URL : '';
@@ -72,7 +88,7 @@ function monitorSubscriptionServer(): string {
     return isset(PBX_SERVERS[$key]) ? $key : '';
 }
 function monitorReady(): bool {
-    if (!intelligenceSmtpConfigured() || monitorRecipients() === []
+    if (!intelligenceSmtpConfigured()
         || !defined('INTELLIGENCE_MONITOR_API_KEY') || !is_string(INTELLIGENCE_MONITOR_API_KEY)
         || trim(INTELLIGENCE_MONITOR_API_KEY) === '') return false;
     // Never send the long-lived service key to a plaintext or unconfigured PBX.
@@ -96,8 +112,9 @@ function monitorValidateSubscription(array $result, string $domain, ?string $exp
     return $id;
 }
 function monitorSetEnabled(string $domain, bool $enabled): array {
-    if ($enabled && !monitorReady()) throw new InvalidArgumentException('Configure SMTP, recipients, PBX key, webhook URL, allowed IPs and subscription server first.');
+    if ($enabled && !monitorReady()) throw new InvalidArgumentException('Configure SMTP, PBX key, webhook URL, allowed IPs and subscription server first.');
     if ($enabled && intelligenceWatches($domain) === []) throw new InvalidArgumentException('Save at least one watched phrase before enabling alerts.');
+    if ($enabled && monitorRecipients(monitorState($domain)) === []) throw new InvalidArgumentException('Save at least one alert recipient for this domain before enabling alerts.');
     if (!$enabled) return monitorUpdate($domain, static function (array $state): array { $state['enabled'] = false; unset($state['activationToken']); return $state; });
     $token = bin2hex(random_bytes(16));
     $state = monitorUpdate($domain, static function (array $state) use ($token): array {
@@ -207,6 +224,8 @@ function monitorAcknowledge(string $domain, string $id): void {
 }
 /** One complete CDR from the live PBX, not from the report's cache. */
 function monitorProcessCall(PbxClient $client, string $domain, array $call, array $settings, array &$counts): void {
+    $live = monitorState($domain);
+    if (!empty($live['enabled']) && ($live['generation'] ?? null) === ($settings['generation'] ?? null) && monitorRecipients($live) === []) { $counts['pending']++; return; }
     $end = parseEasternDateTime((string)($call['call-disconnect-datetime'] ?? ''));
     if (!$end) {
         $counts['missingTime']++;
@@ -233,6 +252,7 @@ function monitorProcessCall(PbxClient $client, string $domain, array $call, arra
     monitorJob($domain, $ref, static function (array $job) use ($client, $domain, $call, $ref, $ended, $settings, &$counts): ?array {
         $current = monitorState($domain);
         if (empty($current['enabled']) || ($current['generation'] ?? null) !== ($settings['generation'] ?? null)) return null;
+        if (monitorRecipients($current) === []) { $counts['pending']++; return null; }
         if ($job !== []) {
             if (in_array($job['status'] ?? '', ['review', 'sending'], true)) $counts['review']++;
             return null;
@@ -242,9 +262,11 @@ function monitorProcessCall(PbxClient $client, string $domain, array $call, arra
             $result = intelligenceReadJob($client, $domain, $ref, intelligenceWatches($domain));
             if (($result['status'] ?? '') !== 'finished' || empty($result['topics'])) { $counts['pending']++; return null; }
         } catch (Throwable $e) { $counts['pending']++; return null; }
-        if (empty($result['matches'])) { $counts['checked']++; return ['status' => 'checked', 'time' => time()]; }
         $current = monitorState($domain);
         if (empty($current['enabled']) || ($current['generation'] ?? null) !== ($settings['generation'] ?? null)) return null;
+        $recipients = monitorRecipients($current);
+        if ($recipients === []) { $counts['pending']++; return null; }
+        if (empty($result['matches'])) { $counts['checked']++; return ['status' => 'checked', 'time' => time()]; }
         /* Persist the ambiguous state BEFORE SMTP. A crash or timeout may mean
          * the message was accepted; never automatically resend it. */
         $sending = ['status' => 'sending', 'time' => time(), 'callid' => $ref['callid']];
@@ -255,9 +277,9 @@ function monitorProcessCall(PbxClient $client, string $domain, array $call, arra
         $body .= "Summary: " . $result['summary'] . "\nTopics: " . implode(', ', $result['topics']) . "\n\n";
         foreach ($result['matches'] as $match) $body .= $match['keyword'] . ' (' . $match['source'] . '): ' . $match['excerpt'] . "\n";
         try {
-            intelligenceSendMail(monitorRecipients(), $body, 'CallScope keyword alert');
+            intelligenceSendMail($recipients, $body, 'CallScope keyword alert');
             $accepted = time();
-            try { monitorRecordEmail($domain, (string)($call['id'] ?? ''), monitorRecipients(), 'automatic', $accepted); }
+            try { monitorRecordEmail($domain, (string)($call['id'] ?? ''), $recipients, 'automatic', $accepted); }
             catch (Throwable $e) { appExceptionLog('Intelligence email status', $e); }
             $counts['sent']++;
             return ['status' => 'sent', 'time' => $accepted];

@@ -339,19 +339,26 @@ address and restrict proxy access. HTTPS, this IP allowlist and the confidential
 PBX subscription correlation ID protect the endpoint; the ID is not a cryptographic
 signature. Configure `INTELLIGENCE_MONITOR_PBX_SERVER` to a key of `PBX_SERVERS`
 when more than one server is configured. The PBX must be able to reach the URL,
-which must have a valid certificate. Configure `INTELLIGENCE_SMTP_*`,
-`INTELLIGENCE_MONITOR_API_KEY`, and the global
-`INTELLIGENCE_ALERT_RECIPIENTS` array (1–10 addresses) in the server-only `includes/config.local.php`
+which must have a valid certificate. Configure `INTELLIGENCE_SMTP_*` and
+`INTELLIGENCE_MONITOR_API_KEY` in the server-only `includes/config.local.php`
 (see `includes/config.local.example.php`). Use a dedicated PBX API key with
 permission to create and read event subscriptions, and read CDRs and transcriptions for each enabled domain. Every
 configured PBX server used by the worker must use HTTPS so the long-lived API
 key is not transmitted in plaintext. SMTP uses
-authenticated STARTTLS and verifies certificates. **Every address in the global
-list receives matching call details from every enabled domain**; restrict access
-to recipients and to the server configuration. Do not put keys or passwords in Git.
+authenticated STARTTLS and verifies certificates. Do not put keys or passwords in Git.
 
-An office manager saves watched phrases, then enables **Automatic keyword email
-alerts** in the report's Keyword Watch drawer for each domain. Enabling starts
+An office manager saves watched phrases and the domain's **Automatic alert
+recipients** (1–10 addresses separated by semicolons) in the report's Keyword
+Watch drawer, then enables **Automatic keyword email alerts**. Only that domain's
+saved addresses receive its automatic alerts. Managers can change the list or
+clear it to pause automatic checks and sends for that domain; a message already
+in flight may still be delivered. The old server-level `INTELLIGENCE_ALERT_RECIPIENTS`
+setting is ignored; it is never used as a fallback. **After upgrading, previously
+enabled domains are paused until their managers save domain recipients.** Webhook
+events continue to queue while paused. The 24-hour limit still applies: once
+recipients are saved, older pending calls are flagged for review rather than
+automatically emailed. Report checks can still suppress automatic emails while
+paused. The scheduler must keep running, and a paused domain is shown in the drawer. Enabling starts
 with calls completed after that point, not historical calls. Enabling creates a CDR
 subscription for that domain; disabling leaves it in the PBX for safe reuse but
 ignores incoming events. Re-enabling verifies the existing subscription. If an

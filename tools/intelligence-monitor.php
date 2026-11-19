@@ -21,13 +21,24 @@ try {
             $state = monitorState($domain);
             if (empty($state['enabled']) || empty($state['subscriptionId'])) continue;
             if (empty($state['since']) || empty($state['generation'])) throw new RuntimeException('Invalid monitor state');
+            if (monitorRecipients($state) === []) {
+                monitorUpdate($domain, static function (array $current) use ($state): array {
+                    if (($current['generation'] ?? null) === ($state['generation'] ?? null) && monitorRecipients($current) === []) $current['lastRun'] = ['time' => time(), 'error' => 'Paused: save alert recipients for this domain.'];
+                    return $current;
+                });
+                echo "Monitor paused: domain alert recipients are not configured.\n";
+                continue;
+            }
             if (!intelligenceWatches($domain)) throw new RuntimeException('No watched phrases; monitoring paused');
             setReportingTimezone(loadDomainSettings($domain)['timezone'] ?? null);
             $counts = ['checked' => 0, 'sent' => 0, 'pending' => 0, 'review' => 0, 'unresolved' => 0, 'missingTime' => 0];
             foreach (monitorQueueDue($domain, $state) as $bucket => $items) {
-                if (empty(monitorState($domain)['enabled'])) break;
+                $live = monitorState($domain);
+                if (empty($live['enabled']) || ($live['generation'] ?? null) !== ($state['generation'] ?? null) || monitorRecipients($live) === []) break;
                 // Expire even if the CDR no longer appears in the PBX.
                 foreach ($items as $id => $item) {
+                    $live = monitorState($domain);
+                    if (empty($live['enabled']) || ($live['generation'] ?? null) !== ($state['generation'] ?? null) || monitorRecipients($live) === []) break 2;
                     if (time() - (int)$item['ended'] < 86400) continue;
                     monitorReviewCdr($domain, ['id' => $id, 'call-start-datetime' => gmdate('c', (int)$item['start'])], 'Intelligence or CDR unavailable within 24 hours');
                     monitorQueueFinish($domain, $item, 'review'); $counts['review']++; unset($items[$id]);
