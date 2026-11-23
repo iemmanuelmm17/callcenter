@@ -11,6 +11,7 @@ $lock = fopen(monitorDirectory() . '/worker.lock', 'c');
 if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) { fwrite(STDERR, "Monitor is already running.\n"); exit(2); }
 $failed = false;
 try {
+    try { intelligenceRecordingPrune(); } catch (Throwable $e) { appExceptionLog('Expired recording link cleanup', $e); }
     $client = new PbxClient(trim(INTELLIGENCE_MONITOR_API_KEY), true);
     foreach (glob(monitorDirectory() . '/domain-*.json') ?: [] as $path) {
         $domain = '';

@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1511 names.
+ * 1518 names.
  */
 return [
     'aa',
@@ -123,6 +123,7 @@ return [
     'aht',
     'aht_seconds',
     'alert',
+    'alert-link',
     'alerts',
     'all',
     'alphabetical',
@@ -189,6 +190,7 @@ return [
     'basic_user',
     'basis',
     'batch',
+    'bearer-link',
     'bg-slate-950',
     'block',
     'blue',
@@ -354,6 +356,7 @@ return [
     'conf',
     'configured',
     'connected',
+    'convert',
     'cookie_httponly',
     'cookie_samesite',
     'cookie_secure',
@@ -362,6 +365,7 @@ return [
     'counts',
     'cradle',
     'cradle_to_grave',
+    'created',
     'css',
     'csv',
     'ctf-dot',
@@ -626,6 +630,7 @@ return [
     'hourly',
     'hours',
     'href',
+    'html',
     'http',
     'https',
     'ib',
@@ -732,6 +737,7 @@ return [
     'intelligence-monitor-recipients',
     'intelligence-monitor-review',
     'intelligence-monitor-settings',
+    'intelligence-recording-link',
     'intelligence-report',
     'intelligence-topic-list',
     'intelligence-watch-settings',
@@ -1125,6 +1131,7 @@ return [
     'record',
     'record_count',
     'recording',
+    'recording-prune',
     'records',
     'rect',
     'ref',

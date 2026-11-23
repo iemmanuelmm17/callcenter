@@ -286,6 +286,45 @@ function intelligenceEmailBody(array $calls, PbxClient $client, string $domain, 
     }
     return $body;
 }
+/** Escape PBX text first; only matched terms receive trusted inline markup. */
+function intelligenceHighlightHtml(string $text, array $words): string {
+    $words = array_values(array_filter($words, static fn($word): bool => is_string($word) && $word !== ''));
+    usort($words, static fn(string $a, string $b): int => strlen($b) <=> strlen($a));
+    $escape = static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    if (!$words) return $escape($text);
+    $pattern = '/(' . implode('|', array_map(static fn(string $word): string => preg_quote($word, '/'), $words)) . ')/iu';
+    $parts = preg_split($pattern, $text, -1, PREG_SPLIT_DELIM_CAPTURE);
+    if (!is_array($parts)) return $escape($text);
+    $out = '';
+    foreach ($parts as $i => $part) {
+        $safe = $escape($part);
+        $out .= $i % 2 ? '<mark style="background-color:#fff0a8;color:#671b25;font-weight:700;">' . $safe . '</mark>' : $safe;
+    }
+    return $out;
+}
+/** Automatic alerts only. Plain text remains usable in clients without HTML. */
+function intelligenceAutomaticMessage(string $domain, array $call, array $ref, array $result, ?string $recordingUrl): array {
+    $details = intelligenceEmailCallDetails((string)($call['call-start-datetime'] ?? ''), intelligencePartyDetails($call));
+    $text = "CallScope automatic keyword alert\n\nDomain: " . $domain . "\nCall: " . $ref['callid'] . "\n" . $details;
+    $text .= "Summary: " . $result['summary'] . "\nTopics: " . implode(', ', $result['topics']) . "\n\n";
+    $words = [];
+    foreach ($result['matches'] as $match) {
+        $words[] = $match['keyword'];
+        $text .= 'MATCHED KEYWORD: ' . $match['keyword'] . ' (' . $match['source'] . '): ' . $match['excerpt'] . "\n";
+    }
+    $text .= $recordingUrl !== null ? "\nListen to recording (download WAV; link valid for 30 days): " . $recordingUrl . "\nAnyone with the link can download the recording.\n" : "\nRecording download link unavailable; contact your administrator.\n";
+    $escape = static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $html = '<!doctype html><html><body style="font-family:Arial,sans-serif;color:#202939;line-height:1.5;">';
+    $html .= '<h2>CallScope keyword alert</h2><p><strong>Domain:</strong> ' . $escape($domain) . '<br><strong>Call:</strong> ' . $escape((string)$ref['callid']) . '<br>' . nl2br($escape(trim($details)), false) . '</p>';
+    $html .= '<p><strong>Summary:</strong> ' . nl2br(intelligenceHighlightHtml((string)$result['summary'], $words), false) . '<br><strong>Topics:</strong> ' . intelligenceHighlightHtml(implode(', ', $result['topics']), $words) . '</p><h3>Matching keywords</h3>';
+    foreach ($result['matches'] as $match) {
+        $html .= '<p><strong>Keyword:</strong> ' . intelligenceHighlightHtml((string)$match['keyword'], [(string)$match['keyword']]) . ' <small>(' . $escape((string)$match['source']) . ')</small><br>' . nl2br(intelligenceHighlightHtml((string)$match['excerpt'], $words), false) . '</p>';
+    }
+    if ($recordingUrl !== null) {
+        $html .= '<p><a href="' . $escape($recordingUrl) . '" style="display:inline-block;padding:12px 18px;background-color:#b91c3c;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:bold;">Listen to recording</a></p><p>Downloads a WAV file. Link expires in 30 days; anyone with it can download the recording.</p>';
+    } else $html .= '<p>Recording download link unavailable; contact your administrator.</p>';
+    return ['text' => $text, 'html' => $html . '</body></html>'];
+}
 function intelligenceSmtpConfigured(): bool {
     $host = defined('INTELLIGENCE_SMTP_HOST') ? (string)INTELLIGENCE_SMTP_HOST : '';
     $port = defined('INTELLIGENCE_SMTP_PORT') ? (int)INTELLIGENCE_SMTP_PORT : 0;
@@ -295,7 +334,7 @@ function intelligenceSmtpConfigured(): bool {
     return $host !== '' && preg_match('/^[a-zA-Z0-9.-]+$/', $host) === 1 && $port > 0 && $port <= 65535 && $user !== '' && $password !== '' && filter_var($from, FILTER_VALIDATE_EMAIL) !== false;
 }
 /** SMTP via libcurl; STARTTLS and certificate verification are mandatory. */
-function intelligenceSendMail(array $recipients, string $body, string $subject = 'CallScope selected calls'): void {
+function intelligenceSendMail(array $recipients, string $body, string $subject = 'CallScope selected calls', ?string $html = null): void {
     if ($subject === '' || preg_match('/[\r\n]/', $subject)) throw new InvalidArgumentException('Invalid email subject.');
     $host = defined('INTELLIGENCE_SMTP_HOST') ? (string)INTELLIGENCE_SMTP_HOST : '';
     $port = defined('INTELLIGENCE_SMTP_PORT') ? (int)INTELLIGENCE_SMTP_PORT : 0;
@@ -303,7 +342,16 @@ function intelligenceSendMail(array $recipients, string $body, string $subject =
     $password = defined('INTELLIGENCE_SMTP_PASSWORD') ? (string)INTELLIGENCE_SMTP_PASSWORD : '';
     $from = defined('INTELLIGENCE_SMTP_FROM') ? (string)INTELLIGENCE_SMTP_FROM : '';
     if (!intelligenceSmtpConfigured()) throw new RuntimeException('SMTP is not configured.');
-    $payload = 'From: ' . $from . "\r\nTo: " . implode(', ', $recipients) . "\r\nSubject: " . $subject . "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($body), 76, "\r\n");
+    $headers = 'From: ' . $from . "\r\nTo: " . implode(', ', $recipients) . "\r\nSubject: " . $subject . "\r\nMIME-Version: 1.0\r\n";
+    if ($html === null) {
+        $payload = $headers . "Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($body), 76, "\r\n");
+    } else {
+        $boundary = 'callscope-' . bin2hex(random_bytes(16));
+        $payload = $headers . 'Content-Type: multipart/alternative; boundary="' . $boundary . '"' . "\r\n\r\n";
+        $payload .= '--' . $boundary . "\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($body), 76, "\r\n");
+        $payload .= '--' . $boundary . "\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($html), 76, "\r\n");
+        $payload .= '--' . $boundary . "--\r\n";
+    }
     $stream = fopen('php://temp', 'w+');
     if (!$stream) throw new RuntimeException('Unable to prepare email.');
     fwrite($stream, $payload); rewind($stream);

@@ -1542,6 +1542,7 @@ final class PbxClient
     private function fetchUrl(string $url, bool $allowToken): array
     {
         $token = $allowToken ? $this->bearerToken() : '';
+        $publicHop = !$allowToken;
 
         for ($hop = 0; $hop < 3; $hop++) {
             $curl = curl_init($url);
@@ -1552,7 +1553,7 @@ final class PbxClient
             if ($token !== '') {
                 $headers[] = 'Authorization: Bearer ' . $token;
             }
-            curl_setopt_array($curl, [
+            $options = [
                 CURLOPT_RETURNTRANSFER => true,
                 /* Redirects are handled here so every hop is validated. */
                 CURLOPT_FOLLOWLOCATION => false,
@@ -1560,24 +1561,43 @@ final class PbxClient
                 CURLOPT_TIMEOUT => 60,
                 CURLOPT_HTTPHEADER => $headers,
                 CURLOPT_ENCODING => '',
-            ]);
+            ];
+            if ($publicHop) {
+                // Pin an independently vetted IPv4 address for this request;
+                // otherwise a DNS rebind between validation and cURL could
+                // steer an unauthenticated CDN fetch into a private network.
+                $parts = parse_url($url);
+                $host = is_array($parts) ? (string)($parts['host'] ?? '') : '';
+                $addresses = filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ? [$host] : (@gethostbynamel($host) ?: []);
+                if ($addresses === [] || array_filter($addresses, static fn($ip) => !pbxIpIsPublic((string)$ip))) {
+                    curl_close($curl);
+                    return ['ok' => false, 'status' => 0, 'contentType' => '', 'body' => ''];
+                }
+                $port = (int)($parts['port'] ?? (strtolower((string)$parts['scheme']) === 'https' ? 443 : 80));
+                $options[CURLOPT_RESOLVE] = [$host . ':' . $port . ':' . $addresses[0]];
+                $options[CURLOPT_IPRESOLVE] = CURL_IPRESOLVE_V4;
+                $options[CURLOPT_PROXY] = '';
+            }
+            curl_setopt_array($curl, $options);
             $body = curl_exec($curl);
             $status = (int)curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
             $type = (string)curl_getinfo($curl, CURLINFO_CONTENT_TYPE);
             $location = (string)curl_getinfo($curl, CURLINFO_REDIRECT_URL);
             curl_close($curl);
 
-            $ok = is_string($body) && $body !== '' && $status >= 200 && $status < 400;
-            if (!$ok && $status >= 300 && $status < 400 && $location !== '') {
+            $ok = is_string($body) && $body !== '' && $status >= 200 && $status < 300;
+            if ($status >= 300 && $status < 400 && $location !== '') {
                 $next = pbxResolveUrl($url, $location);
                 $pbxNext = $next === '' ? null : pbxRecordingUrl($next);
                 if ($pbxNext !== null) {
                     $url = $pbxNext;
+                    $publicHop = false;
                     continue;
                 }
                 $publicNext = $next === '' ? null : pbxPublicRecordingUrl($next);
                 if ($publicNext !== null) {
                     $url = $publicNext;
+                    $publicHop = true;
                     $token = '';
                     continue;
                 }

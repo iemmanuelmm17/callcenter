@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__ . '/intelligence-recording-links.php';
 
 /* Scheduled intelligence alerts. All persistent files are server-only and
  * keyed by domain; the task and web requests share CACHE_DIR and file locks. */
@@ -80,11 +81,8 @@ function monitorLookbackMinutes(): ?int {
     $value = (int)$value;
     return $value >= 1 && $value <= 1440 ? $value : null;
 }
-function monitorReady(): bool {
-    if (!intelligenceSmtpConfigured()
-        || !defined('INTELLIGENCE_MONITOR_API_KEY') || !is_string(INTELLIGENCE_MONITOR_API_KEY)
-        || trim(INTELLIGENCE_MONITOR_API_KEY) === '') return false;
-    // Never send the long-lived service key to a plaintext or unconfigured PBX.
+function monitorServiceReady(): bool {
+    if (!defined('INTELLIGENCE_MONITOR_API_KEY') || !is_string(INTELLIGENCE_MONITOR_API_KEY) || trim(INTELLIGENCE_MONITOR_API_KEY) === '') return false;
     $configured = false;
     foreach (PBX_SERVERS as $base) {
         if (!is_string($base) || trim($base) === '') continue;
@@ -94,7 +92,10 @@ function monitorReady(): bool {
             || isset($parts['query']) || isset($parts['fragment'])) return false;
         $configured = true;
     }
-    return $configured && monitorLookbackMinutes() !== null;
+    return $configured;
+}
+function monitorReady(): bool {
+    return intelligenceSmtpConfigured() && monitorServiceReady() && monitorLookbackMinutes() !== null;
 }
 function monitorSetEnabled(string $domain, bool $enabled): array {
     if ($enabled && !monitorReady()) throw new InvalidArgumentException('Configure SMTP, PBX key, HTTPS PBX servers and a valid CDR lookback first.');
@@ -230,17 +231,17 @@ function monitorProcessCall(PbxClient $client, string $domain, array $call, arra
         $recipients = monitorRecipients($current);
         if ($recipients === []) { $counts['pending']++; return null; }
         if (empty($result['matches'])) { $counts['checked']++; return ['status' => 'checked', 'time' => time()]; }
+        $recordingUrl = null;
+        try { $recordingUrl = intelligenceRecordingIssue($client, $domain, $call); }
+        catch (Throwable $e) { appExceptionLog('Alert recording link', $e); }
+        $message = intelligenceAutomaticMessage($domain, $call, $ref, $result, $recordingUrl);
         /* Persist the ambiguous state BEFORE SMTP. A crash or timeout may mean
          * the message was accepted; never automatically resend it. */
         $sending = ['status' => 'sending', 'time' => time(), 'callid' => $ref['callid']];
         $file = monitorDirectory() . '/job-' . monitorDomainId($domain) . '-' . monitorJobKey($ref) . '.json';
         monitorWriteFile($file, $sending);
-        $body = "CallScope automatic keyword alert\n\nDomain: " . $domain . "\nCall: " . $ref['callid'] . "\n";
-        $body .= intelligenceEmailCallDetails((string)($call['call-start-datetime'] ?? ''), intelligencePartyDetails($call));
-        $body .= "Summary: " . $result['summary'] . "\nTopics: " . implode(', ', $result['topics']) . "\n\n";
-        foreach ($result['matches'] as $match) $body .= $match['keyword'] . ' (' . $match['source'] . '): ' . $match['excerpt'] . "\n";
         try {
-            intelligenceSendMail($recipients, $body, 'CallScope keyword alert');
+            intelligenceSendMail($recipients, $message['text'], 'CallScope keyword alert', $message['html']);
             $accepted = time();
             try { monitorRecordEmail($domain, (string)($call['id'] ?? ''), $recipients, 'automatic', $accepted); }
             catch (Throwable $e) { appExceptionLog('Intelligence email status', $e); }
