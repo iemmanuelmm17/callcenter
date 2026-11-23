@@ -79,10 +79,11 @@ try {
             catch (InvalidArgumentException $e) { $ref = null; $reason = 'month'; }
             if (!$ref) {
                 $missing++; $missingReasons[$reason]++;
+                $callReviews = monitorReviewsForCall($domain, $reviewIndex, $cdrId, null);
                 // CDR topics are still useful even if the transcription cannot
                 // be looked up. Keep the incomplete state explicit and never
                 // make this row eligible for email.
-                if ($topicsHint !== []) {
+                if ($topicsHint !== [] || $callReviews !== []) {
                     $field = 'id';
                     $display = trim((string)($call['id'] ?? ''));
                     foreach (['call-orig-call-id', 'call-term-call-id'] as $candidate) {
@@ -92,7 +93,7 @@ try {
                     $emailRef = intelligenceEmailReference(null, $display, $field, (string)($call['call-start-datetime'] ?? ''), $topicsHint, (string)$reason, $domain, $parties);
                     $rows[] = ['rowKey' => 'cdr-' . hash('sha256', cdrCacheKey($call, $index)), 'reference' => null, 'emailReference' => $emailRef,
                         'callId' => $display, 'callIdField' => $field, 'startedAt' => (string)($call['call-start-datetime'] ?? ''),
-                        'emailStatus' => $emailStatus, 'reviews' => monitorReviewsForCall($domain, $reviewIndex, $cdrId, null), 'callerNumber' => $parties['callerNumber'], 'dialedNumber' => $parties['dialedNumber'], 'destinationNumber' => $parties['destinationNumber'],
+                        'emailStatus' => $emailStatus, 'reviews' => $callReviews, 'callerNumber' => $parties['callerNumber'], 'dialedNumber' => $parties['dialedNumber'], 'destinationNumber' => $parties['destinationNumber'],
                         'topicsHint' => $topicsHint, 'matchesHint' => $matchesHint, 'status' => 'unavailable', 'detail' => 'Transcription lookup unavailable (' . $reason . ')'];
                 }
                 continue;
@@ -106,8 +107,26 @@ try {
                 'startedAt' => (string)($call['call-start-datetime'] ?? ''), 'month' => $ref['month'],
                 'emailStatus' => $emailStatus, 'reviews' => monitorReviewsForCall($domain, $reviewIndex, $cdrId, $ref), 'callerNumber' => $parties['callerNumber'], 'dialedNumber' => $parties['dialedNumber'], 'destinationNumber' => $parties['destinationNumber'], 'topicsHint' => $topicsHint, 'matchesHint' => $matchesHint];
         }
+        // Reviews whose CDR is unavailable are represented as limited-detail
+        // rows, never as selectable/signed calls or as a guessed identity.
+        $attached = [];
+        foreach ($rows as $row) foreach ($row['reviews'] ?? [] as $review) $attached[$review['id']] = true;
+        $scopeLimited = $filters['department'] !== '' || $filters['site'] !== '' || $filters['agents'] !== [] || $filters['hours'] !== 'all';
+        $unscopedReviews = 0;
+        foreach ($reviewIndex['all'] as $review) {
+            if (isset($attached[$review['id']])) continue;
+            $started = parseEasternDateTime((string)($review['startedAt'] ?? ''));
+            if ($started && ($started->format('Y-m-d') < $filters['start'] || $started->format('Y-m-d') > $filters['end'])) continue;
+            if ($scopeLimited) { $unscopedReviews++; continue; }
+            $cdrId = (string)($review['cdrId'] ?? '');
+            $rows[] = ['rowKey' => 'review-' . $review['id'], 'reference' => null, 'emailReference' => null, 'reviewOnly' => true,
+                'callId' => $review['callid'] !== '' ? $review['callid'] : 'Unknown call', 'callIdField' => $cdrId !== '' ? 'CDR ID' : 'Recorded reference',
+                'startedAt' => $started ? $started->format('c') : '', 'emailStatus' => monitorEmailStatus($domain, $cdrId), 'reviews' => [$review],
+                'callerNumber' => 'Unknown', 'dialedNumber' => 'Unknown', 'destinationNumber' => 'Unknown',
+                'topicsHint' => [], 'matchesHint' => [], 'status' => 'unavailable', 'detail' => 'Limited review record; original call details unavailable.'];
+        }
         auditView($user, ['start' => $filters['start'], 'end' => $filters['end']], 'intelligence-report');
-        jsonResponse(['calls' => $rows, 'intelligenceWorkers' => loadDomainSettings($domain)['intelligenceWorkers'], 'missing' => $missing, 'missingReasons' => $missingReasons, 'hours' => $filters['hours'], 'cacheStatus' => cdrRangeCacheStatus($user, $filters['start'], $filters['end']), 'timezone' => reportingTimezoneName()]);
+        jsonResponse(['unscopedReviews' => $unscopedReviews, 'calls' => $rows, 'intelligenceWorkers' => loadDomainSettings($domain)['intelligenceWorkers'], 'missing' => $missing, 'missingReasons' => $missingReasons, 'hours' => $filters['hours'], 'cacheStatus' => cdrRangeCacheStatus($user, $filters['start'], $filters['end']), 'timezone' => reportingTimezoneName()]);
     }
     if ($action === 'lookup') {
         $ref = intelligenceVerify((string)($input['reference'] ?? ''), $domain);

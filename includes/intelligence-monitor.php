@@ -183,6 +183,22 @@ function monitorSmtpErrorDescription(int $code): string {
 function monitorExpiryReason(string $code): string {
     return 'No automatic email was sent: the call could not be fully checked within 24 hours. Last known issue: ' . monitorPendingDescription($code);
 }
+/** Store the call instant, not the time at which review was created. */
+function monitorCallStartedAt(array $call): string {
+    $start = parseEasternDateTime((string)($call['call-start-datetime'] ?? ''));
+    return $start ? gmdate('c', $start->getTimestamp()) : '';
+}
+/** Recover an older call date only from its own retained CDR queue record. */
+function monitorQueueStartedAt(string $domain, string $cdrId): string {
+    if ($cdrId === '') return '';
+    $key = hash('sha256', $domain . "\0" . $cdrId);
+    $dir = monitorDirectory() . '/queue/' . monitorDomainId($domain);
+    foreach (['done', 'pending'] as $kind) {
+        $record = monitorReadFile($dir . '/' . $kind . '/' . $key . '.json');
+        if (($record['domain'] ?? null) === $domain && ($record['id'] ?? null) === $cdrId && (int)($record['start'] ?? 0) > 0) return gmdate('c', (int)$record['start']);
+    }
+    return '';
+}
 /** Reviews are retained until an operator handles them; no SMTP retry is automatic. */
 function monitorReviewCdr(string $domain, array $call, string $reason): void {
     $display = (string)($call['id'] ?? $call['call-id'] ?? $call['call-orig-call-id'] ?? '');
@@ -190,7 +206,7 @@ function monitorReviewCdr(string $domain, array $call, string $reason): void {
     $name = 'review-' . monitorDomainId($domain) . '-' . hash('sha256', $identity);
     monitorLocked('reviews-' . monitorDomainId($domain) . '-' . substr(hash('sha256', $identity), 0, 2), static function () use ($name, $display, $reason, $call): void {
         $file = monitorDirectory() . '/' . $name . '.json';
-        if (!is_file($file)) monitorWriteFile($file, ['status' => 'review', 'time' => time(), 'callid' => substr($display, 0, 512), 'cdrId' => (string)($call['id'] ?? ''), 'reason' => $reason]);
+        if (!is_file($file)) monitorWriteFile($file, ['status' => 'review', 'time' => time(), 'callid' => substr($display, 0, 512), 'cdrId' => (string)($call['id'] ?? ''), 'startedAt' => monitorCallStartedAt($call), 'reason' => $reason]);
     });
 }
 /** Recover old expiry identity only when the retained queue record proves it. */
@@ -224,7 +240,9 @@ function monitorReviewItems(string $domain): array {
         $display = (string)($item['callid'] ?? '');
         $cdrId = (string)($item['cdrId'] ?? '');
         if ($cdrId === '') $cdrId = monitorLegacyReviewCdrId($domain, $name, $display);
-        $items[] = ['id' => $name, 'callid' => $display, 'cdrId' => $cdrId, 'time' => (int)($item['time'] ?? 0), 'reason' => $reason];
+        $startedAt = is_string($item['startedAt'] ?? null) ? $item['startedAt'] : '';
+        if ($startedAt === '') $startedAt = monitorQueueStartedAt($domain, $cdrId);
+        $items[] = ['id' => $name, 'callid' => $display, 'cdrId' => $cdrId, 'startedAt' => $startedAt, 'time' => (int)($item['time'] ?? 0), 'reason' => $reason];
     }
     return $items;
 }
@@ -235,8 +253,9 @@ function monitorReviews(string $domain, int $offset = 0): array {
 }
 /** Index by trusted CDR id or exact job hash, never by a possibly shared call id. */
 function monitorReviewIndex(string $domain): array {
-    $index = ['cdr' => [], 'job' => []];
-    foreach (monitorReviewItems($domain) as $item) {
+    $items = monitorReviewItems($domain);
+    $index = ['cdr' => [], 'job' => [], 'all' => $items];
+    foreach ($items as $item) {
         if ($item['cdrId'] !== '') $index['cdr'][$item['cdrId']][] = $item;
         if (str_starts_with($item['id'], 'job-')) $index['job'][$item['id']][] = $item;
     }
@@ -299,7 +318,7 @@ function monitorProcessCall(PbxClient $client, string $domain, array $call, arra
             if (in_array($job['status'] ?? '', ['review', 'sending'], true)) $counts['review']++;
             return null;
         }
-        if (time() - $ended >= 86400) { $counts['review']++; return ['status' => 'review', 'time' => time(), 'reason' => monitorExpiryReason(''), 'callid' => $ref['callid'], 'cdrId' => (string)($call['id'] ?? '')]; }
+        if (time() - $ended >= 86400) { $counts['review']++; return ['status' => 'review', 'time' => time(), 'reason' => monitorExpiryReason(''), 'callid' => $ref['callid'], 'cdrId' => (string)($call['id'] ?? ''), 'startedAt' => monitorCallStartedAt($call)]; }
         try {
             $result = intelligenceReadJob($client, $domain, $ref, intelligenceWatches($domain));
             if (($result['status'] ?? '') !== 'finished' || empty($result['topics'])) {
@@ -318,7 +337,7 @@ function monitorProcessCall(PbxClient $client, string $domain, array $call, arra
         $message = intelligenceAutomaticMessage($domain, $call, $ref, $result, $recordingUrl);
         /* Persist the ambiguous state BEFORE SMTP. A crash or timeout may mean
          * the message was accepted; never automatically resend it. */
-        $sending = ['status' => 'sending', 'time' => time(), 'callid' => $ref['callid'], 'cdrId' => (string)($call['id'] ?? '')];
+        $sending = ['status' => 'sending', 'time' => time(), 'callid' => $ref['callid'], 'cdrId' => (string)($call['id'] ?? ''), 'startedAt' => monitorCallStartedAt($call)];
         $file = monitorDirectory() . '/job-' . monitorDomainId($domain) . '-' . monitorJobKey($ref) . '.json';
         monitorWriteFile($file, $sending);
         try {
@@ -336,7 +355,7 @@ function monitorProcessCall(PbxClient $client, string $domain, array $call, arra
                 $description = monitorSmtpErrorDescription((int)$m[1]);
                 if ($description !== '') $detail .= ' ' . $description;
             }
-            return ['status' => 'review', 'time' => time(), 'callid' => $ref['callid'], 'cdrId' => (string)($call['id'] ?? ''), 'reason' => 'SMTP did not confirm acceptance.' . $detail . ' Delivery is uncertain; check the recipient or SMTP logs before retrying.'];
+            return ['status' => 'review', 'time' => time(), 'callid' => $ref['callid'], 'cdrId' => (string)($call['id'] ?? ''), 'startedAt' => monitorCallStartedAt($call), 'reason' => 'SMTP did not confirm acceptance.' . $detail . ' Delivery is uncertain; check the recipient or SMTP logs before retrying.'];
         }
     });
 }

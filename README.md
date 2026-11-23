@@ -414,17 +414,23 @@ the worker does **not** automatically resend. Verify delivery before acknowledgi
 a review. Mail acceptance by SMTP does not guarantee delivery.
 
 The report's **Automatic alert review** column shows outstanding review reasons
-and a **Mark reviewed** action for calls matched to report rows. Other reviews,
-including calls without topics, calls outside the current filters/month and old
-records without enough identity to safely match a row, appear in the paged
-**Other calls needing review** section. It spans the signed-in manager's domain.
-Marking reviewed only acknowledges the item: it does not send or retry an email.
+and a **Mark reviewed** action. Set **Review status → For review** to show only
+outstanding reviews in the same paginated call table, including calls without
+topics. This filter uses the selected report month and also includes older review
+records whose call date is unknown. Records that cannot be safely matched to a
+CDR appear as limited-detail rows with unknown fields; they cannot be selected
+for manual email. If site, department, agent or hours filters are active,
+limited records whose scope cannot be verified are excluded and a warning says
+how many were hidden. Clear those scope filters to see them. The Excel export
+includes the currently filtered review rows and is marked partial when details
+are missing. Marking reviewed only acknowledges the item: it does not send or
+retry an email.
 For SMTP uncertainty, verify delivery before sending manually. New pending retries
 retain a non-sensitive last-known cause (for example missing job ID, unfinished
 transcription, no topics, failed lookup or unavailable CDR); older records may
 not contain enough information to explain the exact cause. A cURL error code, when
 available, is not proof of whether a message was delivered. The Excel export includes
-review reasons for its filtered calls; other reviews are not in that export.
+review reasons for its filtered calls.
 
 Create a Windows Task Scheduler task with a repeating trigger at your preferred
 interval, **Run whether user is logged on or not**, and **Do not start a new

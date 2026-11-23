@@ -230,6 +230,7 @@ const recovery = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/r
 $f=monitorDirectory().'/${legacyId}.json'; $r=monitorReadFile($f); unset($r['cdrId']); monitorWriteFile($f,$r);
 $index=monitorReviewIndex('test.example'); echo json_encode(monitorReviewsForCall('test.example',$index,'expired',null));`));
 assert.equal(recovery[0].id, legacyId, 'legacy expired reviews match only when retained queue identity proves the CDR');
+assert.match(recovery[0].startedAt, /^\d{4}-\d{2}-\d{2}T/, 'legacy call date is recovered from its verified queue record');
 const mismatch = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php';
 $f=monitorDirectory().'/${legacyId}.json'; $r=monitorReadFile($f); $r['callid']='different'; monitorWriteFile($f,$r); echo json_encode(monitorReviewsForCall('test.example',monitorReviewIndex('test.example'),'different',null));`));
 assert.deepEqual(mismatch, [], 'unverified legacy call IDs do not attach to unrelated calls');

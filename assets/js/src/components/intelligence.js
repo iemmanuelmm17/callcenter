@@ -38,8 +38,8 @@ function IntelligenceRow({ row, checked, busy, onSelect, topic, onTopic, onCopy,
     const rowTopics = row.topics || [];
     const badge = t => h('button', { key: t, type: 'button', className: 'intel-topic', 'aria-pressed': topic === t, onClick: () => onTopic(topic === t ? '' : t) }, t);
     return h('tr', { className: row.matches?.length ? 'is-matched' : '' },
-        h('td', null, h('input', { type: 'checkbox', 'aria-label': 'Select call ' + row.callId, checked, disabled: busy, onChange: e => onSelect(row, e.target.checked) })),
-        h('td', null, h('strong', { className: 'intel-date' }, formatCallDate(row.startedAt) || 'Unknown'),
+        h('td', null, h('input', { type: 'checkbox', 'aria-label': 'Select call ' + row.callId, checked, disabled: busy || !row.emailReference, title: row.emailReference ? '' : 'This limited review record has no email snapshot.', onChange: e => onSelect(row, e.target.checked) })),
+        h('td', null, h('strong', { className: 'intel-date' }, formatCallDate(row.startedAt) || (row.reviewOnly ? 'Unknown call date' : 'Unknown')),
             h('div', { className: 'intel-muted' }, formatCallTime(row.startedAt) || 'Unknown'),
             h('button', { type: 'button', className: 'intel-ref-pill', title: (row.callIdField ? row.callIdField + ': ' : '') + row.callId,
                 'aria-label': 'Copy PBX reference ' + row.callId, onClick: () => onCopy(row.callId) },
@@ -47,7 +47,7 @@ function IntelligenceRow({ row, checked, busy, onSelect, topic, onTopic, onCopy,
         h('td', { className: 'intel-party' }, row.callerNumber || 'Unknown'),
         h('td', { className: 'intel-party' }, row.dialedNumber || 'Unknown'),
         h('td', { className: 'intel-party' }, row.destinationNumber || 'Unknown'),
-        h('td', null, h('div', { className: 'intel-topic-list' }, ...rowTopics.slice(0, 5).map(badge),
+        h('td', null, h('div', { className: 'intel-topic-list' }, !rowTopics.length ? h('span', { className: 'intel-muted' }, 'No topics available') : null, ...rowTopics.slice(0, 5).map(badge),
             rowTopics.length > 5 ? h('details', { className: 'intel-more-topics' }, h('summary', null, '+' + (rowTopics.length - 5) + ' more'),
                 h('div', { className: 'intel-topic-list' }, ...rowTopics.slice(5).map(badge))) : null)),
         h('td', { className: 'intel-summary' },
@@ -66,6 +66,8 @@ function IntelligenceDashboard({ filters }) {
     const [savedWatches, setSavedWatches] = useState([]);
     const [matchFilter, setMatchFilter] = useState('all');
     const [keywordFilter, setKeywordFilter] = useState('');
+    const [reviewFilter, setReviewFilter] = useState('all');
+    const [unscopedReviews, setUnscopedReviews] = useState(0);
     const [selectedMonth, setSelectedMonth] = useState(() => reportToday.slice(0, 7));
     const [overrideMonth, setOverrideMonth] = useState('');
     const [appliedOverride, setAppliedOverride] = useState('');
@@ -105,7 +107,7 @@ function IntelligenceDashboard({ filters }) {
 
     useEffect(() => {
         let active = true;
-        setRows([]); setSelected([]); setTopic(''); setPage(1); setMissing(0); setMissingReasons({}); setCacheIncomplete(false); setError(''); setSync({ stage: 'loading', done: 0, total: 0 });
+        setRows([]); setSelected([]); setTopic(''); setPage(1); setMissing(0); setMissingReasons({}); setUnscopedReviews(0); setCacheIncomplete(false); setError(''); setSync({ stage: 'loading', done: 0, total: 0 });
         if (!monthRange) { setProgress(''); setError('Choose a valid month that is not in the future.'); return () => { active = false; }; }
         setProgress('Preparing call history…');
         (async () => {
@@ -138,6 +140,7 @@ function IntelligenceDashboard({ filters }) {
                 const list = await api('intelligence', { ...scope, ...monthRange, action: 'list', month: appliedOverride });
                 if (!active) return;
                 setMissing(list.missing);
+                setUnscopedReviews(list.unscopedReviews || 0);
                 setMissingReasons(list.missingReasons || {});
                 setCacheIncomplete(!list.cacheStatus?.complete || !!(status && !status.complete));
                 const items = list.calls.map(c => ({ ...c, topics: c.topicsHint || [], matches: c.matchesHint || [], status: c.reference ? 'waiting' : (c.status || 'unavailable') })).sort((a, b) => {
@@ -217,17 +220,10 @@ function IntelligenceDashboard({ filters }) {
     const acknowledgeReview = async id => {
         setBusy(true); setError('');
         try {
-            const result = await api('intelligence', { action: 'monitor_reviewed', id, offset: monitor?.reviews?.offset || 0 });
+            const result = await api('intelligence', { action: 'monitor_reviewed', id });
             setAcknowledged(previous => [...previous, id]);
             setMonitor(previous => ({ ...previous, reviews: result.reviews }));
             setMessage('Review marked reviewed. No email was sent or retried.');
-        } catch (e) { setError(e.message); } finally { setBusy(false); }
-    };
-    const loadReviewPage = async offset => {
-        setBusy(true); setError('');
-        try {
-            const reviews = await api('intelligence', { action: 'monitor_reviews', offset });
-            setMonitor(previous => ({ ...previous, reviews }));
         } catch (e) { setError(e.message); } finally { setBusy(false); }
     };
     const send = async () => {
@@ -265,29 +261,29 @@ function IntelligenceDashboard({ filters }) {
     const displayedTopics = query ? filteredTopics : topics.slice(0, 10);
     const browserTopics = filteredTopics.slice();
     if (topicSort === 'alphabetical') browserTopics.sort((a, b) => a[0].localeCompare(b[0]));
-    /* CDR topics remain visible when a transcription is pending or unavailable. */
+    const acknowledgedSet = new Set(acknowledged);
+    const activeReviews = row => (row.reviews || []).filter(item => !acknowledgedSet.has(item.id));
+    /* Topic-less calls appear only when filtering for outstanding reviews. */
     const visible = rows.filter(r => {
-        if (!(r.topics || []).length || (topic && !r.topics.includes(topic))) return false;
+        const hasReview = activeReviews(r).length > 0;
+        if (reviewFilter === 'review' && !hasReview) return false;
+        if (!(r.topics || []).length && !(reviewFilter === 'review' && hasReview)) return false;
+        if (topic && !(r.topics || []).includes(topic)) return false;
         if (matchFilter === 'matched' && !(r.matches || []).length) return false;
         if (matchFilter === 'unmatched' && (r.status !== 'finished' || (r.matches || []).length)) return false;
         if (matchFilter === 'incomplete' && r.status === 'finished') return false;
         return !keywordFilter || (r.matches || []).some(m => m.keyword === keywordFilter);
     });
-    const acknowledgedSet = new Set(acknowledged);
-    const activeReviews = row => (row.reviews || []).filter(item => !acknowledgedSet.has(item.id));
-    const visibleReviewIds = new Set(visible.flatMap(row => activeReviews(row).map(item => item.id)));
-    const otherReviews = (monitor?.reviews?.items || []).filter(item => !visibleReviewIds.has(item.id) && !acknowledgedSet.has(item.id));
-    const reviewOffset = monitor?.reviews?.offset || 0;
-    const failures = rows.filter(r => ['error', 'pending', 'partial', 'unavailable'].includes(r.status)).length;
+    const failures = rows.filter(r => !r.reviewOnly && ['error', 'pending', 'partial', 'unavailable'].includes(r.status)).length;
     const jobs = rows.filter(r => r.reference).length;
     const noTopics = rows.filter(r => r.status === 'finished' && !(r.topics || []).length).length;
-    const partialExport = !!progress || cacheIncomplete || sync.stage === 'error' || failures > 0 || missing > 0;
+    const partialExport = !!progress || cacheIncomplete || sync.stage === 'error' || failures > 0 || missing > 0 || visible.some(row => row.reviewOnly) || (reviewFilter === 'review' && unscopedReviews > 0);
     const totalPages = Math.max(1, Math.ceil(visible.length / pageSize));
     const currentPage = Math.max(1, Math.min(page, totalPages));
     const startIndex = (currentPage - 1) * pageSize;
     const pageRows = visible.slice(startIndex, startIndex + pageSize);
     const changeTopic = value => { setTopic(value); setPage(1); };
-    const visibleKeys = visible.map(row => row.reference || row.rowKey);
+    const visibleKeys = visible.filter(row => row.emailReference).map(row => row.reference || row.rowKey);
     const selectedKeys = new Set(selected);
     const visibleSelected = visibleKeys.filter(key => selectedKeys.has(key)).length;
     const selectAllFiltered = () => setSelected(current => [...new Set([...current, ...visibleKeys])]);
@@ -299,7 +295,7 @@ function IntelligenceDashboard({ filters }) {
             downloadIntelligenceWorkbook(visible.map(row => ({ ...row, reviews: activeReviews(row) })), [
                 ['Report month', selectedMonth], ['Period', monthRange.start + ' – ' + monthRange.end], ['Timezone', APP_TZ],
                 ['Department', filters.department || 'All'], ['Site', filters.site || 'All'], ['Agents', (filters.agents || []).join(', ') || 'All'],
-                ['Hours', filters.hours || 'all'], ['Topic', topic || 'All'], ['Match filter', matchFilter], ['Watched keyword', keywordFilter || 'All'],
+                ['Hours', filters.hours || 'all'], ['Topic', topic || 'All'], ['Match filter', matchFilter], ['Review filter', reviewFilter], ['Watched keyword', keywordFilter || 'All'],
                 ['Exported calls', String(visible.length)], ['CDR cache', cacheIncomplete ? 'Incomplete' : 'Complete'],
                 ['Transcription checking', progress ? 'In progress: ' + progress : (sync.stage === 'complete' ? 'Complete' : 'Unavailable')],
                 ['Export coverage', partialExport ? 'Partial / incomplete' : 'Available checked results'],
@@ -311,7 +307,7 @@ function IntelligenceDashboard({ filters }) {
         } catch (e) { setError('Excel export failed: ' + e.message); }
     };
 
-    const resetFilters = () => { setTopic(''); setMatchFilter('all'); setKeywordFilter(''); setPage(1); };
+    const resetFilters = () => { setTopic(''); setMatchFilter('all'); setReviewFilter('all'); setKeywordFilter(''); setPage(1); };
     const toggleRow = (row, checked) => {
         const key = row.reference || row.rowKey;
         setSelected(current => checked ? [...new Set([...current, key])] : current.filter(x => x !== key));
@@ -350,7 +346,7 @@ function IntelligenceDashboard({ filters }) {
                     h('button', { type: 'button', className: 'intel-icon-btn', disabled: !!progress, onClick: () => { setRefresh(x => x + 1); refreshMonitorStatus(); }, title: progress ? 'Wait for current checking to finish' : 'Reload report', 'aria-label': 'Reload' }, h('i', { className: 'fa-solid fa-rotate-right', 'aria-hidden': 'true' }))))),
         cacheIncomplete ? h('p', { role: 'alert', className: 'intel-warning' }, 'The CDR month is not fully loaded; this report is incomplete.') : null,
         error && !watchOpen ? h('p', { role: 'alert', className: 'intel-warning' }, error) : null,
-        monitor?.unavailable ? h('p', { role: 'alert', className: 'intel-warning' }, 'Unable to load other automatic alert reviews. Refresh the report and contact an administrator if the issue continues.') : null,
+        monitor?.unavailable ? h('p', { role: 'alert', className: 'intel-warning' }, 'Unable to load automatic alert status. Refresh the report and contact an administrator if the issue continues.') : null,
         message ? h('p', { role: 'status', className: 'intel-notice' }, message) : null,
         h('section', { className: 'intel-filter-card', 'aria-label': 'Topic and call filters' },
             h('div', { className: 'intel-ribbon-row' },
@@ -364,43 +360,39 @@ function IntelligenceDashboard({ filters }) {
                 h('div', { className: 'intel-filter-left' },
                     h('label', { className: 'intel-filter-label' }, 'Match status', h('select', { className: 'intelligence-input', value: matchFilter, 'aria-label': 'Match status', onChange: e => { setMatchFilter(e.target.value); setPage(1); } },
                         h('option', { value: 'all' }, 'All calls'), h('option', { value: 'matched' }, 'Matched'), h('option', { value: 'unmatched' }, 'No match (checked)'), h('option', { value: 'incomplete' }, 'Incomplete / not checked'))),
+                    h('label', { className: 'intel-filter-label' }, 'Review status', h('select', { className: 'intelligence-input', value: reviewFilter, 'aria-label': 'Review status', onChange: e => { setReviewFilter(e.target.value); setPage(1); } },
+                        h('option', { value: 'all' }, 'All calls'), h('option', { value: 'review' }, 'For review'))),
                     h('label', { className: 'intel-filter-label' }, 'Watched keyword', h('select', { className: 'intelligence-input', value: keywordFilter, 'aria-label': 'Watched keyword', onChange: e => { setKeywordFilter(e.target.value); setPage(1); } },
                         h('option', { value: '' }, 'All keywords'), ...savedWatches.map(w => h('option', { key: w, value: w }, w)))),
-                    topic || matchFilter !== 'all' || keywordFilter ? h('button', { type: 'button', className: 'intel-text-btn', onClick: resetFilters }, 'Reset filters') : null,
+                    topic || matchFilter !== 'all' || reviewFilter !== 'all' || keywordFilter ? h('button', { type: 'button', className: 'intel-text-btn', onClick: resetFilters }, 'Reset filters') : null,
                     topic ? h('span', { className: 'intel-filter-active', title: topic }, 'Topic: ' + topic) : null),
                 h('div', { className: 'intel-filter-right' },
                     h('label', { className: 'intel-filter-label' }, 'Rows', h('select', { value: pageSize, className: 'intelligence-input', 'aria-label': 'Rows per page', onChange: e => { setPageSize(Number(e.target.value)); setPage(1); } }, ...[30, 50, 100].map(n => h('option', { key: n, value: n }, n)))),
                     h('button', { type: 'button', className: 'intel-export-btn', disabled: !visible.length, title: !visible.length ? 'No filtered calls are available yet.' : (partialExport ? 'Export available results; checking or coverage is incomplete and the file will be marked partial.' : 'Export all filtered calls including sensitive excerpts.'), onClick: exportCalls }, h('i', { className: 'fa-solid fa-file-excel', 'aria-hidden': 'true' }), partialExport && visible.length ? ' Export Excel (partial)' : ' Export Excel')))),
         partialExport && visible.length ? h('p', { className: 'intel-partial-note', role: 'status' }, (progress ? 'Checking is in progress. ' : 'Some call data is unavailable. ') + 'Export contains currently available calls and is marked partial.') :
             (!visible.length ? h('p', { className: 'intel-partial-note', role: 'status' }, 'Excel export is unavailable until at least one filtered call is available.') : null),
-        monitor?.reviews?.total ? h('section', { className: 'intel-review-section', 'aria-label': 'Other calls needing review' },
-            h('h2', null, 'Other calls needing review'),
-            h('p', null, 'Reviews not shown in the filtered table may be from another month, lack topics, or lack enough saved identity to match a row. Verify delivery before retrying. Marking reviewed does not send an email.'),
-            h('p', { className: 'intel-muted' }, 'Review records ' + (reviewOffset + 1) + '–' + Math.min(reviewOffset + 50, monitor.reviews.total) + ' of ' + monitor.reviews.total + ' (including reviews in the table).'),
-            ...otherReviews.map(item => h('div', { key: item.id, className: 'intel-other-review' }, h('strong', null, 'Call: ' + (item.callid || 'Unknown')), h(ReviewDetails, { reviews: [item], busy, onAcknowledge: acknowledgeReview }))),
-            !otherReviews.length ? h('p', { className: 'intel-muted' }, 'No other reviews on this review page.') : null,
-            h('div', { className: 'intel-page-buttons' },
-                h('button', { type: 'button', className: 'rep-btn', disabled: busy || reviewOffset === 0, onClick: () => loadReviewPage(Math.max(0, reviewOffset - 50)) }, 'Previous reviews'),
-                h('button', { type: 'button', className: 'rep-btn', disabled: busy || reviewOffset + 50 >= monitor.reviews.total, onClick: () => loadReviewPage(reviewOffset + 50) }, 'Next reviews'))) : null,
-        h('section', { className: 'intel-results', 'aria-label': 'Calls with topics' },
-            h('div', { className: 'intel-results-head' }, h('div', null, h('h2', null, topic ? 'Calls: ' + topic : 'Calls with topics'), h('span', null, visible.length.toLocaleString() + ' calls')), h('span', null, 'Newest first')),
+        reviewFilter === 'review' ? h('p', { className: 'intel-partial-note', role: 'status' },
+            'Shows reviews for this report month and records with unknown call dates. Limited-detail records cannot be selected for email.' +
+            (unscopedReviews ? ' ' + unscopedReviews + ' reviews have unknown site, department, agent or hours; clear those filters to see them.' : '')) : null,
+        h('section', { className: 'intel-results', 'aria-label': reviewFilter === 'review' ? 'Calls for review' : 'Calls with topics' },
+            h('div', { className: 'intel-results-head' }, h('div', null, h('h2', null, topic ? 'Calls: ' + topic : (reviewFilter === 'review' ? 'Calls for review' : 'Calls with topics')), h('span', null, visible.length.toLocaleString() + ' calls')), h('span', null, 'Newest first')),
             h('div', { className: 'intel-table-wrap', role: 'region', 'aria-label': 'Scrollable calls table', tabIndex: 0 },
                 h('table', { className: 'intel-table' },
                     h('thead', null, h('tr', null,
-                        h('th', { scope: 'col' }, h('input', { type: 'checkbox', 'aria-label': 'Select all filtered calls', title: 'Select or unselect all currently loaded filtered calls across pages', disabled: busy || !visible.length,
-                            checked: visible.length > 0 && visibleSelected === visible.length,
-                            ref: el => { if (el) el.indeterminate = visibleSelected > 0 && visibleSelected < visible.length; },
+                        h('th', { scope: 'col' }, h('input', { type: 'checkbox', 'aria-label': 'Select all filtered calls', title: 'Select or unselect all currently loaded filtered calls across pages', disabled: busy || !visibleKeys.length,
+                            checked: visibleKeys.length > 0 && visibleSelected === visibleKeys.length,
+                            ref: el => { if (el) el.indeterminate = visibleSelected > 0 && visibleSelected < visibleKeys.length; },
                             onChange: e => e.target.checked ? selectAllFiltered() : unselectFiltered() })),
                         ...['Date / time / PBX reference', 'Caller number', 'Originally dialed', 'Final destination', 'Topics', 'Summary', 'Watch matches', 'Email status', 'Automatic alert review'].map(x => h('th', { key: x, scope: 'col' }, x)))),
                     h('tbody', null, ...pageRows.map(row => h(IntelligenceRow, { key: row.reference || row.rowKey, row, checked: selectedKeys.has(row.reference || row.rowKey), busy, onSelect: toggleRow, topic, onTopic: changeTopic, onCopy: copyReference, watches: savedWatches, reviews: activeReviews(row), onAcknowledge: acknowledgeReview }))))),
-            !pageRows.length ? h('p', { className: 'intel-empty' }, progress ? 'Checking calls for topics…' : (topic || matchFilter !== 'all' || keywordFilter ? 'No calls match the current filters.' : 'No calls with topics in this month.')) : null,
+            !pageRows.length ? h('p', { className: 'intel-empty' }, progress ? 'Checking calls for topics…' : (topic || matchFilter !== 'all' || reviewFilter !== 'all' || keywordFilter ? 'No calls match the current filters.' : 'No calls with topics in this month.')) : null,
             h('div', { className: 'intel-pagination', 'aria-label': 'Call table pagination' },
                 h('span', null, recordRangeLabel(visible.length, startIndex, Math.min(startIndex + pageSize, visible.length))),
                 h('div', { className: 'intel-page-buttons' }, paginationButton('First', 1, currentPage === 1), paginationButton('Previous', currentPage - 1, currentPage === 1),
                     h('span', null, 'Page ' + currentPage + ' of ' + totalPages), paginationButton('Next', currentPage + 1, currentPage === totalPages), paginationButton('Last', totalPages, currentPage === totalPages)))),
         selected.length ? h('div', { className: 'intel-bulk-dock', role: 'region', 'aria-label': 'Selected call actions' },
             h('div', { className: 'intel-selection-badge' }, h('strong', null, selected.length.toLocaleString() + ' selected'), h('span', null, visibleSelected.toLocaleString() + ' in current filter' + (progress ? ' · loaded only' : ''))),
-            h('button', { type: 'button', className: 'intel-action-btn', disabled: busy || !visible.length || visibleSelected === visibleKeys.length, onClick: selectAllFiltered }, 'Select all filtered calls'),
+            h('button', { type: 'button', className: 'intel-action-btn', disabled: busy || !visibleKeys.length || visibleSelected === visibleKeys.length, onClick: selectAllFiltered }, 'Select all filtered calls'),
             h('button', { type: 'button', className: 'intel-text-btn', disabled: busy || !visibleSelected, onClick: unselectFiltered }, 'Unselect filtered calls'),
             h('button', { type: 'button', className: 'intel-text-btn', disabled: busy, onClick: () => setSelected([]) }, 'Clear all selections'),
             h('label', { className: 'intel-email-label' }, h('span', { className: 'intel-sr-only' }, 'Recipients'), h('input', { value: recipients, onChange: e => setRecipients(e.target.value), placeholder: 'name@example.com', className: 'intelligence-input', 'aria-label': 'Recipients' })),
