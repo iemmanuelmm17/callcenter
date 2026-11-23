@@ -88,9 +88,3 @@ declare(strict_types=1);
  * Whole minutes from 1 to 1440; default 10. Longer windows increase PBX load.
  * Must be at least the task interval and longer than expected call durations. */
 // define('INTELLIGENCE_CDR_LOOKBACK_MINUTES', 10);
-
-/* Public HTTPS endpoint for automatic-alert recording downloads. Use the full
- * externally reachable deployment URL; never derive it from an HTTP Host header.
- * Links grant anyone who has them access for 30 days. If unset/invalid, alerts
- * still send without a recording button. Protect CACHE_DIR from web access. */
-// define('INTELLIGENCE_RECORDING_URL', 'https://calls.example.com/api/intelligence-recording.php');

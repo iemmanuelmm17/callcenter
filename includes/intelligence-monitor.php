@@ -332,7 +332,7 @@ function monitorProcessCall(PbxClient $client, string $domain, array $call, arra
         if ($recipients === []) { $counts['pending']++; return null; }
         if (empty($result['matches'])) { $counts['checked']++; return ['status' => 'checked', 'time' => time()]; }
         $recordingUrl = null;
-        try { $recordingUrl = intelligenceRecordingIssue($client, $domain, $call); }
+        try { $recordingUrl = intelligenceRecordingLink($client, $domain, $call); }
         catch (Throwable $e) { appExceptionLog('Alert recording link', $e); }
         $message = intelligenceAutomaticMessage($domain, $call, $ref, $result, $recordingUrl);
         /* Persist the ambiguous state BEFORE SMTP. A crash or timeout may mean

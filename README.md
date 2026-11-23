@@ -371,36 +371,27 @@ filters. Disabling stops further work, though an in-flight email may still arriv
 Re-enabling starts a new cutoff. Checks search summary, topics and transcript
 segments; an automatic message contains the summary, topics and matching excerpts.
 
-Automatic emails highlight the matching watched phrases and, when available,
-include a **Listen to recording** button that downloads a WAV file. Configure the
-full publicly reachable HTTPS endpoint in server-only `includes/config.local.php`
-(adjust the host and deployment path to your installation):
+Automatic emails highlight matching watched phrases and, when available, the
+**Listen to recording** button links directly to the PBX's HTTPS
+`file-access-url`. The worker retrieves this URL using the dedicated service key;
+it does not download, proxy or store the audio, and does not put the service key
+in the email. The PBX key needs permission to read recordings for every enabled
+domain. The recording server decides whether the browser plays or downloads the
+file, its format, and whether the URL remains valid. The app cannot guarantee a
+30-day lifetime or revoke a direct URL; anyone with it may access the recording
+and forward it. Treat emails and recording URLs as sensitive. Mail scanners and
+email infrastructure may see and access the link. The app cannot record clicks
+on direct links; check recording-server logs if needed.
 
-```php
-define('INTELLIGENCE_RECORDING_URL', 'https://calls.example.com/api/intelligence-recording.php');
-```
-
-This endpoint is intentionally accessible **without sign-in**: anyone possessing
-or receiving a forwarded link can download the recording for 30 days from link
-creation immediately before sending. Treat these links as confidential. The link
-contains a random bearer secret, not the PBX key. Opening it requires JavaScript;
-the secret is in the URL fragment rather than an ordinary server access-log URL.
-Email security scanners and recipients can access it, and security infrastructure
-that inspects full email contents may see it. The download re-queries the PBX;
-if the recording is later removed or unavailable, the download will fail. PBX
-locations request `wav16` conversion; a CDN URL must already supply WAV content.
-Invalid or non-WAV content is not returned as a WAV file. If the public URL is
-missing/invalid, recording identifiers are absent, or the PBX location cannot be
-obtained or validated, the automatic alert is still sent and says that the
-recording link is unavailable. Manual selected-call emails are unchanged.
-
-Capability records and audit data reside under `CACHE_DIR` and `LOG_DIR` and must
-be inaccessible over HTTP; place these directories outside the web root or deny
-web access. Scheduled runs clean up expired recording-link records daily; if the
-worker is stopped, remove old records through normal secure retention procedures.
-The download server needs access to the same monitor storage and service key as
-the scheduled worker. The server needs permission to look up recordings and
-network access to the PBX and any approved public recording host.
+If the recording identifiers or a valid HTTPS `file-access-url` cannot be obtained,
+the automatic alert is still sent and says the recording link is unavailable.
+Manual selected-call emails are unchanged. `INTELLIGENCE_RECORDING_URL` is no
+longer needed for new emails; leaving it in local configuration has no effect.
+Existing emailed app links still validate their original 30-day tokens and then
+redirect to the current PBX URL without transferring audio. Once redirected,
+the destination's own access and expiration rules apply. Retain the shared
+monitor storage and keep the previous endpoint reachable for old links that
+have not expired; scheduled runs continue to clean up expired link records.
 
 Discovered completed CDRs are stored by domain and CDR ID and first checked about
 five minutes after completion. If the job ID or intelligence is not ready, the

@@ -312,7 +312,7 @@ function intelligenceAutomaticMessage(string $domain, array $call, array $ref, a
         $words[] = $match['keyword'];
         $text .= 'MATCHED KEYWORD: ' . $match['keyword'] . ' (' . $match['source'] . '): ' . $match['excerpt'] . "\n";
     }
-    $text .= $recordingUrl !== null ? "\nListen to recording (download WAV; link valid for 30 days): " . $recordingUrl . "\nAnyone with the link can download the recording.\n" : "\nRecording download link unavailable; contact your administrator.\n";
+    $text .= $recordingUrl !== null ? "\nListen to recording: " . $recordingUrl . "\nAnyone with the link may access the recording. The recording server controls its availability and expiration.\n" : "\nRecording download link unavailable; contact your administrator.\n";
     $escape = static fn(string $value): string => htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     $html = '<!doctype html><html><body style="font-family:Arial,sans-serif;color:#202939;line-height:1.5;">';
     $html .= '<h2>CallScope keyword alert</h2><p><strong>Domain:</strong> ' . $escape($domain) . '<br><strong>Call:</strong> ' . $escape((string)$ref['callid']) . '<br>' . nl2br($escape(trim($details)), false) . '</p>';
@@ -321,7 +321,7 @@ function intelligenceAutomaticMessage(string $domain, array $call, array $ref, a
         $html .= '<p><strong>Keyword:</strong> ' . intelligenceHighlightHtml((string)$match['keyword'], [(string)$match['keyword']]) . ' <small>(' . $escape((string)$match['source']) . ')</small><br>' . nl2br(intelligenceHighlightHtml((string)$match['excerpt'], $words), false) . '</p>';
     }
     if ($recordingUrl !== null) {
-        $html .= '<p><a href="' . $escape($recordingUrl) . '" style="display:inline-block;padding:12px 18px;background-color:#b91c3c;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:bold;">Listen to recording</a></p><p>Downloads a WAV file. Link expires in 30 days; anyone with it can download the recording.</p>';
+        $html .= '<p><a href="' . $escape($recordingUrl) . '" style="display:inline-block;padding:12px 18px;background-color:#b91c3c;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:bold;">Listen to recording</a></p><p>Opens the recording on the recording server. Anyone with the link may access it; the recording server controls availability and expiration.</p>';
     } else $html .= '<p>Recording download link unavailable; contact your administrator.</p>';
     return ['text' => $text, 'html' => $html . '</body></html>'];
 }
