@@ -30,12 +30,12 @@ const sheetXml = (rows, widths, autoFilter) => {
 };
 
 const intelligenceWorkbook = (rows, metadata) => {
-    const header = ['Date', 'Time', 'Caller number', 'Originally dialed', 'Final destination', 'PBX reference type', 'PBX reference', 'Topics', 'Summary', 'Match result', 'Matched keywords', 'Matching excerpts', 'Lookup status', 'Lookup detail'];
+    const header = ['Date', 'Time', 'Caller number', 'Originally dialed', 'Final destination', 'PBX reference type', 'PBX reference', 'Topics', 'Summary', 'Match result', 'Matched keywords', 'Matching excerpts', 'Lookup status', 'Lookup detail', 'Automatic alert review'];
     const calls = [header, ...rows.map(row => [
         formatCallDate(row.startedAt) || 'Unknown', formatCallTime(row.startedAt) || 'Unknown', row.callerNumber || 'Unknown', row.dialedNumber || 'Unknown', row.destinationNumber || 'Unknown', row.callIdField || '', row.callId || '',
         (row.topics || []).join('; '), row.summary || '', row.matches?.length ? 'Matched' : (row.status === 'finished' ? 'No match' : 'Not fully checked'),
         (row.matches || []).map(m => m.keyword).join('; '),
-        (row.matches || []).map(m => m.keyword + ' (' + m.source + '): ' + m.excerpt).join('\n'), row.status || '', row.detail || ''
+        (row.matches || []).map(m => m.keyword + ' (' + m.source + '): ' + m.excerpt).join('\n'), row.status || '', row.detail || '', (row.reviews || []).map(item => item.reason).join('\n')
     ])];
     const info = [['Report information', 'Value'], ...metadata];
     const files = {
@@ -43,7 +43,7 @@ const intelligenceWorkbook = (rows, metadata) => {
         '_rels/.rels': '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
         'xl/workbook.xml': '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Calls" sheetId="1" r:id="rId1"/><sheet name="Report information" sheetId="2" r:id="rId2"/></sheets></workbook>',
         'xl/_rels/workbook.xml.rels': '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>',
-        'xl/worksheets/sheet1.xml': sheetXml(calls, [14, 13, 22, 22, 22, 20, 32, 40, 65, 20, 30, 70, 18, 50], true),
+        'xl/worksheets/sheet1.xml': sheetXml(calls, [14, 13, 22, 22, 22, 20, 32, 40, 65, 20, 30, 70, 18, 50, 60], true),
         'xl/worksheets/sheet2.xml': sheetXml(info, [30, 80], false)
     };
     return zipSync(Object.fromEntries(Object.entries(files).map(([name, text]) => [name, strToU8(text)])), { level: 1 });

@@ -26,7 +26,14 @@ function markedSummary(text, phrases) {
     return parts;
 }
 
-function IntelligenceRow({ row, checked, busy, onSelect, topic, onTopic, onCopy, watches }) {
+function ReviewDetails({ reviews, busy, onAcknowledge }) {
+    if (!reviews.length) return h('span', { className: 'intel-muted' }, 'No review recorded');
+    return h('div', { className: 'intel-review-items' }, ...reviews.map(item => h('div', { key: item.id, className: 'intel-review-item' },
+        h('strong', null, 'Needs review'), h('p', null, item.reason),
+        h('button', { type: 'button', className: 'intel-text-btn', disabled: busy, onClick: () => onAcknowledge(item.id), 'aria-label': 'Mark review ' + (item.callid || item.id) + ' reviewed' }, 'Mark reviewed'))));
+}
+
+function IntelligenceRow({ row, checked, busy, onSelect, topic, onTopic, onCopy, watches, reviews, onAcknowledge }) {
     const [expanded, setExpanded] = useState(false);
     const rowTopics = row.topics || [];
     const badge = t => h('button', { key: t, type: 'button', className: 'intel-topic', 'aria-pressed': topic === t, onClick: () => onTopic(topic === t ? '' : t) }, t);
@@ -49,7 +56,8 @@ function IntelligenceRow({ row, checked, busy, onSelect, topic, onTopic, onCopy,
         h('td', null, row.matches?.length ? h('div', { className: 'intel-match-pills' }, ...row.matches.map(m => h('span', { key: m.keyword, className: 'intel-match-label' }, 'Matched: ' + m.keyword))) : h('span', { className: 'intel-muted' }, row.status === 'finished' ? 'No match' : 'Not fully checked'),
             row.status !== 'finished' ? h('div', { className: 'intel-muted' }, 'Incomplete check · ' + row.status + (row.detail ? ': ' + row.detail : '')) : null,
             row.matches?.length ? h('details', { className: 'intel-excerpts' }, h('summary', null, 'Matching excerpts'), ...row.matches.map(m => h('p', { key: m.keyword }, m.keyword + ' (' + m.source + '): ' + m.excerpt))) : null),
-        h('td', { className: 'intel-party' }, row.emailStatus ? h('div', null, h('strong', null, 'SMTP accepted (' + row.emailStatus.kind + ')'), h('div', null, new Intl.DateTimeFormat(undefined, { timeZone: APP_TZ, dateStyle: 'medium', timeStyle: 'short' }).format(new Date(row.emailStatus.time * 1000))), h('div', null, (row.emailStatus.recipients || []).join(', '))) : h('span', { className: 'intel-muted' }, 'No email recorded')));
+        h('td', { className: 'intel-party' }, row.emailStatus ? h('div', null, h('strong', null, 'SMTP accepted (' + row.emailStatus.kind + ')'), h('div', null, new Intl.DateTimeFormat(undefined, { timeZone: APP_TZ, dateStyle: 'medium', timeStyle: 'short' }).format(new Date(row.emailStatus.time * 1000))), h('div', null, (row.emailStatus.recipients || []).join(', '))) : h('span', { className: 'intel-muted' }, 'No email recorded')),
+        h('td', { className: 'intel-review-cell' }, h(ReviewDetails, { reviews, busy, onAcknowledge })));
 }
 
 function IntelligenceDashboard({ filters }) {
@@ -74,6 +82,7 @@ function IntelligenceDashboard({ filters }) {
     const [showAllTopics, setShowAllTopics] = useState(false);
     const [watchOpen, setWatchOpen] = useState(false);
     const [monitor, setMonitor] = useState(null);
+    const [acknowledged, setAcknowledged] = useState([]);
     const [alertRecipients, setAlertRecipients] = useState('');
     const [syncOpen, setSyncOpen] = useState(false);
     const [sync, setSync] = useState({ stage: 'loading', done: 0, total: 0 });
@@ -201,11 +210,24 @@ function IntelligenceDashboard({ filters }) {
             setMessage(result.enabled ? 'Automatic alerts enabled for new completed calls.' : 'Automatic alerts disabled.');
         } catch (e) { setError(e.message); } finally { setBusy(false); }
     };
+    const refreshMonitorStatus = async () => {
+        try { const result = await api('intelligence', { action: 'monitor_status' }); setMonitor(result); }
+        catch (e) { setError('Unable to refresh automatic alert reviews: ' + e.message); }
+    };
     const acknowledgeReview = async id => {
         setBusy(true); setError('');
         try {
-            const result = await api('intelligence', { action: 'monitor_reviewed', id });
+            const result = await api('intelligence', { action: 'monitor_reviewed', id, offset: monitor?.reviews?.offset || 0 });
+            setAcknowledged(previous => [...previous, id]);
             setMonitor(previous => ({ ...previous, reviews: result.reviews }));
+            setMessage('Review marked reviewed. No email was sent or retried.');
+        } catch (e) { setError(e.message); } finally { setBusy(false); }
+    };
+    const loadReviewPage = async offset => {
+        setBusy(true); setError('');
+        try {
+            const reviews = await api('intelligence', { action: 'monitor_reviews', offset });
+            setMonitor(previous => ({ ...previous, reviews }));
         } catch (e) { setError(e.message); } finally { setBusy(false); }
     };
     const send = async () => {
@@ -251,6 +273,11 @@ function IntelligenceDashboard({ filters }) {
         if (matchFilter === 'incomplete' && r.status === 'finished') return false;
         return !keywordFilter || (r.matches || []).some(m => m.keyword === keywordFilter);
     });
+    const acknowledgedSet = new Set(acknowledged);
+    const activeReviews = row => (row.reviews || []).filter(item => !acknowledgedSet.has(item.id));
+    const visibleReviewIds = new Set(visible.flatMap(row => activeReviews(row).map(item => item.id)));
+    const otherReviews = (monitor?.reviews?.items || []).filter(item => !visibleReviewIds.has(item.id) && !acknowledgedSet.has(item.id));
+    const reviewOffset = monitor?.reviews?.offset || 0;
     const failures = rows.filter(r => ['error', 'pending', 'partial', 'unavailable'].includes(r.status)).length;
     const jobs = rows.filter(r => r.reference).length;
     const noTopics = rows.filter(r => r.status === 'finished' && !(r.topics || []).length).length;
@@ -269,7 +296,7 @@ function IntelligenceDashboard({ filters }) {
     const exportCalls = () => {
         try {
             setError('');
-            downloadIntelligenceWorkbook(visible, [
+            downloadIntelligenceWorkbook(visible.map(row => ({ ...row, reviews: activeReviews(row) })), [
                 ['Report month', selectedMonth], ['Period', monthRange.start + ' – ' + monthRange.end], ['Timezone', APP_TZ],
                 ['Department', filters.department || 'All'], ['Site', filters.site || 'All'], ['Agents', (filters.agents || []).join(', ') || 'All'],
                 ['Hours', filters.hours || 'all'], ['Topic', topic || 'All'], ['Match filter', matchFilter], ['Watched keyword', keywordFilter || 'All'],
@@ -320,9 +347,10 @@ function IntelligenceDashboard({ filters }) {
                 h('button', { type: 'button', className: 'intel-action-btn', onClick: () => setWatchOpen(true) }, h('i', { className: 'fa-solid fa-bell', 'aria-hidden': 'true' }), ' Keyword Watch ', h('span', { className: 'intel-counter' }, savedWatches.length)),
                 h('div', { className: 'intel-month-control' },
                     h('input', { type: 'month', value: selectedMonth, max: reportToday.slice(0, 7), onChange: e => setSelectedMonth(e.target.value), 'aria-label': 'Report month' }),
-                    h('button', { type: 'button', className: 'intel-icon-btn', disabled: !!progress, onClick: () => setRefresh(x => x + 1), title: progress ? 'Wait for current checking to finish' : 'Reload report', 'aria-label': 'Reload' }, h('i', { className: 'fa-solid fa-rotate-right', 'aria-hidden': 'true' }))))),
+                    h('button', { type: 'button', className: 'intel-icon-btn', disabled: !!progress, onClick: () => { setRefresh(x => x + 1); refreshMonitorStatus(); }, title: progress ? 'Wait for current checking to finish' : 'Reload report', 'aria-label': 'Reload' }, h('i', { className: 'fa-solid fa-rotate-right', 'aria-hidden': 'true' }))))),
         cacheIncomplete ? h('p', { role: 'alert', className: 'intel-warning' }, 'The CDR month is not fully loaded; this report is incomplete.') : null,
         error && !watchOpen ? h('p', { role: 'alert', className: 'intel-warning' }, error) : null,
+        monitor?.unavailable ? h('p', { role: 'alert', className: 'intel-warning' }, 'Unable to load other automatic alert reviews. Refresh the report and contact an administrator if the issue continues.') : null,
         message ? h('p', { role: 'status', className: 'intel-notice' }, message) : null,
         h('section', { className: 'intel-filter-card', 'aria-label': 'Topic and call filters' },
             h('div', { className: 'intel-ribbon-row' },
@@ -345,6 +373,15 @@ function IntelligenceDashboard({ filters }) {
                     h('button', { type: 'button', className: 'intel-export-btn', disabled: !visible.length, title: !visible.length ? 'No filtered calls are available yet.' : (partialExport ? 'Export available results; checking or coverage is incomplete and the file will be marked partial.' : 'Export all filtered calls including sensitive excerpts.'), onClick: exportCalls }, h('i', { className: 'fa-solid fa-file-excel', 'aria-hidden': 'true' }), partialExport && visible.length ? ' Export Excel (partial)' : ' Export Excel')))),
         partialExport && visible.length ? h('p', { className: 'intel-partial-note', role: 'status' }, (progress ? 'Checking is in progress. ' : 'Some call data is unavailable. ') + 'Export contains currently available calls and is marked partial.') :
             (!visible.length ? h('p', { className: 'intel-partial-note', role: 'status' }, 'Excel export is unavailable until at least one filtered call is available.') : null),
+        monitor?.reviews?.total ? h('section', { className: 'intel-review-section', 'aria-label': 'Other calls needing review' },
+            h('h2', null, 'Other calls needing review'),
+            h('p', null, 'Reviews not shown in the filtered table may be from another month, lack topics, or lack enough saved identity to match a row. Verify delivery before retrying. Marking reviewed does not send an email.'),
+            h('p', { className: 'intel-muted' }, 'Review records ' + (reviewOffset + 1) + '–' + Math.min(reviewOffset + 50, monitor.reviews.total) + ' of ' + monitor.reviews.total + ' (including reviews in the table).'),
+            ...otherReviews.map(item => h('div', { key: item.id, className: 'intel-other-review' }, h('strong', null, 'Call: ' + (item.callid || 'Unknown')), h(ReviewDetails, { reviews: [item], busy, onAcknowledge: acknowledgeReview }))),
+            !otherReviews.length ? h('p', { className: 'intel-muted' }, 'No other reviews on this review page.') : null,
+            h('div', { className: 'intel-page-buttons' },
+                h('button', { type: 'button', className: 'rep-btn', disabled: busy || reviewOffset === 0, onClick: () => loadReviewPage(Math.max(0, reviewOffset - 50)) }, 'Previous reviews'),
+                h('button', { type: 'button', className: 'rep-btn', disabled: busy || reviewOffset + 50 >= monitor.reviews.total, onClick: () => loadReviewPage(reviewOffset + 50) }, 'Next reviews'))) : null,
         h('section', { className: 'intel-results', 'aria-label': 'Calls with topics' },
             h('div', { className: 'intel-results-head' }, h('div', null, h('h2', null, topic ? 'Calls: ' + topic : 'Calls with topics'), h('span', null, visible.length.toLocaleString() + ' calls')), h('span', null, 'Newest first')),
             h('div', { className: 'intel-table-wrap', role: 'region', 'aria-label': 'Scrollable calls table', tabIndex: 0 },
@@ -354,8 +391,8 @@ function IntelligenceDashboard({ filters }) {
                             checked: visible.length > 0 && visibleSelected === visible.length,
                             ref: el => { if (el) el.indeterminate = visibleSelected > 0 && visibleSelected < visible.length; },
                             onChange: e => e.target.checked ? selectAllFiltered() : unselectFiltered() })),
-                        ...['Date / time / PBX reference', 'Caller number', 'Originally dialed', 'Final destination', 'Topics', 'Summary', 'Watch matches', 'Email status'].map(x => h('th', { key: x, scope: 'col' }, x)))),
-                    h('tbody', null, ...pageRows.map(row => h(IntelligenceRow, { key: row.reference || row.rowKey, row, checked: selectedKeys.has(row.reference || row.rowKey), busy, onSelect: toggleRow, topic, onTopic: changeTopic, onCopy: copyReference, watches: savedWatches }))))),
+                        ...['Date / time / PBX reference', 'Caller number', 'Originally dialed', 'Final destination', 'Topics', 'Summary', 'Watch matches', 'Email status', 'Automatic alert review'].map(x => h('th', { key: x, scope: 'col' }, x)))),
+                    h('tbody', null, ...pageRows.map(row => h(IntelligenceRow, { key: row.reference || row.rowKey, row, checked: selectedKeys.has(row.reference || row.rowKey), busy, onSelect: toggleRow, topic, onTopic: changeTopic, onCopy: copyReference, watches: savedWatches, reviews: activeReviews(row), onAcknowledge: acknowledgeReview }))))),
             !pageRows.length ? h('p', { className: 'intel-empty' }, progress ? 'Checking calls for topics…' : (topic || matchFilter !== 'all' || keywordFilter ? 'No calls match the current filters.' : 'No calls with topics in this month.')) : null,
             h('div', { className: 'intel-pagination', 'aria-label': 'Call table pagination' },
                 h('span', null, recordRangeLabel(visible.length, startIndex, Math.min(startIndex + pageSize, visible.length))),
@@ -386,7 +423,6 @@ function IntelligenceDashboard({ filters }) {
                 monitor?.paused ? h('p', { className: 'intel-warning', role: 'status' }, 'Automatic alerts are paused until this domain has saved recipients. Pending calls older than 24 hours will require review.') : null,
                 message.startsWith('Alert recipients') ? h('p', { role: 'status', className: 'intel-notice' }, message) : null,
                 monitor && !monitor.unavailable ? h('p', { className: 'intel-drawer-copy' }, 'Status: ' + (monitor.enabled ? 'Enabled' : 'Disabled') + (monitor.configured ? '' : ' · server configuration incomplete')) : null,
-                monitor?.reviews?.total ? h('div', { className: 'intel-warning', role: 'status' }, h('strong', null, monitor.reviews.total + ' calls need review'), ...monitor.reviews.items.map((item, i) => h('p', { key: item.id || i }, (item.callid || 'Unknown call') + ': ' + item.reason, ' ', h('button', { type: 'button', className: 'intel-text-btn', disabled: busy, onClick: () => acknowledgeReview(item.id) }, 'Mark reviewed'))), monitor.reviews.total > monitor.reviews.items.length ? h('p', null, 'Additional reviews are retained on the server.') : null) : null,
                 monitor?.enabled && !monitor.lastRun ? h('p', { className: 'intel-drawer-copy' }, 'No scheduled scan has completed yet. Verify the Windows task is running.') : null,
                 monitor?.lastRun ? h('p', { className: 'intel-drawer-copy' }, 'Last run: ' + new Date(monitor.lastRun.time * 1000).toLocaleString() + ' · ' + (monitor.lastRun.error || ('sent ' + (monitor.lastRun.counts?.sent || 0) + ' · pending ' + (monitor.lastRun.counts?.pending || 0)))) : null,
                 message.startsWith('Automatic alerts') ? h('p', { role: 'status', className: 'intel-notice' }, message) : null,

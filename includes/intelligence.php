@@ -362,6 +362,9 @@ function intelligenceSendMail(array $recipients, string $body, string $subject =
             CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2, CURLOPT_MAIL_FROM => '<' . $from . '>',
             CURLOPT_MAIL_RCPT => array_map(static fn($x) => '<' . $x . '>', $recipients), CURLOPT_UPLOAD => true,
             CURLOPT_INFILE => $stream, CURLOPT_INFILESIZE => strlen($payload), CURLOPT_TIMEOUT => 30, CURLOPT_CONNECTTIMEOUT => 10]);
-        if (curl_exec($curl) !== true) throw new RuntimeException('SMTP delivery failed.');
+        if (curl_exec($curl) !== true) {
+            $code = function_exists('curl_errno') ? (int)curl_errno($curl) : 0;
+            throw new RuntimeException('SMTP delivery failed (cURL error ' . $code . ').');
+        }
     } finally { curl_close($curl); fclose($stream); }
 }

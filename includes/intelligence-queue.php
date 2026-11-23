@@ -47,14 +47,16 @@ function monitorQueueDue(string $domain, array $state): array {
     ksort($groups, SORT_NUMERIC);
     return $groups;
 }
-function monitorQueueFinish(string $domain, array $item, string $status): void {
-    monitorLocked(monitorQueueLock($domain, $item['id']), static function () use ($domain, $item, $status): void {
+function monitorQueueFinish(string $domain, array $item, string $status, string $pendingReason = ''): void {
+    monitorLocked(monitorQueueLock($domain, $item['id']), static function () use ($domain, $item, $status, $pendingReason): void {
         $file = monitorQueueFile($domain, $item['id']);
         $current = monitorReadFile($file);
         if (($current['status'] ?? '') !== 'pending' || ($current['generation'] ?? null) !== $item['generation']) return;
         if ($status === 'pending') {
             $attempt = (int)($current['attempts'] ?? 0) + 1;
             $current['attempts'] = $attempt;
+            if (in_array($pendingReason, ['jobId', 'server', 'callId', 'month', 'processing', 'partial', 'topics', 'lookup', 'cdr', 'time'], true)) $current['lastReason'] = $pendingReason;
+            else unset($current['lastReason']);
             $current['next'] = time() + ($attempt === 1 ? 300 : ($attempt === 2 ? 600 : 1800));
             monitorWriteFile($file, $current);
         } else {

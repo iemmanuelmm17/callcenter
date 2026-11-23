@@ -36,6 +36,12 @@ await h.seedPbx('fetchCdrs', [{
 { id: 'cdr6', _server: 'nms1', 'call-direction': 0, 'call-orig-user': '0100', 'call-orig-to-user': '5554444', 'call-intelligence-job-id': 330696339, 'call-start-datetime': '2026-11-16T14:27:13+00:00',
   'prefilled-transcription-api': '/ns-api/v2/domains/test.example/transcriptions?id=330696339&amp;date=202611&amp;orig_callid=orig%40pbx&amp;term_callid=term%40pbx&amp;by_callid=through%40pbx&amp;ignored=unsafe' }]);
 await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; monitorRecordEmail('test.example', 'cdr1', ['mail@example.com'], 'manual', 123456);`);
+await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php';
+monitorReviewCdr('test.example', ['id'=>'cdr4','call-start-datetime'=>'2026-11-16T10:03:00Z'], monitorExpiryReason('callId'));
+monitorReviewCdr('test.example', ['id'=>'cdr2','call-start-datetime'=>'2026-11-16T10:01:00Z'], monitorExpiryReason('jobId'));
+monitorReviewCdr('other.example', ['id'=>'cdr4'], 'other tenant');
+$ref=['id'=>'78920299','callid'=>'abc@pbx']; $f=monitorDirectory().'/job-'.monitorDomainId('test.example').'-'.monitorJobKey($ref).'.json'; monitorWriteFile($f,['status'=>'review','time'=>time(),'callid'=>'abc@pbx','reason'=>'SMTP delivery uncertain; verify before retrying']);
+`);
 const listing = await req('list', { start: '2026-11-16', end: '2026-11-16', hours: 'all' });
 assert.equal(listing.status, 200, JSON.stringify(listing));
 assert.equal(listing.body.calls.length, 3, JSON.stringify(listing.body));
@@ -45,6 +51,13 @@ assert.equal(unavailable.reference, null);
 assert.ok(unavailable.emailReference);
 assert.deepEqual([unavailable.callerNumber, unavailable.dialedNumber, unavailable.destinationNumber], ['5553333', '700', '2500']);
 assert.deepEqual(unavailable.topicsHint, ['account number', 'billing']);
+assert.match(unavailable.reviews[0].reason, /usable transcription call ID/);
+assert.equal(listing.body.calls[0].reviews.length, 1, 'legacy job review matches by job identity');
+assert.match(listing.body.calls[0].reviews[0].reason, /may have succeeded/);
+assert(!JSON.stringify(listing.body.calls).includes('other tenant'));
+assert.equal((await req('monitor_status')).body.reviews.total, 3, 'no-topics review remains separately accessible');
+assert.equal((await req('monitor_reviews', {}, USERS.supervisor)).status, 403);
+assert.equal((await req('monitor_reviews', {}, other)).body.total, 1);
 assert.deepEqual(unavailable.matchesHint.map(m => m.keyword), ['ACCOUNT']);
 const threeIdCall = listing.body.calls.find(x => x.callId === 'through@pbx');
 assert.equal(threeIdCall.callIdField, 'by_callid');

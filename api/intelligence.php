@@ -22,6 +22,11 @@ try {
         $state = monitorState($domain);
         jsonResponse(intelligenceMonitorStatus($domain, $state));
     }
+    if ($action === 'monitor_reviews') {
+        $offset = $input['offset'] ?? 0;
+        if (!is_int($offset) || $offset < 0) throw new InvalidArgumentException('Invalid review page.');
+        jsonResponse(monitorReviews($domain, $offset));
+    }
     if ($action === 'monitor_recipients') {
         if (!is_string($input['recipients'] ?? null)) throw new InvalidArgumentException('Enter email addresses separated by semicolons.');
         $state = monitorSaveRecipients($domain, $input['recipients']);
@@ -29,10 +34,12 @@ try {
         jsonResponse(intelligenceMonitorStatus($domain, $state));
     }
     if ($action === 'monitor_reviewed') {
+        $offset = $input['offset'] ?? 0;
+        if (!is_int($offset) || $offset < 0) throw new InvalidArgumentException('Invalid review page.');
         if (!is_string($input['id'] ?? null)) throw new InvalidArgumentException('A review is required.');
         monitorAcknowledge($domain, $input['id']);
         auditView($user, ['domain' => $domain], 'intelligence-monitor-review');
-        jsonResponse(['reviews' => monitorReviews($domain)]);
+        jsonResponse(['reviews' => monitorReviews($domain, $offset)]);
     }
     if ($action === 'monitor_enable') {
         if (!is_bool($input['enabled'] ?? null)) throw new InvalidArgumentException('An enabled setting is required.');
@@ -59,6 +66,7 @@ try {
         $rows = []; $missing = 0; $seen = [];
         $missingReasons = ['jobId' => 0, 'server' => 0, 'callId' => 0, 'month' => 0];
         $watches = intelligenceWatches($domain);
+        $reviewIndex = monitorReviewIndex($domain);
         foreach ($calls as $index => $call) {
             $parties = intelligencePartyDetails($call);
             $cdrId = is_string($call['id'] ?? null) ? $call['id'] : '';
@@ -84,7 +92,7 @@ try {
                     $emailRef = intelligenceEmailReference(null, $display, $field, (string)($call['call-start-datetime'] ?? ''), $topicsHint, (string)$reason, $domain, $parties);
                     $rows[] = ['rowKey' => 'cdr-' . hash('sha256', cdrCacheKey($call, $index)), 'reference' => null, 'emailReference' => $emailRef,
                         'callId' => $display, 'callIdField' => $field, 'startedAt' => (string)($call['call-start-datetime'] ?? ''),
-                        'emailStatus' => $emailStatus, 'callerNumber' => $parties['callerNumber'], 'dialedNumber' => $parties['dialedNumber'], 'destinationNumber' => $parties['destinationNumber'],
+                        'emailStatus' => $emailStatus, 'reviews' => monitorReviewsForCall($domain, $reviewIndex, $cdrId, null), 'callerNumber' => $parties['callerNumber'], 'dialedNumber' => $parties['dialedNumber'], 'destinationNumber' => $parties['destinationNumber'],
                         'topicsHint' => $topicsHint, 'matchesHint' => $matchesHint, 'status' => 'unavailable', 'detail' => 'Transcription lookup unavailable (' . $reason . ')'];
                 }
                 continue;
@@ -96,7 +104,7 @@ try {
             $emailRef = intelligenceEmailReference($ref, $ref['callid'], $ref['displayField'], (string)($call['call-start-datetime'] ?? ''), $topicsHint, '', $domain, $parties);
             $rows[] = ['reference' => intelligenceSign($ref, $domain), 'emailReference' => $emailRef, 'callId' => $ref['callid'], 'callIdField' => $ref['displayField'],
                 'startedAt' => (string)($call['call-start-datetime'] ?? ''), 'month' => $ref['month'],
-                'emailStatus' => $emailStatus, 'callerNumber' => $parties['callerNumber'], 'dialedNumber' => $parties['dialedNumber'], 'destinationNumber' => $parties['destinationNumber'], 'topicsHint' => $topicsHint, 'matchesHint' => $matchesHint];
+                'emailStatus' => $emailStatus, 'reviews' => monitorReviewsForCall($domain, $reviewIndex, $cdrId, $ref), 'callerNumber' => $parties['callerNumber'], 'dialedNumber' => $parties['dialedNumber'], 'destinationNumber' => $parties['destinationNumber'], 'topicsHint' => $topicsHint, 'matchesHint' => $matchesHint];
         }
         auditView($user, ['start' => $filters['start'], 'end' => $filters['end']], 'intelligence-report');
         jsonResponse(['calls' => $rows, 'intelligenceWorkers' => loadDomainSettings($domain)['intelligenceWorkers'], 'missing' => $missing, 'missingReasons' => $missingReasons, 'hours' => $filters['hours'], 'cacheStatus' => cdrRangeCacheStatus($user, $filters['start'], $filters['end']), 'timezone' => reportingTimezoneName()]);

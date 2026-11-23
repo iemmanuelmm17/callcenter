@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1518 names.
+ * 1527 names.
  */
 return [
     'aa',
@@ -381,6 +381,7 @@ return [
     'ctg-ringing',
     'ctg-transfer',
     'ctg-vmail',
+    'curl_errno',
     'curl_init',
     'current',
     'cursor',
@@ -687,6 +688,7 @@ return [
     'intel-more-topics',
     'intel-muted',
     'intel-notice',
+    'intel-other-review',
     'intel-overlay',
     'intel-overlay-body',
     'intel-overlay-head',
@@ -704,6 +706,10 @@ return [
     'intel-reference',
     'intel-results',
     'intel-results-head',
+    'intel-review-cell',
+    'intel-review-item',
+    'intel-review-items',
+    'intel-review-section',
     'intel-ribbon-label',
     'intel-ribbon-row',
     'intel-ribbon-tools',
@@ -844,6 +850,7 @@ return [
     'monitor_enable',
     'monitor_recipients',
     'monitor_reviewed',
+    'monitor_reviews',
     'monitor_status',
     'monotone',
     'month',
@@ -902,6 +909,7 @@ return [
     'offered',
     'office_manager',
     'offline',
+    'offset',
     'ok',
     'ol',
     'oldest',
@@ -1060,6 +1068,7 @@ return [
     'previous',
     'previous_range',
     'probing',
+    'processing',
     'promote',
     'prompt',
     'prompts',

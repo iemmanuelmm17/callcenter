@@ -66,6 +66,7 @@ foreach (['CURLOPT_USERNAME','CURLOPT_PASSWORD','CURLOPT_USE_SSL','CURLOPT_SSL_V
 function curl_init($url) { return new stdClass(); }
 function curl_setopt_array($curl, $opts) { $payload = stream_get_contents($opts[CURLOPT_INFILE]); rewind($opts[CURLOPT_INFILE]); $GLOBALS['payloads'][] = $payload; preg_match_all('~Content-Transfer-Encoding: base64\r\n\r\n([A-Za-z0-9+/=\r\n]+)~', $payload, $matches); $GLOBALS['bodies'][] = base64_decode($matches[1][0] ?? ''); $GLOBALS['html'][] = base64_decode($matches[1][1] ?? ''); $GLOBALS['rcpt'][] = $opts[CURLOPT_MAIL_RCPT]; return true; }
 function curl_exec($curl) { $GLOBALS['sends']++; return !$GLOBALS['fail']; }
+function curl_errno($curl) { return 67; }
 function curl_close($curl) {}
 $GLOBALS['sends'] = 0; $GLOBALS['fail'] = false; $GLOBALS['bodies'] = []; $GLOBALS['html'] = []; $GLOBALS['payloads'] = []; $GLOBALS['rcpt'] = [];
 $domain = 'test.example';
@@ -113,7 +114,9 @@ assert.match(result.body, /Originally dialed: 18005550999/);
 assert.match(result.body, /Final destination: 222/);
 assert.equal(result.reviews.total, 2, JSON.stringify(result));
 assert.match(JSON.stringify(result.reviews), /uncertain/);
-assert.match(JSON.stringify(result.reviews), /unavailable after 24 hours/);
+assert.match(JSON.stringify(result.reviews), /cURL error 67.*authentication was rejected/);
+assert.match(JSON.stringify(result.reviews), /within 24 hours/);
+assert.match(JSON.stringify(result.reviews), /did not contain a transcription job ID/);
 const review = result.reviews.items[0];
 assert.equal((await req('monitor_reviewed', { id: review.id }, { ...USERS.office_manager, domain: 'another.test' })).status, 422, 'review is tenant scoped');
 assert.equal((await req('monitor_reviewed', { id: review.id })).body.reviews.total, 1);
@@ -163,6 +166,7 @@ await h.script(`require TEST_TMP . '/tools/intelligence-monitor.php';`);
 const retry = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; echo json_encode(monitorReadFile(monitorQueueFile('test.example','cdr-cron')));`));
 assert.equal(retry.status, 'pending');
 assert.equal(retry.attempts, 1, 'missing job is retried');
+assert.equal(retry.lastReason, 'jobId', 'last retry cause is retained for review');
 await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; $f=monitorQueueFile('test.example','cdr-cron'); $s=monitorReadFile($f); $s['next']=time()-1; monitorWriteFile($f,$s);`);
 await h.seedPbx('fetchCdrs', [{ ...discoveredCall, 'call-intelligence-job-id':'123', 'prefilled-transcription-api':'/ns-api/v2/domains/test.example/transcriptions?id=123&date=202611&callid=cron' }]);
 await h.script(`require TEST_TMP . '/tools/intelligence-monitor.php';`);
@@ -217,9 +221,27 @@ assert.equal(preserved.status, 'pending');
 const partialSaved = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; echo json_encode(monitorReadFile(monitorQueueFile('test.example','cdr-partial')));`));
 assert.equal(partialSaved.status, 'pending', 'partial discovery rows are retained even when the scan fails');
 await h.seedPbx('fetchCdrsPages', []);
-await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; $s=monitorUpdate('test.example', function ($s) { $s['since']=time()-100000; return $s; }); monitorQueueCdr('test.example','expired',time()-95000,time()-90000,$s);`);
+await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; require_once TEST_TMP . '/includes/intelligence-queue.php'; $s=monitorUpdate('test.example', function ($s) { $s['since']=time()-100000; return $s; }); monitorQueueCdr('test.example','expired',time()-95000,time()-90000,$s); $f=monitorQueueFile('test.example','expired'); $q=monitorReadFile($f); $q['lastReason']='partial'; monitorWriteFile($f,$q);`);
 await h.script(`require TEST_TMP . '/tools/intelligence-monitor.php';`);
 const expired = await req('monitor_status');
-assert.ok(expired.body.reviews.items.some(item => item.callid === 'expired' && /24 hours/.test(item.reason)), 'expired CDR needs review');
+assert.ok(expired.body.reviews.items.some(item => item.callid === 'expired' && /incomplete/.test(item.reason) && /24 hours/.test(item.reason)), 'expiry includes the recorded last retry cause');
+const legacyId = expired.body.reviews.items.find(item => item.callid === 'expired').id;
+const recovery = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php';
+$f=monitorDirectory().'/${legacyId}.json'; $r=monitorReadFile($f); unset($r['cdrId']); monitorWriteFile($f,$r);
+$index=monitorReviewIndex('test.example'); echo json_encode(monitorReviewsForCall('test.example',$index,'expired',null));`));
+assert.equal(recovery[0].id, legacyId, 'legacy expired reviews match only when retained queue identity proves the CDR');
+const mismatch = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php';
+$f=monitorDirectory().'/${legacyId}.json'; $r=monitorReadFile($f); $r['callid']='different'; monitorWriteFile($f,$r); echo json_encode(monitorReviewsForCall('test.example',monitorReviewIndex('test.example'),'different',null));`));
+assert.deepEqual(mismatch, [], 'unverified legacy call IDs do not attach to unrelated calls');
+
 assert.equal((await req('monitor_enable', { enabled: false })).body.enabled, false);
+await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; for ($i=0;$i<53;$i++) monitorReviewCdr('page.example', ['id'=>'page-'.$i], monitorExpiryReason('topics'));`);
+const pagingUser={...USERS.office_manager,domain:'page.example'};
+const firstPage=await req('monitor_reviews', {offset:0}, pagingUser);
+const lastPage=await req('monitor_reviews', {offset:50}, pagingUser);
+assert.equal(firstPage.body.total,53); assert.equal(firstPage.body.items.length,50); assert.equal(lastPage.body.items.length,3);
+assert(!lastPage.body.items.some(item=>firstPage.body.items.some(first=>first.id===item.id)));
+assert.equal((await req('monitor_reviews',{offset:-1},pagingUser)).status,422);
+assert.equal((await req('monitor_reviewed',{id:lastPage.body.items[0].id}, USERS.office_manager)).status,422);
+assert.equal((await req('monitor_reviewed',{id:lastPage.body.items[0].id,offset:50}, pagingUser)).body.reviews.items.length,2);
 console.log('INTELLIGENCE MONITOR OK — polling, retry, tenant isolation, deduplication and review');

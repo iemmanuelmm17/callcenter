@@ -57,7 +57,7 @@ try {
                     $live = monitorState($domain);
                     if (empty($live['enabled']) || ($live['generation'] ?? null) !== ($state['generation'] ?? null) || monitorRecipients($live) === []) break 2;
                     if (time() - (int)$item['ended'] < 86400) continue;
-                    monitorReviewCdr($domain, ['id' => $id, 'call-start-datetime' => gmdate('c', (int)$item['start'])], 'Intelligence or CDR unavailable within 24 hours');
+                    monitorReviewCdr($domain, ['id' => $id, 'call-start-datetime' => gmdate('c', (int)$item['start'])], monitorExpiryReason((string)($item['lastReason'] ?? '')));
                     monitorQueueFinish($domain, $item, 'review'); $counts['review']++; unset($items[$id]);
                 }
                 if (!$items) continue;
@@ -82,12 +82,13 @@ try {
                     $before = $counts['pending'];
                     $end = parseEasternDateTime((string)($call['call-disconnect-datetime'] ?? ''));
                     if (!$end || $end->getTimestamp() > time() || $end->getTimestamp() < (int)$state['since']) {
-                        $counts['pending']++; monitorQueueFinish($domain, $items[$id], 'pending'); continue;
+                        $counts['pending']++; monitorQueueFinish($domain, $items[$id], 'pending', 'time'); continue;
                     }
-                    monitorProcessCall($client, $domain, $call, $state, $counts);
-                    monitorQueueFinish($domain, $items[$id], $counts['pending'] > $before ? 'pending' : 'done');
+                    $pendingReason = null;
+                    monitorProcessCall($client, $domain, $call, $state, $counts, $pendingReason);
+                    monitorQueueFinish($domain, $items[$id], $counts['pending'] > $before ? 'pending' : 'done', $pendingReason ?? '');
                 }
-                foreach ($items as $id => $item) if (!isset($found[$id])) { $counts['pending']++; monitorQueueFinish($domain, $item, 'pending'); }
+                foreach ($items as $id => $item) if (!isset($found[$id])) { $counts['pending']++; monitorQueueFinish($domain, $item, 'pending', 'cdr'); }
             }
             monitorUpdate($domain, static function (array $current) use ($counts, $state): array {
                 if (($current['generation'] ?? null) === ($state['generation'] ?? null)) $current['lastRun'] = ['time' => time(), 'counts' => $counts, 'error' => ''];
