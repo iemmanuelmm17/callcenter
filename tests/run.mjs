@@ -57,6 +57,7 @@ const SUITES = {
     { name: 'token refresh', cmd: ['node', 'tests/php/token-refresh.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'intelligence', cmd: ['node', 'tests/php/intelligence.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'intel monitor', cmd: ['node', 'tests/php/intelligence-monitor.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
+    { name: 'intel recovery', cmd: ['node', 'tests/php/intelligence-recovery.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'intel recording', cmd: ['node', 'tests/php/intelligence-recording.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'intel recording API', cmd: ['node', 'tests/php/intelligence-recording-api.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },
     { name: 'recording HTTP', cmd: ['node', 'tests/php/intelligence-recording-http.mjs'], env: { CALLCENTER_STRICT_PHP: '1' } },

@@ -84,7 +84,7 @@ declare(strict_types=1);
  * Install the task described in README.md. */
 // define('INTELLIGENCE_MONITOR_API_KEY', 'set-on-server');
 
-/* CDR discovery window for automatic alerts, shared by enabled domains.
- * Whole minutes from 1 to 1440; default 10. Longer windows increase PBX load.
- * Must be at least the task interval and longer than expected call durations. */
+/* First (most recent) CDR discovery window, shared by enabled domains.
+ * Whole minutes from 1 to 1440; default 10. The worker also scans a 24-hour
+ * overlap and catches up older missed windows in bounded batches. */
 // define('INTELLIGENCE_CDR_LOOKBACK_MINUTES', 10);

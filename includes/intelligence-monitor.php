@@ -104,6 +104,7 @@ function monitorSetEnabled(string $domain, bool $enabled): array {
         if ($enabled && monitorRecipients($state) === []) throw new InvalidArgumentException('Save at least one alert recipient for this domain before enabling alerts.');
         if ($enabled && (empty($state['enabled']) || empty($state['generation']))) {
             $state['since'] = time(); $state['generation'] = bin2hex(random_bytes(16)); $state['lastRun'] = null;
+            $state['discoveryCursor'] = max(0, $state['since'] - 86400);
         }
         // Existing PBX subscriptions are deliberately left for manual removal.
         unset($state['subscriptionPending'], $state['activationToken']);

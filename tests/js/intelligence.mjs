@@ -22,7 +22,7 @@ calls.push({ rowKey: 'cdr-unavailable', reference: null, emailReference: 'email-
 FIXTURES.cache_job = body => body.action === 'warm' ? { complete: true, ready: 29, total: 29, batch: { warmed: 29, stopped: 'complete' } } : { complete: false, ready: 0, total: 29 };
 FIXTURES.intelligence = body => {
   operations.push(body);
-  if (body.action === 'monitor_status') return { enabled: monitorEnabled, configured: true, recipients: monitorRecipients, paused: monitorEnabled && !monitorRecipients.length, reviews: { total: 0, items: [] } };
+  if (body.action === 'monitor_status') return { enabled: monitorEnabled, configured: true, recipients: monitorRecipients, paused: monitorEnabled && !monitorRecipients.length, lastRun: { time: 1709251200, catchupSeconds: 7200, counts: { missingTime: 3, unidentified: 1 }, error: 'CDR discovery failed; pending retries were attempted.' }, reviews: { total: 0, items: [] } };
   if (body.action === 'monitor_enable') { monitorEnabled = body.enabled; return { enabled: monitorEnabled, configured: true, recipients: monitorRecipients, paused: monitorEnabled && !monitorRecipients.length, reviews: { total: 0, items: [] } }; }
   if (body.action === 'monitor_recipients') { monitorRecipients = body.recipients.split(';').map(x => x.trim()).filter(Boolean); return { enabled: monitorEnabled, configured: true, recipients: monitorRecipients, paused: monitorEnabled && !monitorRecipients.length, reviews: { total: 0, items: [] } }; }
   if (body.action === 'watches') return { watches: ['reboot', 'billing'] };
@@ -114,6 +114,9 @@ assert.match(css, /\.filters-bar\s*\{[^}]*z-index:\s*40000/s);
 assert.equal(document.querySelector('[aria-label="Watched phrases"]').value, 'reboot\nbilling');
 assert.ok([...document.querySelectorAll('[aria-label="Keyword Watch"] summary')].some(el => el.textContent.includes('PBX lookup month override')));
 assert.match(document.querySelector('[aria-label="Keyword Watch"]').textContent, /this domain’s saved recipients/);
+assert.match(document.querySelector('[aria-label="Keyword Watch"]').textContent, /catch-up remaining: approximately 2 hours/i);
+assert.match(document.querySelector('[aria-label="Keyword Watch"]').textContent, /3 incomplete CDR observations/);
+assert.match(document.querySelector('[aria-label="Keyword Watch"]').textContent, /discovery failed/i);
 assert.ok(byText('button', 'Enable automatic alerts').disabled, 'must save recipients first');
 const autoRecipients = document.querySelector('[aria-label="Automatic alert recipients"]');
 await act(async () => { Simulate.change(autoRecipients, { target: { value: 'one@example.com; two@example.com' } }); });

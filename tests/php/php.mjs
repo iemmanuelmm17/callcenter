@@ -157,6 +157,14 @@ final class PbxClient
         int $concurrency = 4
     ): array {
         $this->record('cdr-window:' . json_encode(['domain'=>$domain, 'start'=>$start, 'end'=>$end, 'concurrency'=>$concurrency]));
+        $failureFile = self::TMP . '/pbx/failCdrWindows.json';
+        $failure = is_file($failureFile) ? json_decode((string)file_get_contents($failureFile), true) : null;
+        $length = strtotime($end) - strtotime($start);
+        if (is_array($failure) && isset($failure['retryBefore']) && $length === 299 && strtotime($start) <= (int)$failure['retryBefore']) throw new RuntimeException('Simulated retry failure');
+        if (is_array($failure) && empty($failure['retryOnly']) && $length > 299 && (!isset($failure['before']) || strtotime($end) <= (int)$failure['before'])) {
+            if (!empty($failure['throw'])) throw new RuntimeException('Simulated discovery failure');
+            return ['records' => (array)($failure['rows'] ?? []), 'complete' => false, 'nextOffset' => 0];
+        }
         /*
          * fetchCdrs.json          → one complete page (the default)
          * fetchCdrsPages.json     → [[newRowsOfPage, nextOffset, complete], ...]

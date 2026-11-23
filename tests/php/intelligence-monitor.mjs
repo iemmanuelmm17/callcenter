@@ -151,7 +151,8 @@ await h.write('tools/intelligence-monitor.php', readFileSync(path.join(ROOT, 'to
 assert.equal((await req('monitor_recipients', {recipients:''})).body.paused, true);
 await h.script(`require TEST_TMP . '/tools/intelligence-monitor.php';`);
 const windows = (await h.pbxCalls()).filter(x => typeof x === 'string' && x.startsWith('cdr-window:')).map(x => JSON.parse(x.slice('cdr-window:'.length)));
-assert.equal(windows.length, 1, 'one discovery request for the enabled domain');
+assert(windows.length >= 25 && windows.length <= 29, 'bounded discovery windows cover 24 hours and optional catch-up');
+assert.equal(Date.parse(windows[0].end) - Date.parse(windows[24].start), 86400000, 'scans cover the 24-hour overlap');
 assert.equal(windows[0].domain, 'test.example');
 assert.equal(Date.parse(windows[0].end)-Date.parse(windows[0].start), 600000, 'default discovery window is 10 minutes');
 assert.equal(windows[0].concurrency, 1, 'avoid speculative extra pages');
@@ -192,9 +193,9 @@ await h.seedPbx('filterCdrWindows', true);
 await h.seedPbx('fetchCdrs', [olderCall]);
 await h.script(`@unlink(TEST_TMP . '/pbx-calls.jsonl'); require TEST_TMP . '/tools/intelligence-monitor.php';`);
 const retryWindows = (await h.pbxCalls()).filter(x => typeof x === 'string' && x.startsWith('cdr-window:')).map(x => JSON.parse(x.slice('cdr-window:'.length)));
-assert.equal(retryWindows.length, 2, 'one discovery request and one older retry window');
-assert.equal(Date.parse(retryWindows[0].end)-Date.parse(retryWindows[0].start), 600000);
-assert.equal(Date.parse(retryWindows[1].end)-Date.parse(retryWindows[1].start), 299000);
+assert(retryWindows.length >= 26 && retryWindows.length <= 30, 'retry precedes bounded overlap and catch-up');
+assert.equal(Date.parse(retryWindows[0].end)-Date.parse(retryWindows[0].start), 299000, 'due retry runs before discovery');
+assert.equal(Date.parse(retryWindows[1].end)-Date.parse(retryWindows[1].start), 600000);
 assert.equal((await req('monitor_status')).body.lastRun.counts.checked, 1, 'older pending call is checked');
 await h.seedPbx('filterCdrWindows', false);
 

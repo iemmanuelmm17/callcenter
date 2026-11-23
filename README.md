@@ -336,21 +336,38 @@ each enabled domain. Every configured PBX server used by the worker must use
 HTTPS. SMTP uses authenticated STARTTLS and verifies certificates. Do not put
 credentials in Git.
 
-The default CDR discovery window is the **last 10 minutes**, per enabled domain,
-per task run. To change it, set a whole number from 1 to 1440 in the server config:
+Each run scans the **last 24 hours** of CDR start times, per enabled domain,
+to catch long calls and delayed CDRs. The first, most recent window defaults to
+10 minutes; change it with a whole number from 1 to 1440 in the server config:
 
 ```php
 define('INTELLIGENCE_CDR_LOOKBACK_MINUTES', 30);
 ```
 
-A longer window increases PBX API load. Choose a window long enough for the task
-interval, call durations and CDR visibility delays. Confirm how your PBX applies
-its `datetime-start` and `datetime-end` filters: if it filters by call **start**,
-a call started before the window can be missed even if it just ended. Calls
-outside the discovery window, during a long outage, or never returned by a
-complete API scan may be missed; there is no automatic historical catch-up.
-Partial pages that were returned are retained for retry, but missing pages are
-not guaranteed to be recovered after they leave the discovery window.
+The remaining overlap is scanned in one-hour windows. A durable per-domain
+checkpoint tracks missed discovery windows; at most four additional one-hour
+windows are caught up per run, starting with the oldest. The report shows remaining
+catch-up time and discovery errors. A partial or failed window is not checkpointed;
+returned partial CDRs are retained. Pending retries run before discovery and are
+also attempted when discovery fails. A failed retry window does not prevent other
+retry windows from being processed. Both failure types cause a nonzero task exit.
+
+This substantially increases PBX traffic compared with the former 10-minute poll;
+measure task duration and PBX load before selecting a scheduler interval. The
+checkpoint starts at enablement minus 24 hours (existing enabled domains without a
+checkpoint start at their stored enablement time minus 24 hours), while the call
+completion cutoff still prevents alerts for calls completed before enablement.
+A long outage or an upgrade of a long-enabled domain can therefore take many runs
+to catch up. Calls older than the existing 24-hour retry deadline go to review,
+not automatic email. Recovery is limited by PBX retention and availability, and
+cannot guarantee discovery of calls that start more than 24 hours before completion
+or visibility when the PBX filters on start time. Confirm PBX window semantics.
+Identifiable incomplete CDRs are surfaced for review; potentially ongoing calls
+with no end time are tracked and reviewed after 24 hours rather than immediately.
+A stable CDR ID with unknown dates can be shown as a limited review even when
+its eligibility after enablement cannot be confirmed; it is never auto-emailed.
+Records without a sufficiently safe reference are counted in the last-run warning
+instead of being guessed into a call record.
 
 An office manager saves watched phrases and the domain's **Automatic alert
 recipients** (1–10 addresses separated by semicolons) in the report's Keyword
@@ -396,8 +413,7 @@ have not expired; scheduled runs continue to clean up expired link records.
 Discovered completed CDRs are stored by domain and CDR ID and first checked about
 five minutes after completion. If the job ID or intelligence is not ready, the
 worker revisits the relevant CDR start-time windows, including windows older than
-the discovery window, until the existing 24-hour deadline. It reuses CDRs from the
-current scan when possible. After 24 hours a call that has not been checked is
+the discovery window, until the existing 24-hour deadline. After 24 hours a call that has not been checked is
 flagged for review instead of automatically emailed, including calls that aged
 out while recipients were paused. Stored completed states prevent overlapping scans
 from resending. SMTP errors or a process crash during sending may be ambiguous;

@@ -6,6 +6,54 @@ require_once __DIR__ . '/../includes/reporting.php';
 require_once __DIR__ . '/../includes/intelligence.php';
 require_once __DIR__ . '/../includes/intelligence-monitor.php';
 require_once __DIR__ . '/../includes/intelligence-queue.php';
+/** Work due before discovery is attempted first, so a slow scan cannot starve retries. */
+function monitorRunDue(PbxClient $client, string $domain, array $state, array &$counts, array &$attempted, bool &$retryFailed): void {
+    foreach (monitorQueueDue($domain, $state) as $bucket => $items) {
+        foreach ($items as $id => $_) {
+            if (isset($attempted[$id])) unset($items[$id]); else $attempted[$id] = true;
+        }
+        if (!$items) continue;
+        $live = monitorState($domain);
+        if (empty($live['enabled']) || ($live['generation'] ?? null) !== ($state['generation'] ?? null) || monitorRecipients($live) === []) break;
+        // Expire even if the CDR no longer appears in the PBX.
+        foreach ($items as $id => $item) {
+            $live = monitorState($domain);
+            if (empty($live['enabled']) || ($live['generation'] ?? null) !== ($state['generation'] ?? null) || monitorRecipients($live) === []) break 2;
+            if (time() - (int)$item['ended'] < 86400) continue;
+            monitorReviewCdr($domain, ['id' => $id, 'call-start-datetime' => gmdate('c', (int)$item['start'])], monitorExpiryReason((string)($item['lastReason'] ?? '')));
+            monitorQueueFinish($domain, $item, 'review'); $counts['review']++; unset($items[$id]);
+        }
+        if (!$items) continue;
+        // Group due calls into bounded call-start windows for fresh CDRs.
+        $records = [];
+        try {
+            $batch = $client->fetchCdrs($domain, gmdate('Y-m-d\\TH:i:s\\Z', (int)$bucket), gmdate('Y-m-d\\TH:i:s\\Z', (int)$bucket + 299), 0, [], null, 1);
+            if (empty($batch['complete'])) throw new RuntimeException('PBX returned an incomplete retry window');
+        } catch (Throwable $e) {
+            appExceptionLog('Intelligence retry window', $e); $retryFailed = true; continue;
+        }
+        foreach ($batch['records'] as $row) {
+            if (!is_array($row)) continue;
+            $rowId = (string)($row['id'] ?? '');
+            if (isset($items[$rowId]) && (!isset($row['domain']) || (string)$row['domain'] === $domain)) $records[$rowId] = $row;
+        }
+        $found = [];
+        foreach ($records as $call) {
+            $id = (string)($call['id'] ?? '');
+            if (!isset($items[$id]) || isset($found[$id])) continue;
+            $found[$id] = true;
+            $before = $counts['pending'];
+            $end = parseEasternDateTime((string)($call['call-disconnect-datetime'] ?? ''));
+            if (!$end || $end->getTimestamp() > time() || $end->getTimestamp() < (int)$state['since']) {
+                $counts['pending']++; monitorQueueFinish($domain, $items[$id], 'pending', 'time'); continue;
+            }
+            $pendingReason = null;
+            monitorProcessCall($client, $domain, $call, $state, $counts, $pendingReason);
+            monitorQueueFinish($domain, $items[$id], $counts['pending'] > $before ? 'pending' : 'done', $pendingReason ?? '');
+        }
+        foreach ($items as $id => $item) if (!isset($found[$id])) { $counts['pending']++; monitorQueueFinish($domain, $item, 'pending', 'cdr'); }
+    }
+}
 if (!monitorReady()) { fwrite(STDERR, "Monitor is not configured.\n"); exit(1); }
 $lock = fopen(monitorDirectory() . '/worker.lock', 'c');
 if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) { fwrite(STDERR, "Monitor is already running.\n"); exit(2); }
@@ -23,75 +71,68 @@ try {
             if (empty($state['enabled'])) continue;
             if (empty($state['since']) || empty($state['generation'])) throw new RuntimeException('Invalid monitor state');
             setReportingTimezone(loadDomainSettings($domain)['timezone'] ?? null);
-            $counts = ['checked' => 0, 'sent' => 0, 'pending' => 0, 'review' => 0, 'unresolved' => 0, 'missingTime' => 0];
+            $counts = ['checked' => 0, 'sent' => 0, 'pending' => 0, 'review' => 0, 'unresolved' => 0, 'missingTime' => 0, 'unidentified' => 0];
             $now = time();
-            $scan = $client->fetchCdrs($domain, gmdate('Y-m-d\\TH:i:s\\Z', $now - monitorLookbackMinutes() * 60), gmdate('Y-m-d\\TH:i:s\\Z', $now), 0, [], null, 1);
-            $discovered = [];
-            foreach ($scan['records'] as $call) {
-                if (!is_array($call) || (isset($call['domain']) && (string)$call['domain'] !== $domain)) continue;
-                $id = $call['id'] ?? null;
-                $start = parseEasternDateTime((string)($call['call-start-datetime'] ?? ''));
-                $end = parseEasternDateTime((string)($call['call-disconnect-datetime'] ?? ''));
-                if (!is_string($id) || $id === '' || strlen($id) > 512 || preg_match('/[\x00-\x1f\x7f]/', $id) || !$start || !$end
-                    || $start->getTimestamp() <= 0 || $end->getTimestamp() < $start->getTimestamp()) { $counts['missingTime']++; continue; }
-                if ($end->getTimestamp() > $now || $end->getTimestamp() < (int)$state['since']) continue;
-                monitorQueueCdr($domain, $id, $start->getTimestamp(), $end->getTimestamp(), $state);
-                $discovered[$id] = $call;
+            $discoveryFailed = false; $retryFailed = false; $attempted = [];
+            if (monitorRecipients($state) !== [] && intelligenceWatches($domain)) {
+                monitorRunDue($client, $domain, $state, $counts, $attempted, $retryFailed);
+                if ($retryFailed) $failed = true;
             }
-            // Keep CDRs from partial pages, but report failure and do not claim a complete scan.
-            if (empty($scan['complete'])) throw new RuntimeException('PBX returned an incomplete discovery window');
+            // Always scan the recent configured window first, then the rest of
+            // the 24-hour overlap in one-hour pieces. Checkpoint catch-up is
+            // separately bounded to four older one-hour windows per run.
+            $recentStart = $now - 86400;
+            $edge = $now;
+            $step = monitorLookbackMinutes() * 60;
+            while ($edge > $recentStart) {
+                $from = max($recentStart, $edge - $step);
+                try {
+                    if (!monitorDiscoverWindow($client, $domain, $state, $from, $edge, $now, $counts)) throw new RuntimeException('PBX returned an incomplete discovery window');
+                } catch (Throwable $e) {
+                    appExceptionLog('Intelligence discovery', $e); $discoveryFailed = true; break;
+                }
+                $edge = $from;
+                $step = 3600;
+            }
+            $cursor = isset($state['discoveryCursor']) && is_int($state['discoveryCursor'])
+                ? $state['discoveryCursor'] : max(0, (int)$state['since'] - 86400);
+            $cursor = min($now, max(0, $cursor));
+            if (!$discoveryFailed) {
+                for ($i = 0; $i < 4 && $cursor < $recentStart; $i++) {
+                    $next = min($recentStart, $cursor + 3600);
+                    try {
+                        if (!monitorDiscoverWindow($client, $domain, $state, $cursor, $next, $now, $counts)) throw new RuntimeException('PBX returned an incomplete catch-up window');
+                    } catch (Throwable $e) {
+                        appExceptionLog('Intelligence catch-up', $e); $discoveryFailed = true; break;
+                    }
+                    $cursor = $next;
+                    // Commit each completed window, so a crash never skips work.
+                    monitorUpdate($domain, static function (array $current) use ($state, $cursor): array {
+                        if (!empty($current['enabled']) && ($current['generation'] ?? null) === ($state['generation'] ?? null)) $current['discoveryCursor'] = $cursor;
+                        return $current;
+                    });
+                }
+                if (!$discoveryFailed && $cursor >= $recentStart) $cursor = $recentStart;
+                monitorUpdate($domain, static function (array $current) use ($state, $cursor): array {
+                    if (!empty($current['enabled']) && ($current['generation'] ?? null) === ($state['generation'] ?? null)) $current['discoveryCursor'] = $cursor;
+                    return $current;
+                });
+            }
+            if ($discoveryFailed) $failed = true;
+            monitorReviewOpenCdrs($domain, $state, $now);
             if (monitorRecipients($state) === []) {
-                monitorUpdate($domain, static function (array $current) use ($state): array {
-                    if (($current['generation'] ?? null) === ($state['generation'] ?? null) && monitorRecipients($current) === []) $current['lastRun'] = ['time' => time(), 'error' => 'Paused: save alert recipients for this domain.'];
+                monitorUpdate($domain, static function (array $current) use ($state, $counts, $discoveryFailed, $cursor, $recentStart): array {
+                    if (($current['generation'] ?? null) === ($state['generation'] ?? null) && monitorRecipients($current) === []) $current['lastRun'] = ['time' => time(), 'counts' => $counts, 'catchupSeconds' => max(0, $recentStart - $cursor), 'error' => $discoveryFailed ? 'CDR discovery failed; check server logs. Paused: save alert recipients.' : 'Paused: save alert recipients for this domain.'];
                     return $current;
                 });
                 echo "Monitor paused: domain alert recipients are not configured.\n";
                 continue;
             }
             if (!intelligenceWatches($domain)) throw new RuntimeException('No watched phrases; monitoring paused');
-            foreach (monitorQueueDue($domain, $state) as $bucket => $items) {
-                $live = monitorState($domain);
-                if (empty($live['enabled']) || ($live['generation'] ?? null) !== ($state['generation'] ?? null) || monitorRecipients($live) === []) break;
-                // Expire even if the CDR no longer appears in the PBX.
-                foreach ($items as $id => $item) {
-                    $live = monitorState($domain);
-                    if (empty($live['enabled']) || ($live['generation'] ?? null) !== ($state['generation'] ?? null) || monitorRecipients($live) === []) break 2;
-                    if (time() - (int)$item['ended'] < 86400) continue;
-                    monitorReviewCdr($domain, ['id' => $id, 'call-start-datetime' => gmdate('c', (int)$item['start'])], monitorExpiryReason((string)($item['lastReason'] ?? '')));
-                    monitorQueueFinish($domain, $item, 'review'); $counts['review']++; unset($items[$id]);
-                }
-                if (!$items) continue;
-                // Reuse the current scan where possible; older pending calls
-                // are grouped into bounded call-start windows for fresh CDRs.
-                $records = [];
-                foreach ($items as $id => $item) if (isset($discovered[$id])) $records[$id] = $discovered[$id];
-                if (count($records) < count($items)) {
-                    $batch = $client->fetchCdrs($domain, gmdate('Y-m-d\\TH:i:s\\Z', (int)$bucket), gmdate('Y-m-d\\TH:i:s\\Z', (int)$bucket + 299), 0, [], null, 1);
-                    if (empty($batch['complete'])) throw new RuntimeException('PBX returned an incomplete retry window');
-                    foreach ($batch['records'] as $row) {
-                        if (!is_array($row)) continue;
-                        $rowId = (string)($row['id'] ?? '');
-                        if (isset($items[$rowId]) && (!isset($row['domain']) || (string)$row['domain'] === $domain)) $records[$rowId] = $row;
-                    }
-                }
-                $found = [];
-                foreach ($records as $call) {
-                    $id = (string)($call['id'] ?? '');
-                    if (!isset($items[$id]) || isset($found[$id])) continue;
-                    $found[$id] = true;
-                    $before = $counts['pending'];
-                    $end = parseEasternDateTime((string)($call['call-disconnect-datetime'] ?? ''));
-                    if (!$end || $end->getTimestamp() > time() || $end->getTimestamp() < (int)$state['since']) {
-                        $counts['pending']++; monitorQueueFinish($domain, $items[$id], 'pending', 'time'); continue;
-                    }
-                    $pendingReason = null;
-                    monitorProcessCall($client, $domain, $call, $state, $counts, $pendingReason);
-                    monitorQueueFinish($domain, $items[$id], $counts['pending'] > $before ? 'pending' : 'done', $pendingReason ?? '');
-                }
-                foreach ($items as $id => $item) if (!isset($found[$id])) { $counts['pending']++; monitorQueueFinish($domain, $item, 'pending', 'cdr'); }
-            }
-            monitorUpdate($domain, static function (array $current) use ($counts, $state): array {
-                if (($current['generation'] ?? null) === ($state['generation'] ?? null)) $current['lastRun'] = ['time' => time(), 'counts' => $counts, 'error' => ''];
+            monitorRunDue($client, $domain, $state, $counts, $attempted, $retryFailed);
+            if ($retryFailed) $failed = true;
+            monitorUpdate($domain, static function (array $current) use ($counts, $state, $discoveryFailed, $retryFailed, $cursor, $recentStart): array {
+                if (($current['generation'] ?? null) === ($state['generation'] ?? null)) $current['lastRun'] = ['time' => time(), 'counts' => $counts, 'catchupSeconds' => max(0, $recentStart - $cursor), 'error' => $discoveryFailed ? ('CDR discovery failed; pending retries were attempted.' . ($retryFailed ? ' Some retry windows also failed.' : '') . ' Check server logs.') : ($retryFailed ? 'Some CDR retry windows failed; check server logs.' : '')];
                 return $current;
             });
             echo "Completed monitor scan.\n";
