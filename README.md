@@ -32,6 +32,70 @@ the web root. There is no build step on the server and no database to migrate â€
 the front end is the committed prod bundle (`assets/js/app.<hash>.js`,
 `assets/css/app.<hash>.css`, named by `assets/build-manifest.json`).
 
+### Interactive Windows installer (existing IIS and PHP)
+
+From a complete copy of the distribution in a folder separate from the destination,
+right-click **`install.bat`** and choose **Run as administrator**. Keep `tools/install-windows.ps1` and
+`tools/install-check.php` alongside the rest of the distribution. The installer
+requires Windows PowerShell 5.1, IIS with Request Filtering, an existing IIS
+site/application and PHP handler, plus a local PHP 8.1+ CLI with cURL and JSON.
+It does **not** install IIS or PHP, create a site, configure its PHP handler,
+create an IIS application, add a binding, or install an HTTPS certificate.
+
+The installer asks for the destination folder (do not choose the site root if it
+contains another application), PHP CLI path, the existing IIS application-pool
+identity (for example `IIS AppPool\CallScope`), task name and interval. It checks
+the PHP CLI, verifies the production and vendor asset hashes before and after
+copying, preserves `cache/` and `logs/`, grants the chosen identity read/execute
+access to the app folder and modify access to those default directories, and installs the alert task as **Local
+System**, with overlapping instances disabled. It asks before replacing a task.
+The task starts on its schedule; domain alerts still require a manager to save
+phrases and recipients and enable them in the app.
+
+For a new configuration, it prompts for PBX OAuth credentials, the dedicated
+monitor key, STARTTLS SMTP settings and an optional SIP-flow token. Secrets are
+entered without echo and are not passed as command-line arguments. Administrative
+PowerShell transcription, terminal recording, or other privileged monitoring can
+still expose entered values. The generated `includes/config.local.php` is UTF-8
+**without a BOM**, checked with `php -l`, and restricted to SYSTEM, administrators
+and the selected IIS identity. No secret is added to Git. Confirm the PBX's
+transcription month basis and set `INTELLIGENCE_MONTH_TIMEZONE` manually when
+needed; the installer does not guess it.
+
+If an existing `config.local.php` is found, it is kept unless you explicitly
+choose to replace it. Replacement backs it up under a restricted unique folder
+in `%ProgramData%\CallScope-Installer-Backups`; only SYSTEM and administrators
+are granted access. Replacement **does not merge** custom settings: restore any
+needed custom constants from the backup, particularly external `CACHE_DIR`,
+`LOG_DIR`, timezone and recording settings. The installer never deletes existing
+runtime state, but changing configured paths may make old state unavailable until
+those paths are restored. It only grants access to the default app-local cache and
+logs; verify permissions yourself for any external locations. Keep backups secure.
+
+The installer merges IIS `requestFiltering` hidden-segment rules into the app's
+`web.config` for `includes`, `cache`, `logs`, and `tools`; it does not replace
+other existing settings. IIS must have the Request Filtering feature enabled and
+allow these settings at the application level. If you enter the app's reachable
+base URL, the installer confirms that the URL serves a temporary public test file
+and that temporary files in all four protected folders return 403/404. If you skip
+the check, or if an IIS rule is locked or the URL is not reachable, verify and fix
+protection before exposing the app. Also test authenticated access to these paths,
+HTTPS, the correct IIS PHP handler and the application-pool permissions. A
+pre-existing config file's ACL is not changed when you choose to preserve it.
+
+An optional pure-function smoke test can be run on a Windows machine before
+installation; it creates temporary files but does not modify IIS or Task Scheduler:
+
+```text
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\windows\install-smoke.ps1 -Php C:\php\php.exe
+```
+
+Finally run the task manually in Task Scheduler, inspect its result and server
+logs, and test a real PBX call, SMTP delivery and recording link. The installer
+checks configuration syntax, **not** live PBX access, SMTP delivery, CDR window
+semantics, transcription-month semantics or scheduler execution. If a step fails,
+rerun after correcting it; copies already made are not automatically rolled back.
+
 Cache the two hashed files hard (`Cache-Control: public, max-age=31536000,
 immutable`): their names change whenever their bytes do, so a deploy cannot be
 half-served. `npm run build:prod` before committing any source change â€” `npm

@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1528 names.
+ * 1529 names.
  */
 return [
     'aa',
@@ -381,6 +381,7 @@ return [
     'ctg-ringing',
     'ctg-transfer',
     'ctg-vmail',
+    'curl',
     'curl_errno',
     'curl_init',
     'current',

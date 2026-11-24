@@ -27,6 +27,7 @@ const SUITES = {
     { name: 'build', cmd: ['node', 'tools/build.mjs'] },
     { name: 'prod build', cmd: ['node', 'tools/prod-build.mjs'] },
     { name: 'php lint', cmd: ['node', 'tools/php-lint.mjs'] },
+    { name: 'windows installer', cmd: ['node', 'tests/js/windows-installer.mjs'] },
     /* The CDR allowlist is generated from the source: a new field read that
      * was not regenerated fails here, before it can silently drop data. */
     { name: 'cdr fields', cmd: ['node', 'tools/cdr-fields.mjs'] },
