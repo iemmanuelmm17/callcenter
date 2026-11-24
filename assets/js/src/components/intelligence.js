@@ -86,6 +86,8 @@ function IntelligenceDashboard({ filters }) {
     const [monitor, setMonitor] = useState(null);
     const [acknowledged, setAcknowledged] = useState([]);
     const [alertRecipients, setAlertRecipients] = useState('');
+    const [smtpRecipient, setSmtpRecipient] = useState('');
+    const [smtpResult, setSmtpResult] = useState(null);
     const [syncOpen, setSyncOpen] = useState(false);
     const [sync, setSync] = useState({ stage: 'loading', done: 0, total: 0 });
     const [topicSort, setTopicSort] = useState('count');
@@ -212,6 +214,21 @@ function IntelligenceDashboard({ filters }) {
             setMonitor(result);
             setMessage(result.enabled ? 'Automatic alerts enabled for new completed calls.' : 'Automatic alerts disabled.');
         } catch (e) { setError(e.message); } finally { setBusy(false); }
+    };
+    const checkSmtp = async (sendTest) => {
+        setBusy(true); setSmtpResult(null);
+        try {
+            const result = await api('intelligence', sendTest ? { action: 'smtp_test_email', recipient: smtpRecipient.trim() } : { action: 'smtp_diagnostic' });
+            if (sendTest) {
+                setSmtpResult(result.ok
+                    ? { ok: true, text: 'SMTP accepted the test message. Check the inbox and spam folder; acceptance does not guarantee delivery.' }
+                    : { ok: false, text: 'SMTP did not confirm acceptance of the test message. cURL error ' + result.code + '. ' + (result.description || 'SMTP operation failed.') + ' Delivery is uncertain; check the inbox or SMTP logs before retrying.' });
+            } else {
+                setSmtpResult(result.ok
+                    ? { ok: true, text: 'SMTP connection, verified STARTTLS and NOOP succeeded in the web app (' + result.elapsedSeconds + ' seconds). Authentication and delivery are not confirmed; send a test email to check further.' }
+                    : { ok: false, text: 'SMTP diagnostic failed: cURL error ' + result.code + '. ' + (result.description || 'SMTP operation failed.') + ' TCP connection ' + (result.tcpConnected ? 'was established' : 'was not confirmed') + ' (' + result.elapsedSeconds + ' seconds). No email was sent.' });
+            }
+        } catch (e) { setSmtpResult({ ok: false, text: e.message + (sendTest && ![422, 503].includes(e.status) ? ' The test message may have been delivered; check the inbox or SMTP logs before retrying.' : '') }); } finally { setBusy(false); }
     };
     const refreshMonitorStatus = async () => {
         try { const result = await api('intelligence', { action: 'monitor_status' }); setMonitor(result); }
@@ -411,6 +428,12 @@ function IntelligenceDashboard({ filters }) {
                 h('label', { className: 'intel-drawer-label' }, 'Alert recipients for this domain', h('input', { type: 'text', value: alertRecipients, onChange: e => setAlertRecipients(e.target.value), placeholder: 'first@example.com; second@example.com', className: 'intelligence-input intel-watch-input', 'aria-label': 'Automatic alert recipients', disabled: busy || !monitor || monitor.unavailable })),
                 h('p', { className: 'intel-drawer-copy' }, 'Separate up to 10 email addresses with semicolons. Clearing the list pauses automatic alerts for this domain.'),
                 h('button', { type: 'button', className: 'intel-action-btn', disabled: busy || !monitor || monitor.unavailable, onClick: saveAlertRecipients }, 'Save alert recipients'),
+                h('details', { className: 'intel-override' }, h('summary', null, 'Check email configuration'),
+                    h('p', { className: 'intel-drawer-copy' }, 'The diagnostic checks the configured SMTP server with verified STARTTLS and sends no email. It runs from the web app, not the scheduled task. A test email contains no call data and does not change alert recipients or review status.'),
+                    h('button', { type: 'button', className: 'intel-action-btn', disabled: busy, onClick: () => checkSmtp(false) }, 'Check SMTP connection'),
+                    h('label', { className: 'intel-drawer-label' }, 'Test email address', h('input', { type: 'email', value: smtpRecipient, onChange: e => setSmtpRecipient(e.target.value), placeholder: 'you@example.com', className: 'intelligence-input intel-watch-input', 'aria-label': 'Test email address', disabled: busy })),
+                    h('button', { type: 'button', className: 'intel-action-btn', disabled: busy || !smtpRecipient.trim(), onClick: () => checkSmtp(true) }, 'Send test email'),
+                    smtpResult ? h('p', { role: smtpResult.ok ? 'status' : 'alert', className: smtpResult.ok ? 'intel-notice' : 'intel-warning' }, smtpResult.text) : null),
                 monitor?.paused ? h('p', { className: 'intel-warning', role: 'status' }, 'Automatic alerts are paused until this domain has saved recipients. Pending calls older than 24 hours will require review.') : null,
                 message.startsWith('Alert recipients') ? h('p', { role: 'status', className: 'intel-notice' }, message) : null,
                 monitor && !monitor.unavailable ? h('p', { className: 'intel-drawer-copy' }, 'Status: ' + (monitor.enabled ? 'Enabled' : 'Disabled') + (monitor.configured ? '' : ' · server configuration incomplete')) : null,

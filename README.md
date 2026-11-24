@@ -372,6 +372,35 @@ Offset-less CDR timestamps are interpreted in the desk timezone before conversio
 Missing IDs, lookup errors, unfinished jobs and incomplete intelligence responses
 are identified rather than counted as successful searches.
 
+#### Checking SMTP and timeout errors
+
+Office managers can open **Topics & summaries → Keyword Watch → Automatic keyword
+email alerts → Check email configuration**. **Check SMTP connection** performs a
+non-delivery SMTP `NOOP` using the configured host, credentials, required
+STARTTLS and certificate verification; it sends no message or call data. It runs
+in the web application's PHP process, not the Local System scheduled task. A
+successful check does not prove authentication was performed (a server may not
+advertise AUTH) or that mail can be sent. Servers that reject `NOOP` may fail this
+check even if they accept mail. **Send test email** sends a separately labeled
+message without call details to the single address entered; it does not change
+saved recipients, alert state, or review status. SMTP acceptance is not proof of
+delivery; check the inbox/spam folder. If a test send times out or the browser
+loses the response, check the inbox and server logs before retrying.
+
+cURL error 28 means an SMTP operation exceeded its time limit; the error alone
+does not show whether it happened during connection, TLS, authentication or
+message upload. The application allows 10 seconds for connection and 30 seconds
+in total. On the affected server, confirm the SMTP host and port with your mail
+provider, DNS, firewall/outbound rules, any SMTP proxy, and that the provider
+supports **STARTTLS** on the configured port (often 587; implicit-TLS port 465 is
+not supported by this configuration). In PowerShell, `Test-NetConnection
+<SMTP-host> -Port <SMTP-port>` checks TCP reachability only; it does not check
+TLS, login, or delivery. Check SMTP server logs for the actual failure and whether
+the original alert was accepted. Compare the IIS PHP configuration, trust store,
+network and account permissions with the PHP CLI and Local System task; a web
+check succeeding cannot guarantee the scheduled task will work. Do not disable
+certificate verification or post credentials when troubleshooting.
+
 Set the `INTELLIGENCE_SMTP_*` constants in `includes/config.local.php` as shown
 in `includes/config.local.example.php` to enable authenticated STARTTLS mail.
 Certificate verification is mandatory. The manager enters recipients and selects calls, including unmatched and

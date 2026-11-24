@@ -18,6 +18,30 @@ try {
     if ($domain === '') jsonResponse(['error' => 'Missing domain.'], 422);
     $input = readJsonBody();
     $action = (string)($input['action'] ?? '');
+    if ($action === 'smtp_diagnostic') {
+        if (!intelligenceSmtpConfigured()) jsonResponse(['error' => 'SMTP is not configured on the server.'], 503);
+        if (function_exists('set_time_limit')) set_time_limit(60);
+        $result = intelligenceSmtpDiagnostic();
+        $result['description'] = $result['ok'] ? '' : monitorSmtpErrorDescription($result['code']);
+        auditView($user, ['domain' => $domain, 'ok' => $result['ok'], 'code' => $result['code']], 'intelligence-smtp-diagnostic');
+        jsonResponse($result);
+    }
+    if ($action === 'smtp_test_email') {
+        $recipient = $input['recipient'] ?? null;
+        if (!is_string($recipient) || strlen($recipient) > 254 || preg_match('/[\r\n]/', $recipient) || !filter_var($recipient, FILTER_VALIDATE_EMAIL)) throw new InvalidArgumentException('Enter one valid test email address.');
+        if (!intelligenceSmtpConfigured()) jsonResponse(['error' => 'SMTP is not configured on the server.'], 503);
+        if (function_exists('set_time_limit')) set_time_limit(60);
+        try {
+            intelligenceSendMail([$recipient], "This is a CallScope SMTP test message. It contains no call data.\n\nIf you received it, the configured SMTP server accepted and delivered this test.\n", 'CallScope SMTP test');
+        } catch (RuntimeException $e) {
+            if (!preg_match('/^SMTP delivery failed \(cURL error ([0-9]{1,3})\)\.$/', $e->getMessage(), $match)) throw $e;
+            $code = (int)$match[1];
+            auditView($user, ['domain' => $domain, 'ok' => false, 'code' => $code], 'intelligence-smtp-test');
+            jsonResponse(['ok' => false, 'code' => $code, 'description' => monitorSmtpErrorDescription($code)]);
+        }
+        auditView($user, ['domain' => $domain, 'ok' => true], 'intelligence-smtp-test');
+        jsonResponse(['ok' => true]);
+    }
     if ($action === 'monitor_status') {
         $state = monitorState($domain);
         jsonResponse(intelligenceMonitorStatus($domain, $state));

@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1529 names.
+ * 1534 names.
  */
 return [
     'aa',
@@ -746,6 +746,8 @@ return [
     'intelligence-monitor-settings',
     'intelligence-recording-link',
     'intelligence-report',
+    'intelligence-smtp-diagnostic',
+    'intelligence-smtp-test',
     'intelligence-topic-list',
     'intelligence-watch-settings',
     'intelligence-workers',
@@ -1137,6 +1139,7 @@ return [
     'rec-time',
     'rec-track',
     'recent',
+    'recipient',
     'recipients',
     'record',
     'record_count',
@@ -1335,6 +1338,8 @@ return [
     'slider',
     'slower',
     'slowest',
+    'smtp_diagnostic',
+    'smtp_test_email',
     'sort',
     'source',
     'source-name',

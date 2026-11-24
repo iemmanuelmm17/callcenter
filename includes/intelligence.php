@@ -333,6 +333,27 @@ function intelligenceSmtpConfigured(): bool {
     $from = defined('INTELLIGENCE_SMTP_FROM') ? (string)INTELLIGENCE_SMTP_FROM : '';
     return $host !== '' && preg_match('/^[a-zA-Z0-9.-]+$/', $host) === 1 && $port > 0 && $port <= 65535 && $user !== '' && $password !== '' && filter_var($from, FILTER_VALIDATE_EMAIL) !== false;
 }
+/** Run a non-delivery SMTP NOOP over the same verified STARTTLS transport.
+ * libcurl can proceed when a server does not advertise AUTH, so success does
+ * not by itself prove credentials were authenticated or mail can be accepted.
+ * Never return raw SMTP responses or cURL errors: they may contain secrets.
+ */
+function intelligenceSmtpDiagnostic(): array {
+    if (!intelligenceSmtpConfigured()) throw new RuntimeException('SMTP is not configured.');
+    $curl = curl_init('smtp://' . INTELLIGENCE_SMTP_HOST . ':' . (int)INTELLIGENCE_SMTP_PORT);
+    if (!$curl) throw new RuntimeException('Unable to initialize SMTP.');
+    try {
+        curl_setopt_array($curl, [CURLOPT_USERNAME => (string)INTELLIGENCE_SMTP_USERNAME, CURLOPT_PASSWORD => (string)INTELLIGENCE_SMTP_PASSWORD,
+            CURLOPT_USE_SSL => CURLUSESSL_ALL, CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
+            CURLOPT_NOBODY => true, CURLOPT_CUSTOMREQUEST => 'NOOP', CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 30, CURLOPT_CONNECTTIMEOUT => 10]);
+        $ok = curl_exec($curl) !== false;
+        $code = $ok ? 0 : (int)curl_errno($curl);
+        $connected = (float)curl_getinfo($curl, CURLINFO_CONNECT_TIME) > 0;
+        $elapsed = (float)curl_getinfo($curl, CURLINFO_TOTAL_TIME);
+        return ['ok' => $ok, 'code' => $code, 'tcpConnected' => $connected, 'elapsedSeconds' => round(max(0, $elapsed), 1)];
+    } finally { curl_close($curl); }
+}
 /** SMTP via libcurl; STARTTLS and certificate verification are mandatory. */
 function intelligenceSendMail(array $recipients, string $body, string $subject = 'CallScope selected calls', ?string $html = null): void {
     if ($subject === '' || preg_match('/[\r\n]/', $subject)) throw new InvalidArgumentException('Invalid email subject.');

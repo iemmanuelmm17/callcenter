@@ -16,6 +16,7 @@ assert.throws(() => parseWatchedPhrases('"unfinished'), /Close the quoted/);
 assert.throws(() => parseWatchedPhrases('"one"two'), /comma or new line/);
 assert.throws(() => parseWatchedPhrases('"a\nb"'), /stay on one line/);
 const operations = [];
+let smtpFailure = false;
 let activeLookups = 0, maxLookups = 0, sendAttempts = 0, failSendAt = 0, monitorEnabled = false, monitorRecipients = [];
 const calls = Array.from({ length: 115 }, (_, i) => ({ reference: 'ref-' + String(i).padStart(3, '0'), emailReference: 'email-' + String(i).padStart(3, '0'), callId: 'call-' + String(i).padStart(3, '0'), callerNumber: '0015550100', dialedNumber: '18005550100', destinationNumber: '201', startedAt: '2024-02-29T12:00:00Z', month: '202402' }));
 calls.push({ rowKey: 'cdr-unavailable', reference: null, emailReference: 'email-unavailable', callId: 'call-unavailable', startedAt: '2024-02-29T12:00:00Z', status: 'unavailable', detail: 'missing job ID', topicsHint: ['device'], matchesHint: [{ keyword: 'reboot', source: 'Topic', excerpt: 'reboot request' }] });
@@ -25,6 +26,8 @@ FIXTURES.intelligence = body => {
   if (body.action === 'monitor_status') return { enabled: monitorEnabled, configured: true, recipients: monitorRecipients, paused: monitorEnabled && !monitorRecipients.length, lastRun: { time: 1709251200, catchupSeconds: 7200, counts: { missingTime: 3, unidentified: 1 }, error: 'CDR discovery failed; pending retries were attempted.' }, reviews: { total: 0, items: [] } };
   if (body.action === 'monitor_enable') { monitorEnabled = body.enabled; return { enabled: monitorEnabled, configured: true, recipients: monitorRecipients, paused: monitorEnabled && !monitorRecipients.length, reviews: { total: 0, items: [] } }; }
   if (body.action === 'monitor_recipients') { monitorRecipients = body.recipients.split(';').map(x => x.trim()).filter(Boolean); return { enabled: monitorEnabled, configured: true, recipients: monitorRecipients, paused: monitorEnabled && !monitorRecipients.length, reviews: { total: 0, items: [] } }; }
+  if (body.action === 'smtp_diagnostic') return smtpFailure ? { ok:false, code:28, description:'The SMTP operation timed out.', tcpConnected:false, elapsedSeconds:10 } : { ok:true, elapsedSeconds:1 };
+  if (body.action === 'smtp_test_email') return smtpFailure ? { ok:false, code:28, description:'The SMTP operation timed out.' } : { ok:true };
   if (body.action === 'watches') return { watches: ['reboot', 'billing'] };
   if (body.action === 'list') return { calls, missing: 2, missingReasons: { jobId: 1, server: 0, callId: 0, month: 1 }, cacheStatus: { complete: true } };
   if (body.action === 'lookup') {
@@ -131,6 +134,18 @@ assert.match(document.querySelector('[aria-label="Keyword Watch"]').textContent,
 await click(byText('button', 'Disable automatic alerts'));
 assert.equal(monitorEnabled, false);
 
+await click(byText('button', 'Check SMTP connection'));
+assert.match(document.querySelector('[aria-label="Keyword Watch"]').textContent, /Authentication and delivery are not confirmed/);
+assert.ok(byText('button', 'Send test email').disabled);
+await act(async () => { Simulate.change(document.querySelector('[aria-label="Test email address"]'), { target: { value: 'check@example.com' } }); });
+await click(byText('button', 'Send test email'));
+assert.equal(operations.find(x => x.action === 'smtp_test_email').recipient, 'check@example.com');
+assert.match(document.querySelector('[aria-label="Keyword Watch"]').textContent, /SMTP accepted the test message/);
+smtpFailure = true;
+await click(byText('button', 'Check SMTP connection'));
+assert.match(document.querySelector('[aria-label="Keyword Watch"]').textContent, /cURL error 28.*No email was sent/);
+await click(byText('button', 'Send test email'));
+assert.match(document.querySelector('[aria-label="Keyword Watch"]').textContent, /Delivery is uncertain/);
 await press(document.activeElement, 'Escape');
 assert.equal(document.querySelector('[role="dialog"][aria-label="Keyword Watch"]'), null);
 assert.ok(document.activeElement === watchButton, 'focus returns to drawer trigger');
