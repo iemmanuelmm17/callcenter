@@ -80,8 +80,12 @@ function intelligencePartyDetails(array $call): array {
         while ($value !== '' && preg_match('//u', $value) !== 1) $value = substr($value, 0, -1);
         return $value === '' ? 'Unknown' : $value;
     };
+    $callerName = is_string($call['call-orig-from-name'] ?? null) ? trim((string)preg_replace('/[\x00-\x1f\x7f]/', '', $call['call-orig-from-name'])) : '';
+    $callerName = substr($callerName, 0, 256);
+    while ($callerName !== '' && preg_match('//u', $callerName) !== 1) $callerName = substr($callerName, 0, -1);
     return [
         'callerNumber' => $clean($caller),
+        'callerName' => $callerName,
         'dialedNumber' => $clean(callDialed($call)),
         'destinationNumber' => $clean(callTo($call)),
     ];
@@ -93,7 +97,8 @@ function intelligenceEmailCallDetails(string $startedAt, array $details): string
     $body .= 'Time: ' . ($dt ? $dt->format('g:i A') . ' (' . reportingTimezoneName() . ')' : 'Unknown') . "\n";
     foreach (['callerNumber' => 'Caller number', 'dialedNumber' => 'Originally dialed', 'destinationNumber' => 'Final destination'] as $key => $label) {
         $value = is_string($details[$key] ?? null) ? $details[$key] : '';
-        $body .= $label . ': ' . ($value !== '' ? $value : 'Unknown') . "\n";
+        $name = $key === 'callerNumber' && is_string($details['callerName'] ?? null) ? $details['callerName'] : '';
+        $body .= $label . ': ' . ($value !== '' ? $value : 'Unknown') . ($name !== '' ? ' ' . $name : '') . "\n";
     }
     return $body;
 }
@@ -111,7 +116,7 @@ function intelligenceEmailReference(?array $ref, string $callId, string $field, 
     }
     $data = ['kind' => 'email', 'ref' => $ref, 'callid' => substr($callId, 0, 512), 'field' => substr($field, 0, 64),
         'startedAt' => substr($startedAt, 0, 128), 'topics' => $kept, 'topicsTruncated' => $truncated, 'reason' => $reason];
-    foreach (['callerNumber', 'dialedNumber', 'destinationNumber'] as $key) {
+    foreach (['callerNumber', 'callerName', 'dialedNumber', 'destinationNumber'] as $key) {
         $value = is_string($details[$key] ?? null) ? $details[$key] : '';
         $data[$key] = substr((string)preg_replace('/[\x00-\x1f\x7f]/', '', $value), 0, 256);
     }
@@ -126,7 +131,7 @@ function intelligenceVerifyEmail(string $token, string $domain): array {
     if (($data['kind'] ?? '') !== 'email' || !is_string($data['callid'] ?? null) || !is_string($data['field'] ?? null)
         || !is_string($data['startedAt'] ?? null) || !is_string($data['reason'] ?? null) || !is_array($data['topics'] ?? null)
         || count(array_filter($data['topics'], 'is_string')) !== count($data['topics'])) throw new InvalidArgumentException('Invalid call reference.');
-    foreach (['callerNumber', 'dialedNumber', 'destinationNumber'] as $key) {
+    foreach (['callerNumber', 'callerName', 'dialedNumber', 'destinationNumber'] as $key) {
         // Snapshots from older open tabs did not include party details.
         if (!array_key_exists($key, $data)) $data[$key] = '';
         if (!is_string($data[$key]) || strlen($data[$key]) > 256 || preg_match('/[\x00-\x1f\x7f]/', $data[$key])) throw new InvalidArgumentException('Invalid call reference.');

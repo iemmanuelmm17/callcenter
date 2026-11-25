@@ -25,13 +25,13 @@ await settings(USERS.office_manager, 'POST', { intelligenceWorkers: 24 });
 assert.equal((await req('save_watches', { watches: ['bad\nline'] })).status, 422);
 await h.seedPbx('users', []);
 await h.seedPbx('fetchCdrs', [{
-  id: 'cdr1', _server: 'nms1', 'call-direction': 1, 'call-orig-from-user': 'sip:+18005550101@carrier', 'call-orig-to-user': '18005550999', 'call-term-user': '2400', 'call-start-datetime': '2026-11-16T10:00:00Z[US/Eastern]',
+  id: 'cdr1', _server: 'nms1', 'call-direction': 1, 'call-orig-from-name': 'Ada <Caller>', 'call-orig-from-user': 'sip:+18005550101@carrier', 'call-orig-to-user': '18005550999', 'call-term-user': '2400', 'call-start-datetime': '2026-11-16T10:00:00Z[US/Eastern]',
   'call-intelligence-job-id': 78920299,
   'prefilled-transcription-api': 'https://untrusted.example/ns-api/v2/domains/test.example/transcriptions?id=78920299&date=202611&callid=abc%40pbx'
 },
 { id: 'cdr2', _server: 'nms1', 'call-start-datetime': '2026-11-16T10:01:00Z[US/Eastern]' },
 { id: 'cdr3', 'call-intelligence-job-id': 33, 'call-start-datetime': '2026-11-16T10:02:00Z[US/Eastern]' },
-{ id: 'cdr4', _server: 'nms1', 'call-direction': 1, 'call-orig-from-user': '5553333', 'call-orig-to-user': '700', 'call-term-user': '2500', 'call-intelligence-job-id': 44, 'call-intelligence-topics-top': 'account number, billing', 'call-start-datetime': '2026-11-16T10:03:00Z[US/Eastern]' },
+{ id: 'cdr4', _server: 'nms1', 'call-direction': 1, 'call-orig-from-name': 'Café User', 'call-orig-from-user': '5553333', 'call-orig-to-user': '700', 'call-term-user': '2500', 'call-intelligence-job-id': 44, 'call-intelligence-topics-top': 'account number, billing', 'call-start-datetime': '2026-11-16T10:03:00Z[US/Eastern]' },
 { id: 'cdr5', _server: 'nms1', 'call-intelligence-job-id': 55, 'call-id': 'other', 'call-start-datetime': '2026-11-16T10:04:00Z[US/Eastern]' },
 { id: 'cdr6', _server: 'nms1', 'call-direction': 0, 'call-orig-user': '0100', 'call-orig-to-user': '5554444', 'call-intelligence-job-id': 330696339, 'call-start-datetime': '2026-11-16T14:27:13+00:00',
   'prefilled-transcription-api': '/ns-api/v2/domains/test.example/transcriptions?id=330696339&amp;date=202611&amp;orig_callid=orig%40pbx&amp;term_callid=term%40pbx&amp;by_callid=through%40pbx&amp;ignored=unsafe' }]);
@@ -131,10 +131,10 @@ await h.seedPbx('transcription', { 'call-intelligence-job-id': 78920299, 'call-i
 const unmatchedBody = await emailBody([listing.body.calls[0].emailReference, unavailable.emailReference]);
 assert.match(unmatchedBody, /Date: 2026-11-16/);
 assert.match(unmatchedBody, /Time: 10:00 AM \(US\/Eastern\)/);
-assert.match(unmatchedBody, /Caller number: 18005550101/);
+assert.match(unmatchedBody, /Caller number: 18005550101 Ada <Caller>\n/);
 assert.match(unmatchedBody, /Originally dialed: 18005550999/);
 assert.match(unmatchedBody, /Final destination: 2400/);
-assert.match(unmatchedBody, /Caller number: 5553333/);
+assert.match(unmatchedBody, /Caller number: 5553333 Café User\n/);
 assert.match(unmatchedBody, /Final destination: 2500/);
 const otherZone = await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; setReportingTimezone('Asia/Manila'); echo json_encode(intelligenceEmailCallDetails('2024-02-29T17:30:00Z', []));`);
 assert.match(JSON.parse(otherZone), /Date: 2024-03-01/);
@@ -157,6 +157,12 @@ assert.match(JSON.parse(largeSnapshot.trim()), /Some CDR topics were omitted/);
 assert.match(JSON.parse(largeSnapshot.trim()), /Caller number: Unknown/);
 const legacy = await h.script(`session_id('test-session-123'); require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; $old = ['kind'=>'email','ref'=>null,'callid'=>'legacy','field'=>'id','startedAt'=>'','topics'=>[],'reason'=>'jobId']; $token = intelligenceSign($old, 'test.example'); echo json_encode(intelligenceVerifyEmail($token, 'test.example'));`);
 assert.equal(JSON.parse(legacy.trim()).callerNumber, '', 'previously signed snapshots remain usable');
+assert.equal(JSON.parse(legacy.trim()).callerName, '', 'older snapshots omit the new optional name');
+const sanitized = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; $a=intelligencePartyDetails(['call-orig-from-name'=>"  Alice".chr(13).chr(10)." Bcc:fake  " ]); $b=intelligencePartyDetails(['call-orig-from-name'=>['invalid']]); $c=intelligencePartyDetails([]); echo json_encode([$a,$b,$c]);`));
+assert.equal(sanitized[0].callerName, 'Alice Bcc:fake');
+assert.equal(sanitized[1].callerName, ''); assert.equal(sanitized[2].callerName, '');
+const missingName = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; echo json_encode(intelligenceEmailCallDetails('', ['callerNumber'=>'123','callerName'=>'','dialedNumber'=>'456','destinationNumber'=>'789']));`));
+assert.match(missingName, /Caller number: 123\nOriginally dialed: 456\nFinal destination: 789\n/);
 
 await h.seedPbx('transcription', { 'call-intelligence-job-id': 78920299, 'call-id': 'abc@pbx', 'call-intelligence-processing-status': 'finished' });
 assert.equal((await req('lookup', { reference })).body.status, 'partial');

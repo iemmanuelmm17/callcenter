@@ -421,7 +421,14 @@ certificate verification or post credentials when troubleshooting.
 
 Set the `INTELLIGENCE_SMTP_*` constants in `includes/config.local.php` as shown
 in `includes/config.local.example.php` to enable authenticated STARTTLS mail.
-Certificate verification is mandatory. The manager enters recipients and selects calls, including unmatched and
+Certificate verification is mandatory. Automatic alerts and manual emails add
+`call-orig-from-name` after the caller number when the CDR provides it. If the
+name is missing, they show only the number. The originally dialed and destination
+lines remain number-only because their CDR name fields are not confirmed. Older
+cached records or previously opened report snapshots may lack the caller name;
+refresh the report after updating and verify the PBX's returned fields.
+
+The manager enters recipients and selects calls, including unmatched and
 incomplete calls. Select/unselect filtered calls applies across all currently
 loaded filtered pages; selections outside the filter remain selected until
 cleared. The application sends batches of up to ten calls per email, re-fetching
