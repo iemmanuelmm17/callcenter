@@ -8,7 +8,7 @@ function intelligenceMonitorStatus(string $domain, array $state): array {
     return ['enabled' => !empty($state['enabled']), 'configured' => monitorReady(),
         'lookbackMinutes' => monitorLookbackMinutes(),
         'recipients' => $recipients, 'paused' => !empty($state['enabled']) && $recipients === [],
-        'lastRun' => $state['lastRun'] ?? null, 'reviews' => monitorReviews($domain)];
+        'lastRun' => $state['lastRun'] ?? null, 'retryCount' => count(monitorReviewedRetries($domain)), 'reviews' => monitorReviews($domain)];
 }
 requireMethod('POST');
 try {
@@ -66,7 +66,7 @@ try {
         if (!is_string($input['id'] ?? null)) throw new InvalidArgumentException('A review is required.');
         monitorAcknowledge($domain, $input['id']);
         auditView($user, ['domain' => $domain], 'intelligence-monitor-review');
-        jsonResponse(['reviews' => monitorReviews($domain, $offset)]);
+        jsonResponse(['reviews' => monitorReviews($domain, $offset), 'retryCount' => count(monitorReviewedRetries($domain))]);
     }
     if ($action === 'monitor_enable') {
         if (!is_bool($input['enabled'] ?? null)) throw new InvalidArgumentException('An enabled setting is required.');

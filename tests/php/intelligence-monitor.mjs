@@ -244,7 +244,7 @@ $f=monitorDirectory().'/${legacyId}.json'; $r=monitorReadFile($f); $r['callid']=
 assert.deepEqual(mismatch, [], 'unverified legacy call IDs do not attach to unrelated calls');
 
 assert.equal((await req('monitor_enable', { enabled: false })).body.enabled, false);
-await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; for ($i=0;$i<53;$i++) monitorReviewCdr('page.example', ['id'=>'page-'.$i], monitorExpiryReason('topics'));`);
+await h.script(`require_once TEST_TMP . '/includes/reporting.php'; require_once TEST_TMP . '/includes/intelligence.php'; require_once TEST_TMP . '/includes/intelligence-monitor.php'; for ($i=0;$i<53;$i++) monitorReviewCdr('page.example', ['id'=>'page-'.$i, 'call-start-datetime'=>gmdate('c',time()-100)], monitorExpiryReason('topics'));`);
 const pagingUser={...USERS.office_manager,domain:'page.example'};
 const firstPage=await req('monitor_reviews', {offset:0}, pagingUser);
 const lastPage=await req('monitor_reviews', {offset:50}, pagingUser);

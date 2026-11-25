@@ -528,8 +528,8 @@ the discovery window, until the existing 24-hour deadline. After 24 hours a call
 flagged for review instead of automatically emailed, including calls that aged
 out while recipients were paused. Stored completed states prevent overlapping scans
 from resending. SMTP errors or a process crash during sending may be ambiguous;
-the worker does **not** automatically resend. Verify delivery before acknowledging
-a review. Mail acceptance by SMTP does not guarantee delivery.
+without a manager's action the worker does **not** automatically resend. Mail
+acceptance by SMTP does not guarantee delivery.
 
 The report's **Automatic alert review** column shows outstanding review reasons
 and a **Mark reviewed** action. Set **Review status → For review** to show only
@@ -541,8 +541,25 @@ for manual email. If site, department, agent or hours filters are active,
 limited records whose scope cannot be verified are excluded and a warning says
 how many were hidden. Clear those scope filters to see them. The Excel export
 includes the currently filtered review rows and is marked partial when details
-are missing. Marking reviewed only acknowledges the item: it does not send or
-retry an email.
+are missing. **Mark reviewed** queues that review for a new 24-hour retry window;
+it does not send immediately. The scheduled worker re-fetches the original CDR,
+checks the current watch phrases and uses the current saved domain recipients.
+SMTP failures during the renewed window are retried with backoff. **If an earlier
+attempt actually delivered, these retries can send duplicates**; check the inbox
+or Microsoft message trace before marking reviewed if duplicates matter.
+
+A retry needs a reliable CDR ID and call start time. Reviews lacking either remain
+visible with an explanation instead of guessing which call to email. The PBX must
+still retain the matching record. Retries run only while automatic alerts are
+enabled and recipients and watched phrases are configured; the 24-hour window
+continues to elapse while paused or disabled. The number waiting appears in the
+Keyword Watch automatic-alert section. If the retry window expires, the item
+returns to review; if the CDR is now before the most recent enablement or another
+job has already been checked or sent, it also returns to review rather than
+bypassing existing suppression. After rechecking, calls without a current keyword
+match are not emailed. A process interruption while sending is uncertain and
+returns to review rather than silently resending; mark it reviewed again to retry.
+
 For SMTP uncertainty, verify delivery before sending manually. New pending retries
 retain a non-sensitive last-known cause (for example missing job ID, unfinished
 transcription, no topics, failed lookup or unavailable CDR); older records may

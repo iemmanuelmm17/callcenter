@@ -109,7 +109,7 @@ function IntelligenceDashboard({ filters }) {
 
     useEffect(() => {
         let active = true;
-        setRows([]); setSelected([]); setTopic(''); setPage(1); setMissing(0); setMissingReasons({}); setUnscopedReviews(0); setCacheIncomplete(false); setError(''); setSync({ stage: 'loading', done: 0, total: 0 });
+        setRows([]); setSelected([]); setAcknowledged([]); setTopic(''); setPage(1); setMissing(0); setMissingReasons({}); setUnscopedReviews(0); setCacheIncomplete(false); setError(''); setSync({ stage: 'loading', done: 0, total: 0 });
         if (!monthRange) { setProgress(''); setError('Choose a valid month that is not in the future.'); return () => { active = false; }; }
         setProgress('Preparing call history…');
         (async () => {
@@ -239,8 +239,8 @@ function IntelligenceDashboard({ filters }) {
         try {
             const result = await api('intelligence', { action: 'monitor_reviewed', id });
             setAcknowledged(previous => [...previous, id]);
-            setMonitor(previous => ({ ...previous, reviews: result.reviews }));
-            setMessage('Review marked reviewed. No email was sent or retried.');
+            setMonitor(previous => ({ ...previous, reviews: result.reviews, retryCount: result.retryCount }));
+            setMessage('Review queued for retry for 24 hours. No email was sent yet. Retries after uncertain SMTP failures may send duplicates.');
         } catch (e) { setError(e.message); } finally { setBusy(false); }
     };
     const send = async () => {
@@ -389,7 +389,7 @@ function IntelligenceDashboard({ filters }) {
         partialExport && visible.length ? h('p', { className: 'intel-partial-note', role: 'status' }, (progress ? 'Checking is in progress. ' : 'Some call data is unavailable. ') + 'Export contains currently available calls and is marked partial.') :
             (!visible.length ? h('p', { className: 'intel-partial-note', role: 'status' }, 'Excel export is unavailable until at least one filtered call is available.') : null),
         reviewFilter === 'review' ? h('p', { className: 'intel-partial-note', role: 'status' },
-            'Shows reviews for this report month and records with unknown call dates. Limited-detail records cannot be selected for email.' +
+            'Mark reviewed queues a retry for 24 hours; an uncertain previous email may result in a duplicate. Reviews without a reliable CDR ID and start time remain for manual investigation.' +
             (unscopedReviews ? ' ' + unscopedReviews + ' reviews have unknown site, department, agent or hours; clear those filters to see them.' : '')) : null,
         h('section', { className: 'intel-results', 'aria-label': reviewFilter === 'review' ? 'Calls for review' : 'Calls with topics' },
             h('div', { className: 'intel-results-head' }, h('div', null, h('h2', null, topic ? 'Calls: ' + topic : (reviewFilter === 'review' ? 'Calls for review' : 'Calls with topics')), h('span', null, visible.length.toLocaleString() + ' calls')), h('span', null, 'Newest first')),
@@ -434,6 +434,7 @@ function IntelligenceDashboard({ filters }) {
                     h('label', { className: 'intel-drawer-label' }, 'Test email address', h('input', { type: 'email', value: smtpRecipient, onChange: e => setSmtpRecipient(e.target.value), placeholder: 'you@example.com', className: 'intelligence-input intel-watch-input', 'aria-label': 'Test email address', disabled: busy })),
                     h('button', { type: 'button', className: 'intel-action-btn', disabled: busy || !smtpRecipient.trim(), onClick: () => checkSmtp(true) }, 'Send test email'),
                     smtpResult ? h('p', { role: smtpResult.ok ? 'status' : 'alert', className: smtpResult.ok ? 'intel-notice' : 'intel-warning' }, smtpResult.text) : null),
+                monitor?.retryCount ? h('p', { className: 'intel-drawer-copy', role: 'status' }, 'Reviewed retries waiting: ' + monitor.retryCount + '. The 24-hour window continues while alerts are paused or disabled.') : null,
                 monitor?.paused ? h('p', { className: 'intel-warning', role: 'status' }, 'Automatic alerts are paused until this domain has saved recipients. Pending calls older than 24 hours will require review.') : null,
                 message.startsWith('Alert recipients') ? h('p', { role: 'status', className: 'intel-notice' }, message) : null,
                 monitor && !monitor.unavailable ? h('p', { className: 'intel-drawer-copy' }, 'Status: ' + (monitor.enabled ? 'Enabled' : 'Disabled') + (monitor.configured ? '' : ' · server configuration incomplete')) : null,

@@ -10,7 +10,7 @@ FIXTURES.cache_job = () => ({complete:true,ready:1,total:1});
 FIXTURES.intelligence = body => {
   operations.push(body);
   if (body.action === 'monitor_status') return {enabled:true,configured:true,recipients:['alert@example.com'],reviews:page()};
-  if (body.action === 'monitor_reviewed') { reviews=reviews.filter(x=>x.id!==body.id); return {reviews:page()}; }
+  if (body.action === 'monitor_reviewed') { reviews=reviews.filter(x=>x.id!==body.id); return {reviews:page(),retryCount:1}; }
   if (body.action === 'watches') return {watches:['urgent']};
   if (body.action === 'list') return {calls:[
     {reference:'ref',emailReference:'mail',callId:'shown',startedAt:'2026-11-01T10:00:00Z',reviews:[tableReview]},
@@ -44,7 +44,7 @@ assert.match(document.querySelector('.intel-selection-badge').textContent,/2 sel
 await click(byText('button','Clear all selections')); await flush(10);
 await click(row('shown').querySelector('[aria-label="Mark review shown reviewed"]')); await flush(10);
 assert.equal(row('shown'),undefined,'acknowledged item leaves review filter');
-assert.match(root().textContent,/No email was sent or retried/);
+assert.match(root().textContent,/queued for retry for 24 hours.*duplicates/);
 await click(row('older-0').querySelector('[aria-label="Mark review older-0 reviewed"]')); await flush(10);
 assert.equal(row('older-0'),undefined);
 assert.equal(operations.filter(x=>x.action==='send').length,0);

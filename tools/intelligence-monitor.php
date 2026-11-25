@@ -54,6 +54,88 @@ function monitorRunDue(PbxClient $client, string $domain, array $state, array &$
         foreach ($items as $id => $item) if (!isset($found[$id])) { $counts['pending']++; monitorQueueFinish($domain, $item, 'pending', 'cdr'); }
     }
 }
+/** Reviewed retries are durable review records, independent of the discovery
+ * checkpoint and the original queue's completed tombstones. */
+function monitorRunReviewedRetries(PbxClient $client, string $domain, array $state, array &$counts, bool &$retryFailed): void {
+    $groups = [];
+    foreach (monitorReviewedRetries($domain) as $item) {
+        if ((int)($item['retryUntil'] ?? 0) <= time()) {
+            monitorReviewedRetryUpdate($domain, $item, static function (array $current): array {
+                $current['status'] = 'review'; $current['time'] = time();
+                $current['reason'] = 'The reviewed retry window expired after 24 hours without a completed check. Last known issue: ' . monitorPendingDescription((string)($current['retryReason'] ?? ''));
+                return $current;
+            });
+            $counts['review']++; continue;
+        }
+        if (monitorRecipients($state) === [] || !intelligenceWatches($domain) || (int)($item['retryNext'] ?? 0) > time()) continue;
+        $start = parseEasternDateTime((string)($item['startedAt'] ?? ''));
+        if (!$start || $start->getTimestamp() <= 0) continue;
+        $bucket = intdiv($start->getTimestamp(), 300) * 300;
+        $groups[$bucket][] = $item;
+    }
+    ksort($groups, SORT_NUMERIC);
+    foreach ($groups as $bucket => $items) {
+        $live = monitorState($domain);
+        if (empty($live['enabled']) || ($live['generation'] ?? null) !== ($state['generation'] ?? null) || monitorRecipients($live) === []) break;
+        try {
+            $batch = $client->fetchCdrs($domain, gmdate('Y-m-d\\TH:i:s\\Z', (int)$bucket), gmdate('Y-m-d\\TH:i:s\\Z', (int)$bucket + 299), 0, [], null, 1);
+            if (empty($batch['complete'])) throw new RuntimeException('PBX returned an incomplete reviewed retry window');
+        } catch (Throwable $e) {
+            appExceptionLog('Intelligence reviewed retry window', $e); $retryFailed = true;
+            foreach ($items as $item) monitorReviewedRetryLater($domain, $item, 'cdr');
+            continue;
+        }
+        foreach ($items as $item) {
+            $live = monitorState($domain);
+            if (empty($live['enabled']) || ($live['generation'] ?? null) !== ($state['generation'] ?? null) || monitorRecipients($live) === []) break 2;
+            if ((int)$item['retryUntil'] <= time()) continue; // expire on the next pass
+            $start = parseEasternDateTime((string)$item['startedAt']); $matches = [];
+            foreach ($batch['records'] as $row) {
+                if (!is_array($row) || ($row['id'] ?? null) !== $item['cdrId'] || (isset($row['domain']) && (string)$row['domain'] !== $domain)) continue;
+                $rowStart = parseEasternDateTime((string)($row['call-start-datetime'] ?? ''));
+                if ($rowStart && $rowStart->getTimestamp() === $start->getTimestamp()) $matches[] = $row;
+            }
+            if (count($matches) !== 1) { monitorReviewedRetryLater($domain, $item, 'cdr'); $counts['pending']++; continue; }
+            $call = $matches[0]; $end = parseEasternDateTime((string)($call['call-disconnect-datetime'] ?? ''));
+            if (!$end || $end->getTimestamp() > time() || $end->getTimestamp() < $start->getTimestamp()) { monitorReviewedRetryLater($domain, $item, 'time'); $counts['pending']++; continue; }
+            if ($end->getTimestamp() < (int)$state['since']) {
+                monitorReviewedRetryReview($domain, $item, 'Cannot retry: the call completed before automatic alerts were most recently enabled.'); $counts['review']++; continue;
+            }
+            $reason = null;
+            try { $ref = intelligenceReference($call, $domain, '', $reason); } catch (Throwable $e) { $ref = null; $reason = 'lookup'; }
+            if (!$ref) { monitorReviewedRetryLater($domain, $item, in_array($reason, ['jobId','server','callId','month'], true) ? $reason : 'lookup'); $counts['pending']++; continue; }
+            $jobName = 'job-' . monitorDomainId($domain) . '-' . monitorJobKey($ref);
+            if (str_starts_with($item['reviewId'], 'job-') && $jobName !== $item['reviewId']) {
+                monitorReviewedRetryReview($domain, $item, 'Cannot safely retry: the PBX transcription identity no longer matches the reviewed call.'); $counts['review']++; continue;
+            }
+            $before = $counts; $pendingReason = null;
+            monitorProcessCall($client, $domain, $call, $state, $counts, $pendingReason, $item);
+            if ($pendingReason === 'conflict') {
+                monitorReviewedRetryReview($domain, $item, 'Cannot safely retry: a separate automatic check or email record already exists for this call.');
+                continue;
+            }
+            if ($counts['pending'] > $before['pending']) { monitorReviewedRetryLater($domain, $item, $pendingReason ?? 'lookup'); continue; }
+            if ($counts['sent'] > $before['sent'] || $counts['checked'] > $before['checked'] || $counts['review'] > $before['review']) {
+                // For job reviews the job record has already become sent/checked/review.
+                // For CDR reviews this closes the original review; any SMTP failure
+                // has its own new job review. Never overwrite a changed job record.
+                monitorReviewedRetryUpdate($domain, $item, static function (array $current): array { $current['status'] = 'reviewed'; $current['finished'] = time(); return $current; });
+            } else { monitorReviewedRetryLater($domain, $item, 'lookup'); }
+        }
+    }
+}
+function monitorReviewedRetryLater(string $domain, array $item, string $reason): void {
+    monitorReviewedRetryUpdate($domain, $item, static function (array $current) use ($reason): array {
+        $attempt = (int)($current['retryAttempts'] ?? 0) + 1; $current['retryAttempts'] = $attempt;
+        $current['retryReason'] = $reason; $current['retryNext'] = time() + ($attempt === 1 ? 300 : ($attempt === 2 ? 600 : 1800));
+        return $current;
+    });
+}
+function monitorReviewedRetryReview(string $domain, array $item, string $reason): void {
+    monitorReviewedRetryUpdate($domain, $item, static function (array $current) use ($reason): array {
+        $current['status'] = 'review'; $current['time'] = time(); $current['reason'] = $reason; return $current;
+    });
+}
 if (intelligenceSmtpTimeout() === null) { fwrite(STDERR, "INTELLIGENCE_SMTP_TIMEOUT must be an integer from 1 to 300 seconds.\n"); exit(1); }
 if (!monitorReady()) { fwrite(STDERR, "Monitor is not configured.\n"); exit(1); }
 $lock = fopen(monitorDirectory() . '/worker.lock', 'c');
@@ -75,6 +157,7 @@ try {
             $counts = ['checked' => 0, 'sent' => 0, 'pending' => 0, 'review' => 0, 'unresolved' => 0, 'missingTime' => 0, 'unidentified' => 0];
             $now = time();
             $discoveryFailed = false; $retryFailed = false; $attempted = [];
+            monitorRunReviewedRetries($client, $domain, $state, $counts, $retryFailed);
             if (monitorRecipients($state) !== [] && intelligenceWatches($domain)) {
                 monitorRunDue($client, $domain, $state, $counts, $attempted, $retryFailed);
                 if ($retryFailed) $failed = true;

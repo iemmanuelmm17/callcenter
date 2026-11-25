@@ -166,6 +166,7 @@ function monitorPendingDescription(string $code): string {
         'lookup' => 'The transcription lookup failed or its identity could not be verified.',
         'cdr' => 'The CDR could not be found in the retry window.',
         'time' => 'The CDR completion time was missing or not valid when last checked.',
+        'smtp' => 'SMTP did not confirm acceptance; delivery may already have occurred.',
         default => 'The specific cause was not recorded.',
     };
 }
@@ -271,21 +272,60 @@ function monitorReviewsForCall(string $domain, array $index, string $cdrId, ?arr
     $unique = []; foreach ($reviews as $review) $unique[$review['id']] = $review;
     return array_values($unique);
 }
+/** Queue exactly this review for another 24 hours, or keep it for manual review
+ * if we cannot safely locate its original CDR. The review itself is the durable
+ * queue record: there is no two-file transition to lose on a crash. */
 function monitorAcknowledge(string $domain, string $id): void {
     $domainId = monitorDomainId($domain);
     if (!preg_match('/^(job|review)-' . $domainId . '-([0-9a-f]{64})$/', $id, $m)) throw new InvalidArgumentException('Invalid review.');
     $stripe = ($m[1] === 'job' ? 'jobs-' : 'reviews-') . $domainId . '-' . substr($m[2], 0, 2);
-    monitorLocked($stripe, static function () use ($id): void {
+    monitorLocked($stripe, static function () use ($domain, $id): void {
         $file = monitorDirectory() . '/' . $id . '.json';
         $item = monitorReadFile($file);
-        if (!in_array($item['status'] ?? '', ['review', 'sending'], true)) throw new InvalidArgumentException('Review is not available for acknowledgement.');
-        $item['status'] = 'reviewed';
+        if (!in_array($item['status'] ?? '', ['review', 'sending'], true)) throw new InvalidArgumentException('Review is not available for retry.');
+        $cdrId = (string)($item['cdrId'] ?? '');
+        if ($cdrId === '') $cdrId = monitorLegacyReviewCdrId($domain, $id, (string)($item['callid'] ?? ''));
+        $startedAt = (string)($item['startedAt'] ?? '');
+        if ($startedAt === '' && $cdrId !== '') $startedAt = monitorQueueStartedAt($domain, $cdrId);
+        $start = parseEasternDateTime($startedAt);
+        if ($cdrId === '' || trim($cdrId) !== $cdrId || strlen($cdrId) > 512 || preg_match('/[\x00-\x1f\x7f]/', $cdrId)
+            || !$start || $start->getTimestamp() <= 0 || $start->getTimestamp() > time()) {
+            throw new InvalidArgumentException('Cannot safely retry this review: its CDR ID or call start time is missing or invalid. It remains for manual review.');
+        }
+        $item['status'] = 'retry_pending';
+        $item['cdrId'] = $cdrId;
+        $item['startedAt'] = gmdate('c', $start->getTimestamp());
         $item['reviewedAt'] = time();
+        $item['retryUntil'] = time() + 86400;
+        $item['retryNext'] = time();
+        $item['retryAttempts'] = 0; unset($item['retryReason']);
+        $item['retryToken'] = bin2hex(random_bytes(16));
         monitorWriteFile($file, $item);
     });
 }
+/** Enumerate only trusted domain-local retry records. */
+function monitorReviewedRetries(string $domain): array {
+    $domainId = monitorDomainId($domain); $out = [];
+    foreach (array_merge(glob(monitorDirectory() . '/job-' . $domainId . '-*.json') ?: [], glob(monitorDirectory() . '/review-' . $domainId . '-*.json') ?: []) as $file) {
+        $item = monitorReadFile($file);
+        if (($item['status'] ?? '') !== 'retry_pending') continue;
+        $item['reviewId'] = basename($file, '.json'); $out[] = $item;
+    }
+    return $out;
+}
+/** Update a queued review only if it still belongs to this retry generation. */
+function monitorReviewedRetryUpdate(string $domain, array $item, callable $change): void {
+    $domainId = monitorDomainId($domain); $id = (string)($item['reviewId'] ?? '');
+    if (!preg_match('/^(job|review)-' . $domainId . '-([0-9a-f]{64})$/', $id, $m)) return;
+    $stripe = ($m[1] === 'job' ? 'jobs-' : 'reviews-') . $domainId . '-' . substr($m[2], 0, 2);
+    monitorLocked($stripe, static function () use ($id, $item, $change): void {
+        $file = monitorDirectory() . '/' . $id . '.json'; $current = monitorReadFile($file);
+        if (($current['status'] ?? '') !== 'retry_pending' || ($current['retryToken'] ?? null) !== ($item['retryToken'] ?? null)) return;
+        monitorWriteFile($file, $change($current));
+    });
+}
 /** One complete CDR from the live PBX, not from the report's cache. */
-function monitorProcessCall(PbxClient $client, string $domain, array $call, array $settings, array &$counts, ?string &$pendingReason = null): void {
+function monitorProcessCall(PbxClient $client, string $domain, array $call, array $settings, array &$counts, ?string &$pendingReason = null, ?array $retry = null): void {
     $live = monitorState($domain);
     if (!empty($live['enabled']) && ($live['generation'] ?? null) === ($settings['generation'] ?? null) && monitorRecipients($live) === []) { $counts['pending']++; return; }
     $end = parseEasternDateTime((string)($call['call-disconnect-datetime'] ?? ''));
@@ -305,21 +345,28 @@ function monitorProcessCall(PbxClient $client, string $domain, array $call, arra
     try { $ref = intelligenceReference($call, $domain, '', $reason); }
     catch (Throwable $e) { $ref = null; $reason = 'month'; }
     if (!$ref) {
-        if (time() - $ended >= 86400) {
+        if ($retry !== null) { $counts['pending']++; $pendingReason = in_array($reason, ['jobId', 'server', 'callId', 'month'], true) ? $reason : 'lookup'; }
+        elseif (time() - $ended >= 86400) {
             $counts['unresolved']++;
             monitorReviewCdr($domain, $call, 'Transcription reference unavailable after 24 hours (' . ($reason ?: 'unknown') . ')');
         } else { $counts['pending']++; $pendingReason = in_array($reason, ['jobId', 'server', 'callId', 'month'], true) ? $reason : 'lookup'; }
         return;
     }
-    monitorJob($domain, $ref, static function (array $job) use ($client, $domain, $call, $ref, $ended, $settings, &$counts, &$pendingReason): ?array {
+    monitorJob($domain, $ref, static function (array $job) use ($client, $domain, $call, $ref, $ended, $settings, &$counts, &$pendingReason, $retry): ?array {
         $current = monitorState($domain);
         if (empty($current['enabled']) || ($current['generation'] ?? null) !== ($settings['generation'] ?? null)) return null;
         if (monitorRecipients($current) === []) { $counts['pending']++; return null; }
-        if ($job !== []) {
-            if (in_array($job['status'] ?? '', ['review', 'sending'], true)) $counts['review']++;
+        $jobName = 'job-' . monitorDomainId($domain) . '-' . monitorJobKey($ref);
+        $authorizedRetry = $retry !== null && (int)($retry['retryUntil'] ?? 0) > time() && (
+            (($retry['reviewId'] ?? '') === $jobName && ($job['status'] ?? '') === 'retry_pending' && ($job['retryToken'] ?? null) === ($retry['retryToken'] ?? null))
+            || (($job['status'] ?? '') === 'retry_wait' && ($job['sourceReview'] ?? '') === ($retry['reviewId'] ?? ''))
+        );
+        if ($job !== [] && !$authorizedRetry) {
+            if ($retry !== null) { $counts['pending']++; $pendingReason = 'conflict'; }
+            elseif (in_array($job['status'] ?? '', ['review', 'sending'], true)) $counts['review']++;
             return null;
         }
-        if (time() - $ended >= 86400) { $counts['review']++; return ['status' => 'review', 'time' => time(), 'reason' => monitorExpiryReason(''), 'callid' => $ref['callid'], 'cdrId' => (string)($call['id'] ?? ''), 'startedAt' => monitorCallStartedAt($call)]; }
+        if ($retry === null && time() - $ended >= 86400) { $counts['review']++; return ['status' => 'review', 'time' => time(), 'reason' => monitorExpiryReason(''), 'callid' => $ref['callid'], 'cdrId' => (string)($call['id'] ?? ''), 'startedAt' => monitorCallStartedAt($call)]; }
         try {
             $result = intelligenceReadJob($client, $domain, $ref, intelligenceWatches($domain));
             if (($result['status'] ?? '') !== 'finished' || empty($result['topics'])) {
@@ -331,11 +378,13 @@ function monitorProcessCall(PbxClient $client, string $domain, array $call, arra
         if (empty($current['enabled']) || ($current['generation'] ?? null) !== ($settings['generation'] ?? null)) return null;
         $recipients = monitorRecipients($current);
         if ($recipients === []) { $counts['pending']++; return null; }
+        if ($retry !== null && (int)($retry['retryUntil'] ?? 0) <= time()) { $counts['pending']++; $pendingReason = 'lookup'; return null; }
         if (empty($result['matches'])) { $counts['checked']++; return ['status' => 'checked', 'time' => time()]; }
         $recordingUrl = null;
         try { $recordingUrl = intelligenceRecordingLink($client, $domain, $call); }
         catch (Throwable $e) { appExceptionLog('Alert recording link', $e); }
         $message = intelligenceAutomaticMessage($domain, $call, $ref, $result, $recordingUrl);
+        if ($retry !== null && (int)($retry['retryUntil'] ?? 0) <= time()) { $counts['pending']++; $pendingReason = 'lookup'; return null; }
         /* Persist the ambiguous state BEFORE SMTP. A crash or timeout may mean
          * the message was accepted; never automatically resend it. */
         $sending = ['status' => 'sending', 'time' => time(), 'callid' => $ref['callid'], 'cdrId' => (string)($call['id'] ?? ''), 'startedAt' => monitorCallStartedAt($call)];
@@ -349,6 +398,12 @@ function monitorProcessCall(PbxClient $client, string $domain, array $call, arra
             $counts['sent']++;
             return ['status' => 'sent', 'time' => $accepted];
         } catch (Throwable $e) {
+            if ($retry !== null && (int)($retry['retryUntil'] ?? 0) > time()) {
+                // The manager explicitly authorized retries even for ambiguous SMTP failures.
+                $counts['pending']++; $pendingReason = 'smtp';
+                if (($retry['reviewId'] ?? '') === $jobName) return $job;
+                return ['status' => 'retry_wait', 'time' => time(), 'sourceReview' => $retry['reviewId']];
+            }
             $counts['review']++;
             $detail = '';
             if (preg_match('/^SMTP delivery failed \(cURL error ([0-9]{1,3})\)\.$/', $e->getMessage(), $m) && (int)$m[1] > 0) {

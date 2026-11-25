@@ -17,7 +17,7 @@ declare(strict_types=1);
  * read must come with a regenerated list - the "cdr fields" suite fails
  * otherwise.
  *
- * 1534 names.
+ * 1538 names.
  */
 return [
     'aa',
@@ -355,6 +355,7 @@ return [
     'complete',
     'conf',
     'configured',
+    'conflict',
     'connected',
     'convert',
     'cookie_httponly',
@@ -1188,6 +1189,8 @@ return [
     'reports',
     'resize',
     'resource',
+    'retry_pending',
+    'retry_wait',
     'return',
     'returned',
     'review',
@@ -1338,6 +1341,7 @@ return [
     'slider',
     'slower',
     'slowest',
+    'smtp',
     'smtp_diagnostic',
     'smtp_test_email',
     'sort',
