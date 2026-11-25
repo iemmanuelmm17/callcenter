@@ -18,9 +18,12 @@ try {
     if ($domain === '') jsonResponse(['error' => 'Missing domain.'], 422);
     $input = readJsonBody();
     $action = (string)($input['action'] ?? '');
+    if (in_array($action, ['smtp_diagnostic', 'smtp_test_email', 'send'], true) && intelligenceSmtpTimeout() === null) {
+        jsonResponse(['error' => 'INTELLIGENCE_SMTP_TIMEOUT must be an integer from 1 to 300 seconds.'], 503);
+    }
     if ($action === 'smtp_diagnostic') {
         if (!intelligenceSmtpConfigured()) jsonResponse(['error' => 'SMTP is not configured on the server.'], 503);
-        if (function_exists('set_time_limit')) set_time_limit(60);
+        if (function_exists('set_time_limit')) set_time_limit(max(60, intelligenceSmtpTimeout() + 15));
         $result = intelligenceSmtpDiagnostic();
         $result['description'] = $result['ok'] ? '' : monitorSmtpErrorDescription($result['code']);
         auditView($user, ['domain' => $domain, 'ok' => $result['ok'], 'code' => $result['code']], 'intelligence-smtp-diagnostic');
@@ -30,7 +33,7 @@ try {
         $recipient = $input['recipient'] ?? null;
         if (!is_string($recipient) || strlen($recipient) > 254 || preg_match('/[\r\n]/', $recipient) || !filter_var($recipient, FILTER_VALIDATE_EMAIL)) throw new InvalidArgumentException('Enter one valid test email address.');
         if (!intelligenceSmtpConfigured()) jsonResponse(['error' => 'SMTP is not configured on the server.'], 503);
-        if (function_exists('set_time_limit')) set_time_limit(60);
+        if (function_exists('set_time_limit')) set_time_limit(max(60, intelligenceSmtpTimeout() + 15));
         try {
             intelligenceSendMail([$recipient], "This is a CallScope SMTP test message. It contains no call data.\n\nIf you received it, the configured SMTP server accepted and delivered this test.\n", 'CallScope SMTP test');
         } catch (RuntimeException $e) {
@@ -187,6 +190,7 @@ try {
         $client = new PbxClient((string)($_SESSION['token'] ?? ''));
         setReportingTimezone(loadDomainSettings($domain)['timezone'] ?? null);
         $body = intelligenceEmailBody($calls, $client, $domain, $watches);
+        if (function_exists('set_time_limit')) set_time_limit(max(60, intelligenceSmtpTimeout() + 15));
         intelligenceSendMail(array_keys($addresses), $body);
         $accepted = time();
         foreach ($calls as $call) monitorRecordEmail($domain, $call['cdrId'], array_keys($addresses), 'manual', $accepted);

@@ -58,16 +58,17 @@ $ref = ['id'=>'123','callid'=>'api-report']; $file = monitorDirectory() . '/job-
 assert.equal(JSON.parse(marked).status, 'report_checked', 'successful report API lookup records suppression');
 await h.seedPbx('recording', { 'file-access-url': 'https://pbx.example/ns-api/v2/recording.wav' });
 const output = await h.script(`
+define('INTELLIGENCE_SMTP_TIMEOUT', 90);
 require_once TEST_TMP . '/includes/reporting.php';
 require_once TEST_TMP . '/includes/intelligence.php';
 require_once TEST_TMP . '/includes/intelligence-monitor.php';
 foreach (['CURLOPT_USERNAME','CURLOPT_PASSWORD','CURLOPT_USE_SSL','CURLOPT_SSL_VERIFYPEER','CURLOPT_SSL_VERIFYHOST','CURLOPT_MAIL_FROM','CURLOPT_MAIL_RCPT','CURLOPT_UPLOAD','CURLOPT_INFILE','CURLOPT_INFILESIZE','CURLOPT_TIMEOUT','CURLOPT_CONNECTTIMEOUT','CURLUSESSL_ALL'] as $i => $n) if (!defined($n)) define($n, $i + 100);
 function curl_init($url) { return new stdClass(); }
-function curl_setopt_array($curl, $opts) { $payload = stream_get_contents($opts[CURLOPT_INFILE]); rewind($opts[CURLOPT_INFILE]); $GLOBALS['payloads'][] = $payload; preg_match_all('~Content-Transfer-Encoding: base64\r\n\r\n([A-Za-z0-9+/=\r\n]+)~', $payload, $matches); $GLOBALS['bodies'][] = base64_decode($matches[1][0] ?? ''); $GLOBALS['html'][] = base64_decode($matches[1][1] ?? ''); $GLOBALS['rcpt'][] = $opts[CURLOPT_MAIL_RCPT]; return true; }
+function curl_setopt_array($curl, $opts) { $GLOBALS['timeouts'][] = [$opts[CURLOPT_TIMEOUT], $opts[CURLOPT_CONNECTTIMEOUT]]; $payload = stream_get_contents($opts[CURLOPT_INFILE]); rewind($opts[CURLOPT_INFILE]); $GLOBALS['payloads'][] = $payload; preg_match_all('~Content-Transfer-Encoding: base64\r\n\r\n([A-Za-z0-9+/=\r\n]+)~', $payload, $matches); $GLOBALS['bodies'][] = base64_decode($matches[1][0] ?? ''); $GLOBALS['html'][] = base64_decode($matches[1][1] ?? ''); $GLOBALS['rcpt'][] = $opts[CURLOPT_MAIL_RCPT]; return true; }
 function curl_exec($curl) { $GLOBALS['sends']++; return !$GLOBALS['fail']; }
 function curl_errno($curl) { return 67; }
 function curl_close($curl) {}
-$GLOBALS['sends'] = 0; $GLOBALS['fail'] = false; $GLOBALS['bodies'] = []; $GLOBALS['html'] = []; $GLOBALS['payloads'] = []; $GLOBALS['rcpt'] = [];
+$GLOBALS['timeouts'] = []; $GLOBALS['sends'] = 0; $GLOBALS['fail'] = false; $GLOBALS['bodies'] = []; $GLOBALS['html'] = []; $GLOBALS['payloads'] = []; $GLOBALS['rcpt'] = [];
 $domain = 'test.example';
 intelligenceSaveWatches($domain, ['urgent']);
 monitorSetEnabled($domain, true);
@@ -94,9 +95,10 @@ monitorProcessCall($client,$otherDomain,$otherCall,$otherState,$otherCounts);
 $missing = $make('four'); unset($missing['call-intelligence-job-id']); $missing['call-disconnect-datetime'] = gmdate('c', time()-90000);
 $state['since'] = time()-100000;
 monitorProcessCall($client, $domain, $missing, $state, $counts);
-echo json_encode(['sends'=>$GLOBALS['sends'], 'counts'=>$counts, 'reviews'=>monitorReviews($domain), 'body'=>$GLOBALS['bodies'][0] ?? '', 'html'=>$GLOBALS['html'][0] ?? '', 'fallbackBody'=>$GLOBALS['bodies'][2] ?? '', 'fallbackHtml'=>$GLOBALS['html'][2] ?? '', 'payload'=>$GLOBALS['payloads'][0] ?? '', 'rcpt'=>$GLOBALS['rcpt'], 'otherCounts'=>$otherCounts]);
+echo json_encode(['timeouts'=>$GLOBALS['timeouts'], 'sends'=>$GLOBALS['sends'], 'counts'=>$counts, 'reviews'=>monitorReviews($domain), 'body'=>$GLOBALS['bodies'][0] ?? '', 'html'=>$GLOBALS['html'][0] ?? '', 'fallbackBody'=>$GLOBALS['bodies'][2] ?? '', 'fallbackHtml'=>$GLOBALS['html'][2] ?? '', 'payload'=>$GLOBALS['payloads'][0] ?? '', 'rcpt'=>$GLOBALS['rcpt'], 'otherCounts'=>$otherCounts]);
 `);
 const result = JSON.parse(output.trim());
+assert.deepEqual(result.timeouts, [[90,10],[90,10],[90,10]], 'automatic alerts use the configured SMTP timeout');
 assert.equal(result.sends, 3, 'duplicate and report-checked calls send nothing; uncertain delivery is not retried');
 assert.deepEqual(result.rcpt[0], ['<ALERTS@example.com>', '<second@example.com>']);
 assert.deepEqual(result.rcpt[2], ['<other@example.com>', '<next@example.com>'], 'each domain uses only its own recipients');

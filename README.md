@@ -389,8 +389,26 @@ loses the response, check the inbox and server logs before retrying.
 
 cURL error 28 means an SMTP operation exceeded its time limit; the error alone
 does not show whether it happened during connection, TLS, authentication or
-message upload. The application allows 10 seconds for connection and 30 seconds
-in total. On the affected server, confirm the SMTP host and port with your mail
+message upload. The overall timeout defaults to 30 seconds and applies to manual
+mail, automatic alerts, test emails and the connection check. To change it, add
+this line to `includes/config.local.php` (outside any comment):
+
+```php
+define('INTELLIGENCE_SMTP_TIMEOUT', 60); // seconds; integer from 1 to 300
+```
+
+An invalid setting makes SMTP unavailable until corrected; removing the line
+restores the 30-second default. The cURL connection-phase limit (including DNS and protocol handshakes) remains
+10 seconds, or the overall timeout if shorter. A longer total timeout does not
+lengthen that connection limit. It can tie up an IIS worker or prolong a scheduled scan; make
+sure IIS/FastCGI, reverse proxies and the scheduled task permit the chosen wait.
+PHP execution limits are extended for these web operations, but external limits
+can still interrupt them. If web and scheduled CLI deployments use different
+configuration files or PHP caches, verify each uses the updated setting and
+refresh/restart the relevant PHP process if necessary. A timeout may still be
+ambiguous: check the recipient or Microsoft message trace before retrying.
+
+On the affected server, confirm the SMTP host and port with your mail
 provider, DNS, firewall/outbound rules, any SMTP proxy, and that the provider
 supports **STARTTLS** on the configured port (often 587; implicit-TLS port 465 is
 not supported by this configuration). In PowerShell, `Test-NetConnection

@@ -325,13 +325,19 @@ function intelligenceAutomaticMessage(string $domain, array $call, array $ref, a
     } else $html .= '<p>Recording download link unavailable; contact your administrator.</p>';
     return ['text' => $text, 'html' => $html . '</body></html>'];
 }
+/** Overall SMTP operation timeout in seconds; reject invalid explicit settings. */
+function intelligenceSmtpTimeout(): ?int {
+    if (!defined('INTELLIGENCE_SMTP_TIMEOUT')) return 30;
+    $value = INTELLIGENCE_SMTP_TIMEOUT;
+    return is_int($value) && $value >= 1 && $value <= 300 ? $value : null;
+}
 function intelligenceSmtpConfigured(): bool {
     $host = defined('INTELLIGENCE_SMTP_HOST') ? (string)INTELLIGENCE_SMTP_HOST : '';
     $port = defined('INTELLIGENCE_SMTP_PORT') ? (int)INTELLIGENCE_SMTP_PORT : 0;
     $user = defined('INTELLIGENCE_SMTP_USERNAME') ? (string)INTELLIGENCE_SMTP_USERNAME : '';
     $password = defined('INTELLIGENCE_SMTP_PASSWORD') ? (string)INTELLIGENCE_SMTP_PASSWORD : '';
     $from = defined('INTELLIGENCE_SMTP_FROM') ? (string)INTELLIGENCE_SMTP_FROM : '';
-    return $host !== '' && preg_match('/^[a-zA-Z0-9.-]+$/', $host) === 1 && $port > 0 && $port <= 65535 && $user !== '' && $password !== '' && filter_var($from, FILTER_VALIDATE_EMAIL) !== false;
+    return intelligenceSmtpTimeout() !== null && $host !== '' && preg_match('/^[a-zA-Z0-9.-]+$/', $host) === 1 && $port > 0 && $port <= 65535 && $user !== '' && $password !== '' && filter_var($from, FILTER_VALIDATE_EMAIL) !== false;
 }
 /** Run a non-delivery SMTP NOOP over the same verified STARTTLS transport.
  * libcurl can proceed when a server does not advertise AUTH, so success does
@@ -346,7 +352,7 @@ function intelligenceSmtpDiagnostic(): array {
         curl_setopt_array($curl, [CURLOPT_USERNAME => (string)INTELLIGENCE_SMTP_USERNAME, CURLOPT_PASSWORD => (string)INTELLIGENCE_SMTP_PASSWORD,
             CURLOPT_USE_SSL => CURLUSESSL_ALL, CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_NOBODY => true, CURLOPT_CUSTOMREQUEST => 'NOOP', CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 30, CURLOPT_CONNECTTIMEOUT => 10]);
+            CURLOPT_TIMEOUT => intelligenceSmtpTimeout(), CURLOPT_CONNECTTIMEOUT => 10]);
         $ok = curl_exec($curl) !== false;
         $code = $ok ? 0 : (int)curl_errno($curl);
         $connected = (float)curl_getinfo($curl, CURLINFO_CONNECT_TIME) > 0;
@@ -382,7 +388,7 @@ function intelligenceSendMail(array $recipients, string $body, string $subject =
         curl_setopt_array($curl, [CURLOPT_USERNAME => $username, CURLOPT_PASSWORD => $password, CURLOPT_USE_SSL => CURLUSESSL_ALL,
             CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2, CURLOPT_MAIL_FROM => '<' . $from . '>',
             CURLOPT_MAIL_RCPT => array_map(static fn($x) => '<' . $x . '>', $recipients), CURLOPT_UPLOAD => true,
-            CURLOPT_INFILE => $stream, CURLOPT_INFILESIZE => strlen($payload), CURLOPT_TIMEOUT => 30, CURLOPT_CONNECTTIMEOUT => 10]);
+            CURLOPT_INFILE => $stream, CURLOPT_INFILESIZE => strlen($payload), CURLOPT_TIMEOUT => intelligenceSmtpTimeout(), CURLOPT_CONNECTTIMEOUT => 10]);
         if (curl_exec($curl) !== true) {
             $code = function_exists('curl_errno') ? (int)curl_errno($curl) : 0;
             throw new RuntimeException('SMTP delivery failed (cURL error ' . $code . ').');

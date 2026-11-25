@@ -76,6 +76,9 @@ declare(strict_types=1);
 // define('INTELLIGENCE_SMTP_USERNAME', 'user@example.com');
 // define('INTELLIGENCE_SMTP_PASSWORD', 'set-on-server');
 // define('INTELLIGENCE_SMTP_FROM', 'callscope@example.com');
+/* Optional overall SMTP timeout in seconds (integer 1–300, default 30).
+ * cURL connection phase is limited to 10 seconds or this value, whichever is less. */
+// define('INTELLIGENCE_SMTP_TIMEOUT', 60);
 
 /* Scheduled automatic alerts (global configuration, server-only).
  * The key needs permission to read CDRs, transcriptions and recordings for every enabled

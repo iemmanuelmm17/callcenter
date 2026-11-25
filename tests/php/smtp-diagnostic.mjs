@@ -25,11 +25,12 @@ for (const role of ['supervisor', 'agent', 'basic_user']) {
 }
 assert.equal((await h.request('intelligence.php', {body:{action:'smtp_diagnostic'}})).status, 401);
 assert.equal((await req('smtp_diagnostic')).status, 503);
-await h.write('includes/config.local.php', `<?php
+const smtpConfig = `<?php
   define('PBX_SERVERS', ['nms1' => 'https://pbx.example']);
   define('INTELLIGENCE_SMTP_HOST', 'smtp.example.com'); define('INTELLIGENCE_SMTP_PORT', 587);
   define('INTELLIGENCE_SMTP_USERNAME', 'private-user'); define('INTELLIGENCE_SMTP_PASSWORD', 'private-password'); define('INTELLIGENCE_SMTP_FROM', 'sender@example.com');
-`);
+`;
+await h.write('includes/config.local.php', smtpConfig);
 const stateBefore = (await req('monitor_recipients', {recipients:'alerts@example.com'})).body;
 let response = await req('smtp_diagnostic');
 assert.equal(response.status, 200, JSON.stringify(response));
@@ -55,6 +56,25 @@ assert.equal(response.body.ok, false); assert.equal(response.body.code, 28); ass
 response = await req('smtp_test_email', {recipient:'test@example.com'});
 assert.equal(response.body.ok, false); assert.equal(response.body.code, 28); assert.match(response.body.description, /timed out/);
 assert(!JSON.stringify(response).includes('private-'));
+// The same timeout applies to diagnostic and the shared mail sender; connection stays separate.
+for (const seconds of [1, 90, 300]) {
+  await h.write('includes/config.local.php', smtpConfig + `\ndefine('INTELLIGENCE_SMTP_TIMEOUT', ${seconds});\n`);
+  for (const [action, data] of [['smtp_diagnostic', {}], ['smtp_test_email', {recipient:'test@example.com'}]]) {
+    const r = await req(action, data);
+    assert.equal(r.body.code, 28);
+    call = JSON.parse(await h.readInterpreterFile('smtp-call.json'));
+    assert.equal(call.timeout, seconds); assert.equal(call.connecttimeout, 10);
+  }
+}
+for (const invalid of ['0', '-1', '301', "'60'", '1.5', 'false']) {
+  await h.write('includes/config.local.php', smtpConfig + `\ndefine('INTELLIGENCE_SMTP_TIMEOUT', ${invalid});\n`);
+  for (const [action, data] of [['smtp_diagnostic', {}], ['smtp_test_email', {recipient:'test@example.com'}], ['send', {}]]) {
+    const r = await req(action, data); assert.equal(r.status, 503); assert.match(r.body.error, /integer from 1 to 300/);
+  }
+  const parsed = JSON.parse(await h.script(`require_once TEST_TMP . '/includes/intelligence.php'; echo json_encode([intelligenceSmtpTimeout(), intelligenceSmtpConfigured()]);`));
+  assert.deepEqual(parsed, [null, false]);
+}
+await h.write('includes/config.local.php', smtpConfig);
 const stateAfter = (await req('monitor_status')).body;
 assert.deepEqual(stateAfter.recipients, stateBefore.recipients);
 assert.equal(stateAfter.enabled, false);

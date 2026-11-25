@@ -54,6 +54,7 @@ function monitorRunDue(PbxClient $client, string $domain, array $state, array &$
         foreach ($items as $id => $item) if (!isset($found[$id])) { $counts['pending']++; monitorQueueFinish($domain, $item, 'pending', 'cdr'); }
     }
 }
+if (intelligenceSmtpTimeout() === null) { fwrite(STDERR, "INTELLIGENCE_SMTP_TIMEOUT must be an integer from 1 to 300 seconds.\n"); exit(1); }
 if (!monitorReady()) { fwrite(STDERR, "Monitor is not configured.\n"); exit(1); }
 $lock = fopen(monitorDirectory() . '/worker.lock', 'c');
 if (!$lock || !flock($lock, LOCK_EX | LOCK_NB)) { fwrite(STDERR, "Monitor is already running.\n"); exit(2); }
